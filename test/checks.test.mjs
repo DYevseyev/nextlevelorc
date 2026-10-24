@@ -1499,6 +1499,12 @@ test('guard.held: the changes to protected files that wait for the owner, and th
   const git = await check('guard.held', { files: held([{ id: 'G3', kind: 'git', status: 'held', items: ['pre-commit hook'], files: [] }, { id: 'G4', kind: 'secret', on: 'commit', status: 'held', files: [{ path: 'config.txt' }] }]) });
   assert.equal(git.severity, 'error');
   assert.match(git.detail, /^2 waiting for you: G3 \(git's own hooks and settings: pre-commit hook\); G4 \(the orchestrator's commit: config\.txt\)\. All git work waits/);
+  // a push held on a card: a deploy push names its commit, a push carrying protected files names them
+  const pushes = await check('guard.held', { files: held([
+    { id: 'G5', kind: 'push', deploy: true, status: 'held', from: 'main', target: 'production', sha: '0123456789abcdef', files: [] },
+    { id: 'G6', kind: 'push', status: 'held', from: 'M1-02-ci', target: 'M1-02-ci', sha: 'fedcba9876543210', files: [{ path: '.github/workflows/ci.yml' }] },
+  ]) });
+  assert.match(pushes.detail, /^2 waiting for you: G5 \(the push of main to production: commit 0123456\); G6 \(the push of M1-02-ci to M1-02-ci: \.github\/workflows\/ci\.yml\)$/);
   assert.equal((await check('guard.held', { root: null })).status, 'skip');
 });
 
