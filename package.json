@@ -1,0 +1,22 @@
+{
+  "name": "nextlevel",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Run an AI build team from your own PC: an orchestrator plans and reviews, cheap workers build, a hub connects them.",
+  "license": "Apache-2.0",
+  "homepage": "https://nextlevelorc.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DYevseyev/nextlevelorc.git"
+  },
+  "type": "module",
+  "bin": {
+    "nextlevel": "bin/nextlevel.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

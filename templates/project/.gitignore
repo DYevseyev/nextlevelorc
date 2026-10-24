@@ -1,0 +1,36 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+dist/
+out/
+release/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# nextlevel: the hub's runtime state and worker task files
+.nextlevel/
+.nextlevel-task/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Logs and OS files
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/

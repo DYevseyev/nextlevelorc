@@ -1,0 +1,18 @@
+# The public scan's allow-list (scripts/public-scan.mjs): the repository's own name, and the planted values the
+# redaction tests need. `<path>\t<text on that line>`.
+*	DYevseyev/nextlevelorc
+*	11761305+DYevseyev@users.noreply.github.com
+*	DYevseyev\/nextlevelorc
+*	DYevseyev__nextlevelorc
+test/checks.test.mjs	https://owner:ghp_secret@github.com/o/r.git
+test/checks.test.mjs	sk-proj-abcdefghijklmnop, topic hunter2-topic
+test/checks.test.mjs	token ghp_abcdefghijklmnopqrstuvwxyz0123 and
+test/hub.test.mjs	https://owner:ghp_plantedtoken@github.com/o/r.git
+test/locktest.test.mjs	GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123 gh api user
+test/report.test.mjs	'sk-proj-PLANTEDopenai1234567890'
+test/report.test.mjs	'ghp_PLANTEDghtoken1234567890abcd'
+test/report.test.mjs	'AKIAPLANTEDKEY012345'
+test/report.test.mjs	'-----BEGIN RSA PRIVATE KEY-----'
+test/report.test.mjs	not /home/meadow
+src/lib/redact.mjs	(/home/me, not /home/meadow)
+.github/CODEOWNERS	@DYevseyev

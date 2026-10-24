@@ -1,0 +1,9 @@
+# Planted values the redaction tests need: fake, never real (gitleaks fingerprints).
+scripts/public-scan.allow:aws-access-token:14
+test/engines.test.mjs:generic-api-key:246
+test/engines.test.mjs:generic-api-key:246
+test/engines.test.mjs:generic-api-key:246
+test/report.test.mjs:aws-access-token:26
+test/report.test.mjs:stripe-access-token:17
+test/report.test.mjs:generic-api-key:22
+test/report.test.mjs:jwt:25

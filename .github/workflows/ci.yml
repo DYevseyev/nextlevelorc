@@ -1,0 +1,53 @@
+name: ci
+
+# Ubuntu tests every push to a pull request, and main after a merge. Windows runs once per pull request, at the end,
+# when the session asks for it (windows.yml). A merge needs the "ubuntu" and "windows" checks green on the pull
+# request's head (CLAUDE.md, "CI and merging").
+# Once per commit: pull requests run on their own commits and main after a merge, never on every push as well.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch replaces the run in progress
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: ubuntu
+    runs-on: ubuntu-latest
+    # the tests took about 3 minutes here once; with the lock tests and the assistant on agy, 15 (17 October)
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write # a Windows run of the branch that this push replaced is cancelled
+      checks: write # the "windows" check passes at once when no Windows run is needed (.github/ci/changes.mjs)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the files a change touches, and the commits that passed on Windows
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # From the changed files, never a label: the whole pull request is documentation -> the tests are skipped, a
+      # quick pass
+      - name: What changed
+        id: changes
+        run: node .github/ci/changes.mjs ubuntu
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Syntax check
+        if: steps.changes.outputs.skip != 'true'
+        shell: bash
+        run: for f in bin/*.mjs src/*.mjs src/lib/*.mjs src/checks/*.mjs src/engines/*.mjs src/ui/*.js .github/ci/*.mjs; do node --check "$f"; done
+      - name: End-to-end tests (stub CLIs)
+        if: steps.changes.outputs.skip != 'true'
+        run: npm test
+        env:
+          # (the tests start nextlevel again and again: its compiled code is kept for the next start)
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache

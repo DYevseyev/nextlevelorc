@@ -1,0 +1,6 @@
+# Changes to CI, the CI decision script, the package scripts and the release rules need a maintainer's review.
+/.github/            @DYevseyev
+/package.json        @DYevseyev
+/test/ci.test.mjs    @DYevseyev
+/CLAUDE.md           @DYevseyev
+/SECURITY.md         @DYevseyev

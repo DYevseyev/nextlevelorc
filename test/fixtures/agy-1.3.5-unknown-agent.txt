@@ -1,0 +1,2 @@
+error: unknown agent "nextlevel-worker" (available: rules-writer, a11y_agent)
+{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"unknown agent \"nextlevel-worker\" (available: rules-writer, a11y_agent)","duration_seconds":3.4168777,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}

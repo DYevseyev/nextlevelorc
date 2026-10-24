@@ -1,0 +1,22 @@
+# Force LF line endings in the repo so shell scripts and Dockerfiles written on
+# Windows still work inside Linux containers and on Linux servers.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.exe binary
+*.dmg binary
+*.AppImage binary

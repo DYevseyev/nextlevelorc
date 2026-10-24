@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>nextlevel dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f5bd3'/%3E%3Cpath d='M9 22V10l14 12V10' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">N</span>
+    <div>
+      <div class="brand-name">nextlevel</div>
+      <div class="project" id="project">connecting…</div>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Pages">
+    <a href="#home" data-tab="home">Home <span class="count" id="home-count" hidden></span></a>
+    <a href="#project" data-tab="project">Project</a>
+    <a href="#setup" data-tab="setup">Setup <span class="count" id="setup-count" hidden></span></a>
+    <a href="#build" data-tab="build">Build <span class="count" id="build-count" hidden></span></a>
+    <a href="#team" data-tab="team">Team</a>
+    <a href="#tools" data-tab="tools">Tools</a>
+    <a href="#notes" data-tab="notes">Notes and handoffs <span class="count" id="notes-count" hidden></span></a>
+  </nav>
+  <div class="conn" id="conn" data-state="connecting"><span class="dot"></span><span id="conn-text">Connecting…</span></div>
+  <button type="button" class="btn ask-open" id="ask-open" aria-controls="ask" aria-expanded="false" title="Ask the assistant about the project (read-only)">Ask</button>
+</header>
+
+<main>
+  <section id="tab-home" class="tab" aria-labelledby="home-title">
+    <h1 id="home-title" class="sr-only">Home</h1>
+    <div id="home"><p class="muted">Loading…</p></div>
+  </section>
+
+  <section id="tab-project" class="tab" hidden aria-labelledby="project-title">
+    <div class="page-head">
+      <div>
+        <h1 id="project-title">Project</h1>
+        <p class="lede">What the project is, where it is on its roadmap, its pace and the decisions made on the way. The
+          orchestrator keeps the files this page reads.</p>
+      </div>
+    </div>
+    <div id="project-page"><p class="muted">Loading…</p></div>
+  </section>
+
+  <section id="tab-setup" class="tab" hidden aria-labelledby="setup-title">
+    <div class="page-head">
+      <div>
+        <h1 id="setup-title">Setup</h1>
+        <p class="lede">Every check, in the order to fix them. Each step says <strong>where to type it</strong>.</p>
+      </div>
+      <div class="head-actions">
+        <label class="toggle"><input type="checkbox" id="only-problems"> Only what needs attention</label>
+        <button type="button" id="recheck" class="btn">Check again</button>
+      </div>
+    </div>
+    <div class="summary" id="setup-summary" aria-live="polite"></div>
+    <div id="fixes"></div>
+    <ol class="checks" id="checks"></ol>
+  </section>
+
+  <section id="tab-build" class="tab" hidden aria-labelledby="build-title">
+    <div class="page-head">
+      <div>
+        <h1 id="build-title">Build</h1>
+        <p class="lede">Milestones, the tasks and what each one ran on.</p>
+      </div>
+    </div>
+    <div id="build"></div>
+  </section>
+
+  <section id="tab-team" class="tab" hidden aria-labelledby="team-title">
+    <div class="page-head">
+      <div>
+        <h1 id="team-title">Team</h1>
+        <p class="lede">Who fills each role, with the model and effort in use. A change is checked before it is saved, and applies at the next round or task.</p>
+      </div>
+    </div>
+    <div id="team"></div>
+  </section>
+
+  <section id="tab-tools" class="tab" hidden aria-labelledby="tools-title">
+    <div class="page-head">
+      <div>
+        <h1 id="tools-title">Tools</h1>
+        <p class="lede">Start and stop things, open windows, and where nextlevel itself is installed.</p>
+      </div>
+    </div>
+    <div id="tools"></div>
+  </section>
+
+  <section id="tab-notes" class="tab" hidden aria-labelledby="notes-title">
+    <div class="page-head">
+      <div>
+        <h1 id="notes-title">Notes and handoffs</h1>
+        <p class="lede">What the team needs from you, and your notes to the orchestrator. It answers on these cards;
+          <code id="notes-files">docs/OWNER_NOTES.md and docs/HANDOFF.md</code> are written from them, for Git.</p>
+      </div>
+    </div>
+    <div id="cards"><p class="muted">Loading…</p></div>
+  </section>
+</main>
+
+<div class="modal" id="report" hidden role="dialog" aria-modal="true" aria-labelledby="report-title">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2 id="report-title">Report and fix</h2>
+      <button type="button" class="btn small" id="report-close" aria-label="Close">Close</button>
+    </div>
+    <div id="report-body"></div>
+  </div>
+</div>
+
+<!-- Ask: the owner's read-only side chat about the project (src/ask.mjs), on every page -->
+<aside class="ask" id="ask" hidden aria-labelledby="ask-title">
+  <div class="ask-head">
+    <div>
+      <h2 id="ask-title">Ask</h2>
+      <p class="muted small" id="ask-who">A read-only assistant: it answers from the project, and never talks to the orchestrator.</p>
+    </div>
+    <button type="button" class="btn small" id="ask-close" aria-label="Close the Ask panel">Close</button>
+  </div>
+  <div class="ask-body" id="ask-body"></div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

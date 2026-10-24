@@ -1,0 +1,56 @@
+name: windows
+
+# The Windows tests, once per pull request, as the last step before the merge. A pull request stays a draft while the
+# session works; when it is up to date with main, the session marks it ready for review (gh pr ready <number>), and
+# that starts this run on its head. The merge waits for the "windows" check green on that commit (CLAUDE.md, "CI and
+# merging"). No other pull request event starts this workflow, so until the request the commit has no "windows"
+# check at all (not a skipped one: a skipped or neutral required check counts as passed), and the job itself has no
+# condition, so it is never skipped either. Once main has this file, the Actions tab can run it by hand as well.
+on:
+  pull_request:
+    types: [ready_for_review]
+  workflow_dispatch:
+
+# Asked for again on the same branch, the run in progress is replaced
+concurrency:
+  group: windows-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: windows
+    runs-on: windows-latest
+    # the tests take 28 to 39 minutes here: processes start slowly on Windows
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # the branch's earlier Windows runs: code that passed already isn't tested again
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # main, to see the branch is up to date, and the commits that passed on Windows
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # From the changed files, never a label: the whole pull request is documentation, or the head has exactly the
+      # code of a commit whose Windows tests ran and passed -> the tests are skipped, a quick pass. A branch behind
+      # main fails here, in seconds.
+      - name: What changed
+        id: changes
+        run: node .github/ci/changes.mjs windows
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Syntax check
+        if: steps.changes.outputs.skip != 'true'
+        shell: bash
+        run: for f in bin/*.mjs src/*.mjs src/lib/*.mjs src/checks/*.mjs src/engines/*.mjs src/ui/*.js .github/ci/*.mjs; do node --check "$f"; done
+      # All of them, the tests that open real windows too (CI is set on GitHub's runners)
+      - name: End-to-end tests (stub CLIs)
+        if: steps.changes.outputs.skip != 'true'
+        run: npm test
+        env:
+          # (the tests start nextlevel again and again: its compiled code is kept for the next start)
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
