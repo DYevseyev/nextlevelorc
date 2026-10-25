@@ -283,11 +283,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => new Date().toISOString();
 // An ISO time as it was written, or '' (a record from elsewhere)
 const isoOr = (x) => (typeof x === 'string' && Number.isFinite(Date.parse(x)) ? new Date(Date.parse(x)).toISOString() : '');
-// When a run ended, for the usage ledger: its own record's end when the hub learned of it late (it ended while the hub was
-// stopped, possibly in another month), else now by lib/clock.mjs, the clock the ledger's ranges read by
+// When a run ended, for the usage ledger, on lib/clock.mjs's clock: its own record's end (a wall-clock time) moved by
+// how long ago that was, so a run the hub learned of late keeps its end, under the tests' clock too
 const ledgerEnd = (x) => {
   const t = Date.parse(isoOr(x));
-  return Number.isFinite(t) && t < clockNow() - 5 * 60_000 ? new Date(t).toISOString() : clockIso();
+  return Number.isFinite(t) ? new Date(clockNow() - Math.max(0, Date.now() - t)).toISOString() : clockIso();
 };
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 const uniq = () => `${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -945,7 +945,9 @@ function cmdResult(argv) {
   if (s.hubCommit) top.push(`the hub committed what the worker left: ${s.hubCommit} (git.log below)`);
   // What its attempts used (the usage ledger, every attempt: status.json keeps the last 50)
   if (s.type === 'task') {
-    const used = taskTokensText(readLedger(DIR).records.filter((r) => r.task === id));
+    // (the months from a day before the task was first queued: the orchestrator runs result often)
+    const from = (Date.parse(s.createdAt || s.startedAt || '') || Date.now()) - 86_400_000;
+    const used = taskTokensText(readLedger(DIR, { from }).records.filter((r) => r.task === id));
     if (used) top.push(`tokens: ${used}`);
   }
   // How its attempts ended (FR-020)

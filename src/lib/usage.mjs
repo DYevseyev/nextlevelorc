@@ -13,7 +13,7 @@ export const LEDGER_VERSION = 1;
 export const MAX_LINE = 2048;
 export const MAX_FILE = 32 * 1024 * 1024;
 const WORD = /^[a-z-]{1,24}$/;
-const NAME = /^[\w.:/@+-]{0,80}$/;
+const NAME = /^[\w.:/@+[\]-]{0,80}$/; // (a slug: Claude Code's "opus[1m]" too)
 const TASK = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_FILE = /^(\d{4})-(\d{2})\.jsonl$/;
@@ -38,6 +38,13 @@ const word = (x) => (typeof x === 'string' && WORD.test(x) ? x : null);
 const name = (x) => (typeof x === 'string' && NAME.test(x) ? x : null);
 const iso = (x) => (typeof x === 'string' && ISO.test(x) && Number.isFinite(Date.parse(x)) ? x : null);
 const round3 = (x) => Math.round(x * 1000) / 1000;
+// A model as the ledger keeps it: its slug. Antigravity's own choice is read from its settings as a label ("Gemini 3.8
+// Flash (High)"), whose slug is the label lower-cased, without its brackets, words joined by "-" (gemini-3.8-flash-high,
+// as `agy models` lists them); anything else that isn't a slug is left out by the shape check.
+export const modelSlug = (m) => {
+  const s = String(m || '').trim().slice(0, 80);
+  return NAME.test(s) ? s : s.toLowerCase().replace(/[()]/g, '').trim().replace(/\s+/g, '-');
+};
 
 // A run's tokens as the ledger keeps them: { total, input?, cacheWrite?, output?, cached?, thinking? } from an adapter's
 // { tokens, cached, input, cacheWrite, output, thinking }, or null when the engine reported none
@@ -88,7 +95,7 @@ export function runRecord({ at, start, role, engine, runs = 1, minutes = 0, toke
     runs,
     minutes: round3(Number(minutes) || 0),
     tokens: tokensOf(tokens),
-    ...(model ? { model: String(model).slice(0, 80) } : {}),
+    ...(model ? { model: modelSlug(model) } : {}),
     ...(effort ? { effort } : {}),
     ...(profile ? { profile } : {}),
     ...(worker ? { worker } : {}),

@@ -60,6 +60,10 @@ test('the ledger: one line per run, in the month of its end; a cut last line cos
   assert.equal(planted.model, undefined, 'a model with free text is dropped');
   assert.equal(planted.note, undefined, 'an unknown field is dropped');
   assert.equal(cleanRecord({ v: 1, at: '2026-10-21T13:00:00Z', role: 'Worker!', engine: 'agy' }), null, 'a role that is no role: no line');
+  // Antigravity's own model is a label in its settings: kept as its slug; Claude Code's 1M-context names as they are
+  assert.equal(run({ model: 'Gemini 3.8 Flash (High)' }).model, 'gemini-3.8-flash-high');
+  assert.equal(run({ model: 'GPT-OSS 120B (Medium)' }).model, 'gpt-oss-120b-medium');
+  assert.equal(run({ model: 'claude-opus-5-5[1m]' }).model, 'claude-opus-5-5[1m]');
   assert.deepEqual(readLedger(dir, { from: Date.parse('2026-11-01T00:00:00Z') - 86400000 * 2, to: Infinity }).records.map((r) => r.role), ['autopilot'], 'only the months of the range are read');
 });
 

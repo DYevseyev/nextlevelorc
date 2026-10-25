@@ -1952,3 +1952,5 @@ One entry each: date, decision, why, alternatives.
   output doesn't say whether its output count has it. "This week" is from Monday, like Today and This month, all
   calendar ranges. `nextlevel usage --all-projects` reads other projects' ledgers where they are: the owner's alone,
   refused in an agent's or the assistant's session, so one project's agent never learns another project's tasks.
+  A hub that stops between `usage.json`'s change (which raises `ledgered`) and the line's append loses that one run from
+  the ledger for good; the order is kept so that nothing is ever counted twice, and the loss is one run at most.
