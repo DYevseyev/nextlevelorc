@@ -1954,3 +1954,13 @@ One entry each: date, decision, why, alternatives.
   refused in an agent's or the assistant's session, so one project's agent never learns another project's tasks.
   A hub that stops between `usage.json`'s change (which raises `ledgered`) and the line's append loses that one run from
   the ledger for good; the order is kept so that nothing is ever counted twice, and the loss is one run at most.
+- 2026-10-25 — **Home's Usage card reads the usage ledger for every range; Today by role comes with the live feed, the
+  rest from `GET /api/usage`.** Today per role and engine is what Home always showed, so it stays in the build data the
+  page gets on every change, with what runs now counted so far. Any other range, grouping or All projects is read when
+  the owner picks it and again at most every 30 seconds while the page updates, so the live feed stays small. The hub
+  keeps each project's ledger lines in memory until one of its month files changes size or time, so the feed's looks
+  read no file. Outside Today, a run counts when it ends: the card says how many run now, rather than adding minutes
+  that the next look would count again. Each engine keeps its own color in the per-day chart (Codex, Claude Code,
+  Antigravity, others gray), whatever else the range holds; a bar's numbers are in its tooltip and the table under the
+  chart, and the scale and dates are the page's own text, so they stay readable at a phone's width. Home isn't drawn
+  again while a picker has the focus, so a live update never closes it.

@@ -7,14 +7,16 @@
 //             sign-ins stay steps to copy. The page checks again when the owner comes back to it.
 //   Home      (M9) at a glance: whether the team runs, one sentence per running task, what needs the owner
 //             with the one next action as a button (ownerNeeds, lib/overview.mjs), milestone progress and
-//             the day's numbers (autopilot rounds, worker minutes, Codex tokens from the logs). Its Blockers (M11): a
-//             headline colored by meaning, then the status file's labeled items (blockersView, lib/overview.mjs).
+//             its Usage card: from the usage ledger, today per role and engine with what runs now in the live feed;
+//             another range (the last hour, this week, this month, all time), grouping (engine, model, worker, task)
+//             or all projects from GET /api/usage (usageView in hub.mjs), with a per-day chart by engine. Its Blockers
+//             (M11): a headline colored by meaning, then the status file's labeled items (blockersView, lib/overview.mjs).
 //   Project   (M11) what the project is (docs/PROJECT.md), the roadmap as milestone cards (the status table, the
 //             plans' Outcome, Acceptance and Try it, their tasks from the hub's jobs, the brief's goals; FR-016: each plan
 //             found by its Milestone line or its name, and a warning where one is missing, incomplete or doubled), the pace
 //             with a rough estimate, and docs/DECISIONS.md as cards: GET /api/project (projectView in hub.mjs,
 //             lib/roadmap.mjs), which the page asks for again when the build data's projectStamp changes.
-//   Build     milestones, jobs with the engine and model each ran on, running workers with the end of their
+//   Build     milestones, jobs with the engine and model each ran on (and the tokens their attempts used), running workers with the end of their
 //             log and what they changed so far, what waits for review, the hub's log.
 //   Team      (M9) each role's engine, model and effort in use; a change runs `nextlevel team set <role> ...
 //             --json`, which checks it with the doctor's checks before it saves nextlevel.json. The models a
@@ -67,6 +69,7 @@ import { blockersView, ownerNeeds } from './lib/overview.mjs';
 import { openUrl, refreshPath } from './lib/proc.mjs';
 import { SECOND_TAKES, WINDOW_MODES } from './lib/config.mjs';
 import { TEAM_ROWS } from './lib/team.mjs';
+import { BY_KEYS, RANGE_KEYS } from './lib/usage.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const ASSETS = {
@@ -636,6 +639,13 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         // a running task's progress notes and technical feed: asked for only while its toggle is open
         const activity = api.activity(url.searchParams.get('id'));
         return reply(res, activity ? [200, { ok: true, ...activity }] : [404, { ok: false, message: 'no such task' }]);
+      }
+      case 'GET /api/usage': {
+        // Home's Usage card (docs/design/token-usage.md): a range, a field to group by, and all projects or this one
+        const range = String(url.searchParams.get('range') || 'today');
+        const by = String(url.searchParams.get('by') || 'role');
+        if (!RANGE_KEYS.includes(range) || !BY_KEYS.includes(by)) return reply(res, [400, { ok: false, message: `range is one of ${RANGE_KEYS.join(', ')}; by is one of ${BY_KEYS.join(', ')}` }]);
+        return reply(res, [200, api.usage({ range, by, all: url.searchParams.get('all') === '1' })]);
       }
       case 'GET /api/cards':
         return reply(res, [200, cardsView()], { raw: true }); // redacted where the team wrote it (cardsView)

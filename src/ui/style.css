@@ -18,6 +18,11 @@
   --ok: #1d7a46;
   --ok-bg: #e5f5eb;
   --skip: #7a808c;
+  /* the usage chart's engines, each its own hue whatever else is shown (Codex, Claude Code, Antigravity, others) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-other: #8a8f99;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(20, 24, 33, 0.06), 0 1px 1px rgba(20, 24, 33, 0.04);
   --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
@@ -43,6 +48,10 @@
     --ok: #56d364;
     --ok-bg: #16301f;
     --skip: #8b919c;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-other: #7d838e;
     --shadow: none;
   }
 }
@@ -372,6 +381,32 @@ table.usage .num { text-align: right; white-space: nowrap; }
 table.usage .num.wrap { white-space: normal; }
 table.usage tr.sub td { color: var(--muted); font-size: 13px; padding-top: 2px; }
 table.usage tr.sub td:first-child { padding-left: 22px; }
+table.usage .quiet { color: var(--muted); font-size: 13px; }
+/* Home's Usage card: the range and grouping, the total, the per-day chart */
+.usage-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; margin: 0 0 12px; }
+.usage-pick { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--muted); }
+.usage-pick select { font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; min-width: 120px; }
+.usage-all { display: flex; align-items: center; gap: 6px; font-size: 14px; padding-bottom: 5px; }
+.usage-total { margin: 4px 0 10px; }
+.usage-total strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.usage-chart { margin: 0 0 12px; }
+.usage-chart svg { display: block; width: 100%; height: 120px; }
+.usage-axis { font-size: 11.5px; color: var(--muted); }
+.usage-axis.dates { display: flex; justify-content: space-between; }
+.usage-card code.nowrap { white-space: nowrap; }
+@media (max-width: 520px) { .usage-card table.usage .quiet { display: none; } }
+.usage-chart .seg, .usage-chart line { vector-effect: non-scaling-stroke; }
+.usage-chart .seg { stroke: var(--panel); stroke-width: 1; }
+.usage-chart .hit { fill: transparent; }
+.usage-chart .day:hover .hit { fill: var(--soft); }
+.usage-chart .grid { stroke: var(--line); stroke-dasharray: 3 3; }
+.usage-chart .baseline { stroke: var(--muted); }
+.usage-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.usage-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.eng-codex { fill: var(--series-1); background: var(--series-1); }
+.eng-claude { fill: var(--series-2); background: var(--series-2); }
+.eng-agy { fill: var(--series-3); background: var(--series-3); }
+.eng-other { fill: var(--series-other); background: var(--series-other); }
 ul.switches { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 ul.switches li { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: 14px; }
 ul.switches li.warn { background: var(--warn-bg); }

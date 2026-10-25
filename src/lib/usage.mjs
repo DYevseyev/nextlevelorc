@@ -212,6 +212,9 @@ function inRange(r, from, to) {
 }
 
 // The ranges, at a time (ms): [{ key, title, from, to, since }] (since: the start, in words)
+// The records of a range, from records read already (the dashboard keeps them while no month file changes)
+export const within = (records, { from = -Infinity, to = Infinity } = {}) => records.filter((r) => inRange(r, from, to));
+
 export function ranges(now) {
   const d = new Date(now);
   const today = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
