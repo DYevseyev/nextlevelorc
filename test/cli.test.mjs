@@ -302,7 +302,7 @@ test(
       const none = start(withEnv(p.env, { PATH: TEST_PATH_DIRS.join(path.delimiter), USERPROFILE: nowhere }));
       assert.equal(none.status, 1, none.stdout + none.stderr);
       assert.ok(none.stdout.includes(`  ${INSTALL_COMMAND}\r\n`), none.stdout);
-      assert.match(none.stdout, /\(It needs the GitHub CLI, signed in: gh auth login\.\) Then run START\.cmd again\./);
+      assert.match(none.stdout, /iex\r\nThen run START\.cmd again\.\r\n/, 'a public repository: no GitHub CLI needed');
     } finally {
       p.cleanup();
     }
