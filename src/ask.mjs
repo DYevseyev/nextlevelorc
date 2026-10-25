@@ -308,7 +308,7 @@ export async function cmdAsk(argv, ctx) {
   // (a subcommand only from before "--": what follows it is always a question, a dashboard's "threads" too)
   const [sub, ...rest] = a._;
   try {
-    if (SUBCOMMANDS.has(sub) && !a.thread) {
+    if (SUBCOMMANDS.has(sub) && !a.thread && a.dashAt !== 0) {
       if (sub === 'memory') return await cmdMemory(a, rest, { ctx, print, fail });
       if (sub === 'threads') {
         const list = store.list({ search: a.search || rest.join(' ') });
@@ -345,7 +345,7 @@ export async function cmdAsk(argv, ctx) {
     if (a.quick && a.card) return fail('Explain (--card) always runs as Advise: leave out --quick');
     const card = a.card ? cardFor(ctx, a.card) : null;
     const mode = card ? 'explain' : a.quick ? 'quick' : 'advise';
-    const question = [...a._, ...(a['--'] || [])].join(' ').trim() || (card ? `Explain ${card.id}: what it asks of me and why, in micro-steps, and what I should reply.` : '');
+    const question = a._.join(' ').trim() || (card ? `Explain ${card.id}: what it asks of me and why, in micro-steps, and what I should reply.` : '');
     if (!question) return fail('usage: nextlevel ask "your question" [--thread <id>] [--quick | --card H<n>] | ask threads | show | new | rename | clear | delete | memory');
     if (question.length > LIMITS.question) return fail(`a question has at most ${LIMITS.question} characters`);
     let thread = a.thread ? store.get(a.thread) : null;

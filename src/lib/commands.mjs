@@ -107,7 +107,7 @@ export const COMMANDS = {
       kind: S('decision|preference', 'memory add / edit: what the entry is (decision by default)'),
       json: JSON_OPT,
     },
-    dashdash: 'command',
+    dashdash: 'mark',
     args: [0, ANY],
   },
   'bridge-test': {
@@ -439,7 +439,12 @@ export function parseCommand(name, argv = []) {
   delete out.help;
   if (spec.dashdash === 'command') {
     if (term) out['--'] = positional(true);
-  } else out._.push(...positional(true));
+  } else {
+    // 'mark': where "--" was, so a command can tell what came after it (ask: always a question, never a subcommand);
+    // not enumerable, so the arguments read as they always have
+    if (term && spec.dashdash === 'mark') Object.defineProperty(out, 'dashAt', { value: out._.length });
+    out._.push(...positional(true));
+  }
   let rest = out._;
   let allowed = Object.keys(options);
   let count = spec.args || [0, 0];
