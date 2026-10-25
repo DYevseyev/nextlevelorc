@@ -5757,26 +5757,40 @@ const USAGE_ROLES = [
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
   { key: 'assistant', title: 'Assistant (Ask)', unit: 'question', kind: 'headless' },
 ];
-// The usage ledger as the dashboard reads it, per project: every month file's lines, read again only when one of
-// them changed (its size or time), so the live feed's every look costs no file reads (docs/design/token-usage.md)
-const ledgerCache = new Map(); // state folder -> { sig, records, notes }
+// The usage ledger as the dashboard reads it: each month file's lines, read again only when that file changed (its
+// size or time), so the live feed's every look costs a stat per month and a run's end re-reads one month
+// (docs/design/token-usage.md)
+const ledgerCache = new Map(); // month file -> { sig, records, notes }
 function ledgerRecords(stateDir) {
   const dir = ledgerDir(stateDir);
-  let sig = '';
+  let names = [];
   try {
-    sig = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f)).sort().map((f) => {
-      const st = fs.statSync(path.join(dir, f));
-      return `${f}:${st.size}:${st.mtimeMs}`;
-    }).join('|');
+    names = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f)).sort();
   } catch {
     // no ledger yet
   }
-  const kept = ledgerCache.get(stateDir);
-  if (kept && kept.sig === sig) return kept;
-  const got = sig ? readLedger(stateDir) : { records: [], notes: [] };
-  const v = { sig, records: got.records, notes: got.notes };
-  ledgerCache.set(stateDir, v);
-  return v;
+  const records = [];
+  const notes = [];
+  for (const f of names) {
+    const file = path.join(dir, f);
+    let sig;
+    try {
+      const st = fs.statSync(file);
+      sig = `${st.size}:${st.mtimeMs}`;
+    } catch {
+      continue;
+    }
+    let kept = ledgerCache.get(file);
+    if (!kept || kept.sig !== sig) {
+      // (a line lives in the file of its own month, so one month's range reads only that file)
+      const [y, m] = f.slice(0, 7).split('-').map(Number);
+      kept = { sig, ...readLedger(stateDir, { from: new Date(y, m - 1, 1).getTime(), to: new Date(y, m, 1).getTime() }) };
+      ledgerCache.set(file, kept);
+    }
+    records.push(...kept.records);
+    notes.push(...kept.notes);
+  }
+  return { records, notes };
 }
 // A ledger line's runs and whether its engine reported tokens, as sumUsage counts them
 const lineRunsOf = (r) => r.runs ?? (r.kind === 'day' ? 0 : 1);

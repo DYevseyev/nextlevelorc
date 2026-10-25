@@ -1958,9 +1958,12 @@ One entry each: date, decision, why, alternatives.
   rest from `GET /api/usage`.** Today per role and engine is what Home always showed, so it stays in the build data the
   page gets on every change, with what runs now counted so far. Any other range, grouping or All projects is read when
   the owner picks it and again at most every 30 seconds while the page updates, so the live feed stays small. The hub
-  keeps each project's ledger lines in memory until one of its month files changes size or time, so the feed's looks
-  read no file. Outside Today, a run counts when it ends: the card says how many run now, rather than adding minutes
+  keeps each month file's lines in memory until that file changes size or time, so the feed's looks read no line and a
+  run's end reads its own month again, not all time. Outside Today, a run counts when it ends: the card says how many run now, rather than adding minutes
   that the next look would count again. Each engine keeps its own color in the per-day chart (Codex, Claude Code,
   Antigravity, others gray), whatever else the range holds; a bar's numbers are in its tooltip and the table under the
   chart, and the scale and dates are the page's own text, so they stay readable at a phone's width. Home isn't drawn
-  again while a picker has the focus, so a live update never closes it.
+  again while a picker's list is open (for 20 seconds at most), so a live update never closes it; a picker that only has
+  the focus holds nothing. A project whose hub hasn't started on this version yet (its dashboard only) hasn't brought
+  in what `usage.json` counted before, so its numbers start at the ledger's first line until its hub starts; the update
+  restarts the hubs, so this lasts only where a hub wasn't running.

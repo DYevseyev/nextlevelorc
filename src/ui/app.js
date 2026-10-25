@@ -677,7 +677,12 @@ document.addEventListener('visibilitychange', () => {
 function renderHome() {
   const b = build;
   const root = $('#home');
-  if (!b || selecting(root) || document.activeElement?.closest?.('.usage-controls')) return;
+  if (!b || selecting(root)) return;
+  if (usagePicking && Date.now() - usagePicking < PICKING_MS) {
+    usageHeld = true;
+    return;
+  }
+  usagePicking = 0;
   if (!b.ok) return root.replaceChildren(h('div.callout.bad', {}, `The dashboard couldn't read the project's state: ${b.error}`));
   const st = teamState(b);
   const ot = orchestratorTile(b);
@@ -880,16 +885,38 @@ async function loadUsage(force = false) {
   Object.assign(usage, { data: r, want, at: Date.now() });
   renderHome();
 }
+// While a picker's list is open, Home isn't drawn again (a live update would close it); a redraw it held comes when it
+// closes. Only an open list holds it, and for 20 s at most (a list closed on the same choice says nothing): a picker
+// that merely has the focus doesn't.
+const PICKING_MS = 20_000;
+let usagePicking = 0; // when a picker's list was opened
+let usageHeld = false;
+function usagePickDone() {
+  if (!usagePicking) return;
+  usagePicking = 0;
+  if (usageHeld) {
+    usageHeld = false;
+    renderHome();
+  }
+}
 function usageControls() {
   const changed = (e, set) => {
     set(e.currentTarget);
-    e.currentTarget.blur(); // (Home isn't drawn again while a picker has the focus)
+    usagePicking = 0;
+    usageHeld = false;
     saveUsage();
     loadUsage(true);
     renderHome();
   };
+  const opening = () => (usagePicking = Date.now());
   const pick = (label, list, value, set) => h('label.usage-pick', {}, h('span', {}, label),
-    h('select', { onchange: (e) => changed(e, set) }, list.map(([k, t]) => h('option', { value: k, selected: k === value }, t))));
+    h('select', {
+      onchange: (e) => changed(e, set),
+      onpointerdown: opening,
+      // (the keys that open a select's list; Escape closes it without a change)
+      onkeydown: (e) => (e.key === 'Escape' || e.key === 'Tab' ? usagePickDone() : (e.altKey || [' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) && opening()),
+      onblur: usagePickDone,
+    }, list.map(([k, t]) => h('option', { value: k, selected: k === value }, t))));
   return h('div.usage-controls', {},
     pick('Range', USAGE_RANGES, usage.range, (el) => (usage.range = el.value)),
     pick('Group by', USAGE_BY, usage.by, (el) => (usage.by = el.value)),
