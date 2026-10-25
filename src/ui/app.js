@@ -909,6 +909,18 @@ function usageCard(b) {
   card.append(h('p.muted.small', {}, "Tokens as each engine reports them: Codex's JSON output (codex exec --json) and its session files, Claude Code's and Antigravity's JSON output (cache reads apart); interactive Claude Code and Antigravity windows are counted in minutes only. A run counts when it ends."));
   return card;
 }
+// FR-019: autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
+function roundsParts(why) {
+  if (!why.length) return [];
+  return [h('h4', {}, 'Autopilot rounds, by what started them'),
+    h('table.usage', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
+      h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
+        h('td', {}, r.title),
+        h('td.num', {}, String(r.count)),
+        h('td.num', {}, String(Math.round(r.minutes))),
+        h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—')))))];
+}
 // Today per role (FR-008): each role's rounds, sessions or attempts, minutes and tokens, then each engine's
 function todayParts(b) {
   const u = b.usage || {};
@@ -934,18 +946,6 @@ function todayParts(b) {
           h('td.num', { title: !e.tokensKnown ? e.notReported : '' }, e.reported ? `${Number(e.tokens).toLocaleString()} tokens` : e.tokensKnown ? 'none reported yet' : 'not reported'))))));
   }
   return out;
-}
-// FR-019: autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
-function roundsParts(why) {
-  if (!why.length) return [];
-  return [h('h4', {}, 'Autopilot rounds, by what started them'),
-    h('table.usage', {},
-      h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
-      h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
-        h('td', {}, r.title),
-        h('td.num', {}, String(r.count)),
-        h('td.num', {}, String(Math.round(r.minutes))),
-        h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—')))))];
 }
 // A group's tokens: how many of its runs reported them, when not all did
 function groupTokens(g) {
