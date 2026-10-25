@@ -10,6 +10,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { REPO, hubRounds, makeProject, processesGone, waitUntil } from './helpers.mjs';
+import { readLedger } from '../src/lib/usage.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
 // The test's clock: { set(iso|ms), add(minutes), env }
@@ -775,6 +776,10 @@ test('rounds whose engine never starts: what started them waits, the hour counts
     bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
     assert.equal((await api.post('/api/autopilot', { on: true })).status, 200);
     await until(p, 'the note\'s round to run', () => ended(p) === 3);
+    // The usage ledger has every round, the two that never started too, as usage.json counts them (at their start)
+    const ledger = readLedger(p.state()).records.filter((r) => r.role === 'autopilot');
+    assert.deepEqual(ledger.map((r) => [r.end || '', r.runs, r.tokens === null ? null : 'tokens', r.at.slice(0, 10)]).slice(0, 2), [['not-started', 1, null, '2026-10-06'], ['not-started', 1, null, '2026-10-06']]);
+    assert.equal(ledger.length, Object.values(JSON.parse(fs.readFileSync(p.state('usage.json'), 'utf8'))).reduce((t, d) => t + (d.rounds || 0), 0));
     const after = JSON.parse(fs.readFileSync(p.state('rounds.json'), 'utf8'));
     assert.deepEqual([after.notStarted, after.last.how, after.starts.length], [0, 'ok', 3]);
     assert.equal(JSON.parse(fs.readFileSync(p.state('cycle.json'), 'utf8')).launched, true);

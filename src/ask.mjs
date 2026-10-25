@@ -164,7 +164,7 @@ export function assistantProfile(config, { run = runQuiet, env = process.env, ho
 
 // ---------- the command ----------
 // `ctx` (hub.mjs askContext): root, stateDir, config, status(), jobs(), cards(), commits(), secrets(), env(),
-// addUsage(engine, { runs, minutes, tokens }), home. Returns the exit code.
+// addUsage(engine, { runs, minutes, tokens, model, effort, start, reason }), home. Returns the exit code.
 export async function cmdAsk(argv, ctx) {
   const a = commandArgs('ask', argv);
   const store = chatStore(path.join(ctx.stateDir, 'chats'));
@@ -313,7 +313,7 @@ async function askEngine(ctx, prompt) {
   });
   const minutes = (Date.now() - startedAt) / 60000;
   const tokens = eng.tokens(out.text);
-  ctx.addUsage(profile.engine, { runs: 1, minutes, tokens });
+  ctx.addUsage(profile.engine, { runs: 1, minutes, tokens, model: base.model, effort: base.effort, start: new Date(startedAt).toISOString() });
   const got = answerOf(profile.engine, out.text);
   const error = got.error || (out.code !== 0 ? `${eng.title} stopped (exit ${out.code})${got.text ? '' : ': no answer'}` : '');
   return { ...base, text: got.text, error: out.code === 0 && got.text && !got.error ? '' : error || (got.text ? '' : 'no answer'), tokens, minutes: Math.round(minutes * 100) / 100 };
@@ -368,7 +368,7 @@ async function askAgy(ctx, profile, prompt, { base, env, startedAt }) {
   const minutes = (Date.now() - startedAt) / 60000;
   const eng = engine('agy');
   const tokens = eng.tokens(out.out);
-  ctx.addUsage('agy', { runs: 1, minutes, tokens });
+  ctx.addUsage('agy', { runs: 1, minutes, tokens, model: base.model, effort: base.effort, start: new Date(startedAt).toISOString() });
   const result = agyResult(out.out);
   const text = result?.ok ? result.response.trim() : '';
   const failed = !text ? agyFailure(out.out, { code: out.code }).reason || (out.timedOut ? `no answer in ${TIMEOUT_MIN} minutes` : 'no answer') : '';

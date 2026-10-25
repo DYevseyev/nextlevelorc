@@ -193,7 +193,8 @@ export function codexEnd(text, { code = null } = {}) {
 }
 
 // The tokens of a `codex exec --json` run: its last "turn.completed" usage (the running total), counted like
-// "tokens used" (input without the cached part, plus output); else "tokens used" in its output. null: none.
+// "tokens used" (input without the cached part, plus output), with its parts (input: the part of input_tokens counted,
+// output); else "tokens used" in its output, a total alone. null: none.
 export function codexRunTokens(text) {
   const lines = String(text || '').split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -201,7 +202,8 @@ export function codexRunTokens(text) {
     const u = jsonLine(lines[i])?.usage;
     if (!u || typeof u !== 'object') continue;
     const cached = count(u.cached_input_tokens);
-    return { tokens: Math.max(0, count(u.input_tokens) - cached) + count(u.output_tokens), cached };
+    const input = Math.max(0, count(u.input_tokens) - cached);
+    return { tokens: input + count(u.output_tokens), cached, input, output: count(u.output_tokens) };
   }
   const n = codexTokens(text);
   return n ? { tokens: n, cached: 0 } : null;

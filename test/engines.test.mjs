@@ -37,7 +37,7 @@ test("the technical feed: Claude Code's stream-json and codex exec --json, as co
     ['command', 'ls', 'b.js', true],
     ['done', 'finished', '3 turn(s)', true],
   ], 'reads (Read, Grep) are left out');
-  assert.deepEqual(engine('claude').tokens(claude), { tokens: 30, cached: 5 }, 'the tokens from the last line, as before');
+  assert.deepEqual(engine('claude').tokens(claude), { tokens: 30, cached: 5, input: 10, cacheWrite: 0, output: 20 }, 'the tokens from the last line, as before, with their parts (the usage ledger)');
   const shown = engine('claude').readable(claude);
   assert.match(shown, /^Claude Code: Running the tests first\.\n\$ npm test\nedited \/s\/w1\/src\/a\.js\n\$ ls\nFixed\.\n\n\[Claude Code: 3 turn\(s\), 30 tokens, 5 more read from its cache\]$/);
   assert.deepEqual(claudeFeed('plain text only'), []);
@@ -60,7 +60,7 @@ test("the technical feed: Claude Code's stream-json and codex exec --json, as co
     ['message', 'Done: the tests pass.', '', undefined],
     ['error', 'stream error', '', false],
   ], 'a command still running has no result yet');
-  assert.deepEqual(codexRunTokens(codex), { tokens: 12345, cached: 1000 }, 'input without the cached part, plus output');
+  assert.deepEqual(codexRunTokens(codex), { tokens: 12345, cached: 1000, input: 12000, output: 345 }, 'input without the cached part, plus output; input is the part counted');
   assert.deepEqual(engine('codex').tokens('tokens used\n12,345'), { tokens: 12345, cached: 0 }, 'an older run without --json');
   assert.match(engine('codex').readable(codex), /\$ pnpm test  -> 3 passed, 1 failed in 0\.2s\nedited \/s\/w1\/a\.js, added \/s\/w1\/b\.js\nCodex: Done: the tests pass\.\nstream error\n\[Codex: 12,345 tokens, 1,000 more read from its cache\]/);
   // Codex's older JSON events
@@ -77,8 +77,8 @@ test("the technical feed: Claude Code's stream-json and codex exec --json, as co
     ['message', 'ok', '', null],
     ['done', 'finished', '1 turn(s)', true],
   ]);
-  assert.deepEqual(engine('agy').tokens(agyOut), { tokens: 40251, cached: 48942 }, 'input and output (its total_tokens); cache reads apart');
-  assert.deepEqual(engine('agy').tokens('{"conversation_id":"x","status":"SUCCESS","response":"ok","usage":{"input_tokens":29025,"output_tokens":163,"cache_read_tokens":0,"total_tokens":29188}}'), { tokens: 29188, cached: 0 }, '--output-format json: one object');
+  assert.deepEqual(engine('agy').tokens(agyOut), { tokens: 40251, cached: 48942, input: 39612, output: 639, thinking: 478 }, 'input and output (its total_tokens); cache reads apart; thinking a part of nothing');
+  assert.deepEqual(engine('agy').tokens('{"conversation_id":"x","status":"SUCCESS","response":"ok","usage":{"input_tokens":29025,"output_tokens":163,"cache_read_tokens":0,"total_tokens":29188}}'), { tokens: 29188, cached: 0, input: 29025, output: 163 }, '--output-format json: one object');
   assert.match(engine('agy').readable(agyOut), /^wrote .*hello\.txt\n\$ node --version {2}→ v24\.19\.0\nAntigravity: ok\nok\n\n\[Antigravity: 1 turn\(s\), 40,251 tokens, 48,942 more read from its cache\]\n$/);
   assert.equal(engine('agy').readable('[fake agy] a line of its own'), null, 'no JSON: shown as it is');
   assert.deepEqual(agyFeed('{"event":"step_update","step_update":{"step_index":3,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"npm test"},"output":"# pass 1\\n# fail 2\\n"}}}').map((e) => [e.kind, e.detail, e.ok]), [['test', '1 passed, 2 failed', false]]);
@@ -250,7 +250,7 @@ test('agy 1.3.4 and on (FR-022): the agent file is valid YAML, a failure says wh
   // A real 1.3.5 run as a worker (redacted: the PC's paths): its result, tokens and feed
   const out = fixture('agy-1.3.5-stream-json.txt');
   assert.equal(agyResult(out).ok, true);
-  assert.deepEqual(engine('agy').tokens(out), { tokens: 8490, cached: 3790 }, 'input and output of its result; cache reads apart');
+  assert.deepEqual(engine('agy').tokens(out), { tokens: 8490, cached: 3790, input: 8197, output: 293, thinking: 185 }, 'input and output of its result; cache reads apart');
   assert.deepEqual(engine('agy').feed(out, { cwd: 'C:\\Users\\me\\proj.slots\\w1' }).map((e) => [e.kind, e.ok ?? null]), [['message', null], ['done', true]], 'reading AGENTS.md (which failed) is left out; its message and the end');
   assert.match(engine('agy').feed(out)[0].text, /^Hello! I'm ready to help\. Please let me know what task you'd like me to work on/, '1.3.5 streams a message in pieces: put together');
   // ...and the worker's log, written a line at a time as it comes, shows it once, whole
@@ -383,8 +383,8 @@ test("FR-008: who does a worker's git, and when the hub merges the base branch i
 test("tokens as each engine reports them: Codex's output and session files, Claude Code's JSON, none from Antigravity (FR-008)", () => {
   // Claude Code's JSON result, at the end of whatever it printed; cache reads apart
   const json = { type: 'result', result: 'ok', num_turns: 2, usage: { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 900, output_tokens: 20 } };
-  assert.deepEqual(claudeTokens(`[fake claude] task=x\n${JSON.stringify(json)}\n`), { tokens: 35, cached: 900 });
-  assert.deepEqual(engine('claude').tokens(JSON.stringify(json, null, 2)), { tokens: 35, cached: 900 }, 'pretty-printed too');
+  assert.deepEqual(claudeTokens(`[fake claude] task=x\n${JSON.stringify(json)}\n`), { tokens: 35, cached: 900, input: 10, cacheWrite: 5, output: 20 });
+  assert.deepEqual(engine('claude').tokens(JSON.stringify(json, null, 2)), { tokens: 35, cached: 900, input: 10, cacheWrite: 5, output: 20 }, 'pretty-printed too');
   assert.equal(engine('claude').tokens('plain text, no JSON'), null);
   assert.match(engine('claude').readable(JSON.stringify(json)), /^ok\n\n\[Claude Code: 2 turn\(s\), 35 tokens, 900 more read from its cache\]$/);
   assert.equal(engine('claude').readable(`header\n${JSON.stringify(json)}\n`), 'header\nok\n\n[Claude Code: 2 turn(s), 35 tokens, 900 more read from its cache]\n', 'the lines before it stay');
