@@ -894,10 +894,18 @@ let usageHeld = false;
 function usagePickDone() {
   if (!usagePicking) return;
   usagePicking = 0;
-  if (usageHeld) {
-    usageHeld = false;
-    renderHome();
-  }
+  if (!usageHeld) return;
+  usageHeld = false;
+  // (a blur comes on the pointerdown of what was clicked: draw after its click, or the click lands on a node that's gone)
+  let done = false;
+  const later = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener('pointerup', later, true);
+    setTimeout(renderHome, 0);
+  };
+  document.addEventListener('pointerup', later, true);
+  setTimeout(later, 500);
 }
 function usageControls() {
   const changed = (e, set) => {

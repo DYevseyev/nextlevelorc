@@ -5787,8 +5787,8 @@ function ledgerRecords(stateDir) {
       kept = { sig, ...readLedger(stateDir, { from: new Date(y, m - 1, 1).getTime(), to: new Date(y, m, 1).getTime() }) };
       ledgerCache.set(file, kept);
     }
-    records.push(...kept.records);
-    notes.push(...kept.notes);
+    for (const r of kept.records) records.push(r); // (never a spread: a big month would pass too many arguments)
+    for (const x of kept.notes) notes.push(x);
   }
   return { records, notes };
 }

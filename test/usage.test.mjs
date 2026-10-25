@@ -252,6 +252,12 @@ test("the dashboard's Usage card: Today from the ledger (a role it doesn't list 
     const byEngine = (await api.get('/api/usage?range=today&by=engine')).json;
     assert.deepEqual(byEngine.rows.map((g) => [g.title, g.tokens]), [['Antigravity', 2150], ['Claude Code', 42], ['Codex', 7]]);
     assert.deepEqual(byEngine.days, [], 'no chart for a day');
+    // A month file an agent made huge (well under the 32 MB cap): Home still reads (no spread of its lines)
+    fs.writeFileSync(path.join(p.state(), 'usage', '2026-01.jsonl'), `${JSON.stringify({ v: 1, at: '2026-01-15T10:00:00.000Z', role: 'a', engine: 'b' })}\n`.repeat(200_000));
+    const big = (await api.get('/api/state')).json;
+    assert.equal(big.ok, true, big.error);
+    assert.equal(big.usage.roles.find((r) => r.key === 'worker').tokens, 2150, "Today is today's lines");
+    assert.equal((await api.get('/api/usage?range=all&by=role')).json.rows.find((g) => g.key === 'a').runs, 200_000);
     // All projects: a row each, one not found said; the other project's lines counted
     const both = (await api.get('/api/usage?range=today&by=role&all=1')).json;
     assert.deepEqual(both.projects.map((x) => [x.name, x.found, x.total?.tokens ?? null]), [[path.basename(p.repo), true, 2199], ['other', true, 99], ['gone', false, null]]);
