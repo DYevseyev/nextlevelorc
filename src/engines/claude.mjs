@@ -42,7 +42,10 @@ function jsonIn(text) {
 export function claudeTokens(text) {
   const u = lastJsonWith(text, 'usage')?.usage;
   if (!u || typeof u !== 'object') return null;
-  return { tokens: count(u.input_tokens) + count(u.cache_creation_input_tokens) + count(u.output_tokens), cached: count(u.cache_read_input_tokens) };
+  // (its parts too, for the usage ledger: thinking is inside output, so it is a part of nothing)
+  const parts = { input: count(u.input_tokens), cacheWrite: count(u.cache_creation_input_tokens), output: count(u.output_tokens) };
+  const thinking = u.output_tokens_details && typeof u.output_tokens_details === 'object' ? count(u.output_tokens_details.thinking_tokens) : 0;
+  return { tokens: parts.input + parts.cacheWrite + parts.output, cached: count(u.cache_read_input_tokens), ...parts, ...(thinking ? { thinking } : {}) };
 }
 // A tool call as an event of the feed (util.mjs): a command, a file edited, another tool; null for the ones that
 // only look (Read, Grep, Glob, LS) or plan (TodoWrite).

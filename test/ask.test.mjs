@@ -166,7 +166,7 @@ test('on Claude Code: plan mode, the read tools and look-only commands allowed, 
     const r = askJson(p, ['Where are we?']);
     assert.equal(r.ok, true, r.message);
     assert.deepEqual([r.answer.engine, r.answer.model], ['claude', 'haiku']);
-    assert.deepEqual(r.answer.tokens, { tokens: 920, cached: 5000 });
+    assert.deepEqual(r.answer.tokens, { tokens: 920, cached: 5000, input: 800, cacheWrite: 0, output: 120 });
     const s = sessions(p, 'claude').at(-1);
     const arg = (flag) => s.args[s.args.indexOf(flag) + 1];
     assert.equal(s.args[0], '-p');

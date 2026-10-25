@@ -359,6 +359,24 @@ export const COMMANDS = {
     ].join('\n'),
     args: [0, 2],
   },
+  usage: {
+    group: 'other',
+    lines: [['nextlevel usage [--range <range>] [--by <field>] [--all-projects] [--json]', 'what the team used: runs, minutes and tokens, per role, engine, model, worker or task']],
+    text: [
+      'From the usage ledger (.nextlevel/usage/): every run that ended, kept for good. --range: hour, today (the default),',
+      'week (from Monday), month or all. --by: role (the default), engine, model, worker, task, reason or day.',
+      "Tokens are as each engine reports them; a run whose engine didn't report them counts in runs and minutes only.",
+      "--all-projects adds this PC's other projects: the owner's, so it refuses in an agent's session and the assistant's.",
+    ].join('\n'),
+    options: { range: S('<range>', 'hour, today, week, month or all'), by: S('<field>', 'role, engine, model, worker, task, reason or day'), 'all-projects': B("this PC's other projects too (the owner's)"), json: JSON_OPT },
+    args: [0, 0],
+    check: (a) =>
+      a.range !== undefined && !['hour', 'today', 'week', 'month', 'all'].includes(a.range)
+        ? `--range ${a.range}: one of hour, today, week, month, all`
+        : a.by !== undefined && !['role', 'engine', 'model', 'worker', 'task', 'reason', 'day'].includes(a.by)
+          ? `--by ${a.by}: one of role, engine, model, worker, task, reason, day`
+          : '',
+  },
   version: { group: 'other', lines: [['nextlevel version', "this nextlevel's version and folder"]], args: [0, 0] },
   help: { group: 'other', lines: [['nextlevel help [<command>]', "this list, or a command's usage (the same as nextlevel <command> --help)"]], args: [0, 1] },
 

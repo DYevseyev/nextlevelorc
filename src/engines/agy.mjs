@@ -56,7 +56,14 @@ const streamJson = (args) => (args.includes('--output-format') || args.some((a) 
 
 // What a headless run used, from its last "result" (or a --output-format json envelope): input and output, like
 // Codex's "tokens used" (total_tokens is the two); cache reads apart. null: no result.
-const usageOf = (u) => (u && typeof u === 'object' ? { tokens: count(u.input_tokens) + count(u.output_tokens) || count(u.total_tokens), cached: count(u.cache_read_tokens) } : null);
+// Its parts too, for the usage ledger, where it gives input and output; thinking_tokens is kept as a part of nothing
+// (whether output has it inside can't be told from agy's output).
+function usageOf(u) {
+  if (!u || typeof u !== 'object') return null;
+  const io = count(u.input_tokens) + count(u.output_tokens);
+  const thinking = count(u.thinking_tokens);
+  return { tokens: io || count(u.total_tokens), cached: count(u.cache_read_tokens), ...(io ? { input: count(u.input_tokens), output: count(u.output_tokens) } : {}), ...(thinking ? { thinking } : {}) };
+}
 // A run's result: the "result" event of stream-json, or the one object --output-format json prints.
 const resultOf = (v) => (v?.event === 'result' ? v.result || {} : v && !v.event && v.conversation_id ? v : null);
 // A headless run's outcome, from its last result: { ok, status, response, error } (ok: SUCCESS; error: agy's own words
