@@ -1086,9 +1086,51 @@ test('Ask: the panel on every page, a question answered read-only, its threads, 
     // Today: the assistant's own row
     const b = await live.until('build', (x) => x.ok && x.usage.roles.find((row) => row.key === 'assistant')?.count >= 2);
     const row = b.usage.roles.find((x) => x.key === 'assistant');
-    assert.equal(row.title, 'Assistant (Ask)');
+    assert.equal(row.title, 'Advisor');
     assert.ok(row.tokens > 0, 'its tokens');
-    assert.equal(b.team.find((x) => x.key === 'assistant').engineTitle, 'Codex');
+    // (the advisor's automatic choice: an installed engine other than the Codex orchestrator's)
+    const advisorRow = b.team.find((x) => x.key === 'assistant');
+    assert.deepEqual([advisorRow.engineTitle, advisorRow.title, advisorRow.independent.ok], ['Claude Code', 'Advisor', true]);
+
+    // The advisor: Quick or Advise, Explain of a team's card, what a question sends, and its memory
+    assert.equal((await api.post('/api/ask', { question: 'hi', mode: 'loud' })).status, 400);
+    assert.equal((await api.post('/api/ask', { question: 'hi', card: '../H1' })).status, 400);
+    const quick = await api.post('/api/ask', { question: 'Quick one?', mode: 'quick' });
+    assert.deepEqual([quick.json.answer.mode, quick.json.answer.engine], ['quick', 'codex']);
+    assert.equal(p.hub(['handoff', 'add', 'Set the SMTP login', '--where', '.env', '--why', 'mail']).code, 0);
+    const explained = await api.post('/api/ask', { card: 'H1' });
+    assert.equal(explained.status, 200, explained.text);
+    assert.deepEqual([explained.json.answer.mode, explained.json.thread.title], ['explain', 'Explain H1']);
+    // a draft the owner sent is marked on its answer in the thread, so a reload shows it sent and never its Send again
+    const eid = explained.json.thread.id;
+    const msgs = (await api.get(`/api/chat?id=${eid}`)).json.thread.messages;
+    const at = msgs.length - 1;
+    const answer = msgs[at];
+    assert.equal(answer.drafts[0].kind, 'note');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: 'an old time', draft: 0, label: 'Sent as a note' })).status, 409, 'another answer');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: answer.at, draft: 9, label: 'x' })).status, 409, 'no such draft');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: '1', at: answer.at, draft: 0 })).status, 400);
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: answer.at, draft: 0, label: 'Sent as a note' })).status, 200);
+    assert.deepEqual((await api.get(`/api/chat?id=${eid}`)).json.thread.messages[at].sent, { 0: 'Sent as a note' });
+    const est = await api.get('/api/ask/estimate?mode=advise');
+    assert.equal(est.status, 200, est.text);
+    assert.ok(est.json.tokens > 100 && est.json.tokens === Math.round(est.json.chars / 4));
+    assert.ok((await api.get('/api/ask/estimate?mode=quick')).json.chars < est.json.chars, 'Quick sends less');
+    assert.ok((await api.get('/api/ask/estimate?card=H1')).json.chars > est.json.chars, 'Explain sends the card too');
+    assert.equal((await api.get('/api/ask/estimate?mode=x')).status, 400);
+    // memory: the owner's click, behind the session key; no route takes anything else
+    assert.equal((await request(ui.port, { method: 'POST', path: '/api/advisor/memory', body: { action: 'add', text: 'x' } })).status, 403, 'no key');
+    assert.equal((await api.post('/api/advisor/memory', { action: 'wipe' })).status, 400);
+    assert.equal((await api.post('/api/advisor/memory', { action: 'remove', id: '../M1' })).status, 400);
+    const remembered = await api.post('/api/advisor/memory', { action: 'add', text: 'Small PRs, one step each.', kind: 'preference', from: id });
+    assert.equal(remembered.status, 200, remembered.text);
+    assert.deepEqual([remembered.json.item.id, remembered.json.item.from], ['M1', id]);
+    assert.equal((await api.post('/api/advisor/memory', { action: 'edit', id: 'M1', text: 'Small PRs.' })).json.item.text, 'Small PRs.');
+    assert.deepEqual((await api.get('/api/advisor/memory')).json.items.map((x) => x.text), ['Small PRs.']);
+    assert.equal((await api.post('/api/advisor/memory', { action: 'remove', id: 'M9' })).status, 409);
+    assert.equal((await api.post('/api/advisor/memory', { action: 'remove', id: 'M1' })).json.removed, 'M1');
+    // a memory change gives the team nothing to do: no owner action for autopilot
+    assert.ok(!fs.existsSync(p.state('round-now.json')));
   } finally {
     live?.close();
     stopUi(ui);

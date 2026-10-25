@@ -10,7 +10,8 @@ import { KEY_LIMIT, KEY_PROMPT, runKey, workerRun } from '../lib/workerspec.mjs'
 import { SANDBOX_BLOCKS, codexMcpServers as mcpServers } from '../engines/codex.mjs';
 import { accessFacts } from './argon.mjs';
 import { ADAPTERS, accountDir, accountProblem, fullAccessNote, profileEnv, readJsonText, withoutOption, workerCaveat, workerIsolation } from '../engines/index.mjs';
-import { formatConfig, workerArgsOf } from '../lib/config.mjs';
+import { formatConfig, roleProfile, workerArgsOf } from '../lib/config.mjs';
+import { advisorIndependent } from '../lib/team.mjs';
 import { RUN_CACHE_MS } from '../lib/proc.mjs';
 import { plainText } from '../lib/workerlog.mjs';
 import { codexHooksCheck } from './codex-hooks.mjs';
@@ -22,6 +23,38 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // How much an engine matters here: a role runs on it (error), only a fallback does (warn), none (info).
 export const engineSeverity = (name) => (ctx) => ({ role: 'error', fallback: 'warn' }[ctx.usage(name)] || 'info');
+
+// The advisor (docs/design/advisor.md): whether it runs on another engine than the orchestrator, so it can disagree with
+// it (information: a one-engine owner is fine). Its automatic choice is no role in nextlevel.json, so no sign-in row
+// covers its engine when no role uses it: then this check signs it in too (a warning, with the engine's login command).
+const ADVISOR_LOGIN = { claude: ['claude auth login', 'it opens the browser: sign in with your Claude account'], codex: ['codex login', 'it opens the browser; sign in with your ChatGPT account'] };
+export const advisorCheck = {
+  id: 'advisor.independent',
+  title: 'Advisor',
+  severity: 'info',
+  skipIf: needsProject,
+  learnMore: 'docs/CHECKS.md#advisorindependent',
+  run(ctx) {
+    const p = roleProfile(ctx.config, 'assistant', { available: (e) => !!ctx.which(ADAPTERS[e].command) });
+    if (!p) return pass('no advisor in nextlevel.json', { quiet: true });
+    const ind = advisorIndependent(ctx.config, p);
+    const on = `${ADAPTERS[p.engine].title}${p.auto ? ' (automatic)' : ''}`;
+    if (p.auto && !ctx.uses(p.engine) && ADVISOR_LOGIN[p.engine]) {
+      const eng = ADAPTERS[p.engine];
+      // (no read-only engine installed: the automatic choice falls back to one that isn't there)
+      if (!ctx.which(eng.command)) {
+        const how = TOOLS[p.engine].install(ctx);
+        return fail(`the advisor runs on ${on}, which no other role uses, and it isn't installed`, { severity: 'warn', next: 'install it, or choose another engine for the advisor on the Team page', steps: [how.command ? step('terminal', how.command) : step('terminal', null, { text: how.text })] });
+      }
+      const r = eng.loginResult(ctx.run(eng.command, eng.login.status, { cacheMs: RUN_CACHE_MS, timeoutMs: 30000 }));
+      if (!r.ok) {
+        const [command, text] = ADVISOR_LOGIN[p.engine];
+        return fail(`the advisor runs on ${on}, which no other role uses, and it isn't signed in: ${r.detail}`, { severity: 'warn', next: 'sign it in, or choose another engine for the advisor on the Team page', steps: [step('terminal', command, { text })] });
+      }
+    }
+    return pass(`on ${on}. ${ind.text}`);
+  },
+};
 
 // The accounts of an engine that the roles' profiles use, as the first profile on each ('' first: the
 // engine's own login). None in use: its own login. An account the engine can't keep apart is left to

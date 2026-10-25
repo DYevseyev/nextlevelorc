@@ -13,8 +13,11 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
 ## The team
 - **A stuck task gets help** (the stuck ladder): when attempts keep failing, the hub says so and offers the next step
   instead of only counting attempts (FR-020 records how each attempt ended).
-- **Gemini 4 Argon in more roles**: the orchestrator and the assistant can run on Antigravity behind the lock test; an
-  advisor and a review-only security role are next, or stay off Antigravity.
+- **Gemini 4 Argon in more roles**: the orchestrator and the advisor can run on Antigravity behind the lock test; a
+  review-only security role is next, or stays off Antigravity.
+- **The advisor's own reviews** (`docs/design/advisor.md`, part 2): at a milestone's midpoint and end and when progress
+  stalls, a read-only review reported to you, never to the orchestrator, within a daily cap. The advisor itself (Advise
+  and Quick, its memory, drafts only your click sends, Explain on cards) is done.
 
 ## GitHub checks on your PC
 - **The self-hosted runner, part B**: for a personal account's private repository, run its checks on a runner on this

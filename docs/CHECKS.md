@@ -522,6 +522,17 @@ and `agy mcp disable <name>` (which is for every agy session, the owner's own to
 Claude Code can't give a worker only some of a kind (listing any gives all). Otherwise **info**. Reads the engines'
 own files; nothing is copied or changed. From FR-013.
 
+### advisor.independent
+Which engine the advisor (the Ask panel, `nextlevel ask`) runs on, and whether that is another engine than the
+orchestrator's, so it can disagree with it instead of echoing it. Its automatic choice is the first engine that can be
+run read-only (Claude Code, then Codex) that isn't the orchestrator's and is installed; else the orchestrator's (then
+"Same engine as the orchestrator", with `nextlevel team set assistant --engine claude` to change it). **info**: one
+engine is fine. When the automatic choice is an engine no other role uses, no other sign-in row covers it, so this one
+asks that engine whether it is signed in, and says so as a **warn** with its login command (`claude auth login`,
+`codex login`, PowerShell) when it isn't. When no engine that can run read-only is installed at all (an Antigravity
+team), the automatic choice falls back to Codex, and this row says it isn't installed (a **warn** with its install
+command) instead of asking a missing CLI for its sign-in. See `docs/design/advisor.md`.
+
 ## The repository
 
 ### git.commits

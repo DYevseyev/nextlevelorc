@@ -412,13 +412,17 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
   // ---- Ask: one question at a time, answered by `nextlevel ask --json` (its own process: the page stays live) ----
   let asking = false;
   async function ask(b) {
-    const question = typeof b.question === 'string' ? b.question.trim() : '';
+    const question = (typeof b.question === 'string' ? b.question.trim() : '') || (b.card ? `Explain ${String(b.card)}: what it asks of me and why, in micro-steps, and what I should reply.` : '');
     if (!question || question.length > 4000) return [400, { ok: false, message: 'A question has 1 to 4000 characters.' }];
     if (b.thread !== undefined && b.thread !== null && !/^[a-z0-9]{8,32}$/.test(String(b.thread))) return [400, { ok: false, message: 'which thread?' }];
-    if (asking) return [409, { ok: false, message: 'The assistant is answering another question: wait for it.' }];
+    // (Advise by default, Quick, or Explain of a team's card: always Advise)
+    if (b.mode !== undefined && !['advise', 'quick'].includes(b.mode)) return [400, { ok: false, message: 'mode must be advise or quick' }];
+    if (b.card !== undefined && b.card !== null && b.card !== '' && !/^H[1-9]\d{0,6}$/.test(String(b.card))) return [400, { ok: false, message: 'which card?' }];
+    // (one question at a time: Explain too, never a second paid run queued behind it)
+    if (asking) return [409, { ok: false, message: 'The advisor is answering another question: wait for it.' }];
     asking = true;
     try {
-      const r = await runTool(['ask', '--json', ...(b.thread ? ['--thread', String(b.thread)] : []), '--', question], 12 * 60_000, { json: true });
+      const r = await runTool(['ask', '--json', ...(b.thread ? ['--thread', String(b.thread)] : []), ...(b.card ? ['--card', String(b.card)] : b.mode === 'quick' ? ['--quick'] : []), '--', question], 12 * 60_000, { json: true });
       if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'nothing came back'}` }];
       return [r.json.ok ? 200 : 409, r.json];
     } finally {
@@ -433,7 +437,11 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
       if (b.action === 'rename') return [200, { ok: true, thread: api.chats.rename(id, String(b.title || '').slice(0, 120)) }];
       if (b.action === 'clear') return [200, { ok: true, thread: api.chats.clear(id) }];
       if (b.action === 'delete') return [200, { ok: true, deleted: api.chats.remove(id) ?? id }];
-      return [400, { ok: false, message: 'action must be new, rename, clear or delete' }];
+      if (b.action === 'sent') {
+        if (!Number.isInteger(b.index) || !Number.isInteger(b.draft) || typeof b.at !== 'string') return [400, { ok: false, message: 'which answer and draft?' }];
+        return [200, { ok: true, thread: api.chats.markSent(id, b.index, b.at, b.draft, String(b.label || '')) }];
+      }
+      return [400, { ok: false, message: 'action must be new, rename, clear, delete or sent' }];
     } catch (err) {
       return [409, { ok: false, message: err.message }];
     }
@@ -706,6 +714,28 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         return reply(res, chatAction(b));
       case 'POST /api/ask':
         return reply(res, await ask(b));
+      // ---- the advisor (docs/design/advisor.md): what a question sends, and its memory (the owner's alone to change) ----
+      case 'GET /api/ask/estimate': {
+        const mode = String(url.searchParams.get('mode') || 'advise');
+        const card = String(url.searchParams.get('card') || '');
+        if (!['advise', 'quick'].includes(mode) || (card && !/^H[1-9]\d{0,6}$/.test(card))) return reply(res, [400, { ok: false, message: 'mode must be advise or quick, and a card an id like H12' }]);
+        try {
+          return reply(res, [200, { ok: true, ...api.askEstimate({ mode, card }) }]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        }
+      }
+      case 'GET /api/advisor/memory':
+        return reply(res, [200, { ok: true, ...api.advisorMemory({ action: 'list' }) }]);
+      case 'POST /api/advisor/memory': {
+        if (!['add', 'edit', 'remove'].includes(b.action)) return reply(res, [400, { ok: false, message: 'action must be add, edit or remove' }]);
+        if ((b.text !== undefined && typeof b.text !== 'string') || (b.id !== undefined && !/^M[1-9]\d{0,5}$/.test(String(b.id))) || (b.kind !== undefined && !['decision', 'preference'].includes(b.kind))) return reply(res, [400, { ok: false, message: 'an entry is a text, an id like M3 and a kind (decision or preference)' }]);
+        try {
+          return reply(res, [200, { ok: true, ...api.advisorMemory({ action: b.action, id: b.id, text: b.text, kind: b.kind, from: typeof b.from === 'string' ? b.from : '' }) }]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        }
+      }
       case 'POST /api/report':
         return reply(res, await buildReport(b));
       case 'POST /api/report/send': {

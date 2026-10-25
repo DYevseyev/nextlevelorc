@@ -1843,6 +1843,7 @@ async function loadCards() {
   if (!res.ok) return toast(res.message || "The notes couldn't be read.", 'error');
   cards.data = res;
   renderCards();
+  if (ask.open) renderAsk(); // (the advisor's reply drafts look the cards up)
 }
 async function cardPost(path, body, key) {
   if (cards.busy.has(key)) return null;
@@ -1903,7 +1904,9 @@ function handoffCard(x) {
         if (!text) return toast('Type the reply first.', 'error');
         const res = await cardPost('/api/handoff', { action: 'reply', id: x.id, reply: text }, key);
         if (res?.ok) cards.replies.delete(x.id);
-      } }, 'Send reply')));
+      } }, 'Send reply'),
+      // (the team's cards only: a held change's or a push's is decided on its own card)
+      x.guard || x.from === 'guard' ? null : h('button.btn', { type: 'button', title: 'The advisor turns this card into micro-steps and drafts your reply (read-only; only your click sends it)', onclick: () => askExplain(x.id) }, 'Explain')));
   }
   return card;
 }
@@ -2077,10 +2080,10 @@ window.addEventListener('beforeunload', (e) => {
 // through the Notes cards (/api/notes): nothing reaches the orchestrator unless the owner sends it. Texts are shown
 // as text, never as HTML. The browser remembers whether the panel is open and which thread (localStorage).
 const ASK_KEY = 'nextlevel.ask';
-const ask = { open: false, view: 'list', threads: [], q: '', thread: null, busy: false, question: '', draft: null, renaming: false };
+const ask = { open: false, view: 'list', threads: [], q: '', thread: null, busy: false, question: '', draft: null, renaming: false, mode: 'advise', estimate: null, memory: null, memoryEdit: null, memoryText: '', sending: new Set(), drafted: new Map() };
 function askRemember() {
   try {
-    localStorage.setItem(ASK_KEY, JSON.stringify({ open: ask.open, thread: ask.thread?.id || null }));
+    localStorage.setItem(ASK_KEY, JSON.stringify({ open: ask.open, thread: ask.thread?.id || null, mode: ask.mode }));
   } catch {
     // a browser that keeps nothing: the panel starts closed
   }
@@ -2116,23 +2119,59 @@ function askToggle(open = !ask.open) {
     else askThreads();
   }
 }
-async function askSend() {
-  const question = ask.question.trim();
+async function askSend({ card = '' } = {}) {
+  const question = card ? ask.question.trim() || `Explain ${card}: what it asks of me and why, in micro-steps, and what I should reply.` : ask.question.trim();
   if (!question || ask.busy) return;
   ask.busy = true;
-  const shown = ask.thread || { id: null, title: question.slice(0, 60), messages: [] };
+  const shown = (!card && ask.thread) || { id: null, title: card ? `Explain ${card}` : question.slice(0, 60), messages: [] };
   ask.thread = { ...shown, messages: [...shown.messages, { role: 'owner', text: question, at: new Date().toISOString() }] };
   ask.view = 'thread';
   ask.question = '';
   renderAsk();
-  const r = await api('/api/ask', { question, ...(shown.id ? { thread: shown.id } : {}) });
+  // (Explain is always Advise; a question goes as the switch says)
+  const r = await api('/api/ask', { question, ...(shown.id ? { thread: shown.id } : {}), ...(card ? { card } : { mode: ask.mode }) });
   ask.busy = false;
   if (r.thread?.id) await askOpenThread(r.thread.id);
   else {
     ask.question = question;
     renderAsk();
   }
-  if (!r.ok) toast(r.message || 'The assistant gave no answer.', 'error');
+  if (!r.ok) toast(r.message || 'The advisor gave no answer.', 'error');
+  ask.estimate = null; // (the project moved on, and so did the thread)
+}
+// Explain on a team's card: the Advisor panel opens on a thread of its own for it
+function askExplain(id) {
+  if (ask.busy) return toast('The advisor is answering another question: wait for it.', 'error');
+  if (!ask.open) askToggle(true);
+  ask.thread = null;
+  ask.draft = null;
+  askSend({ card: id });
+}
+// What a question will send, before it is sent: the dashboard works out the briefing's size (GET /api/ask/estimate)
+async function askEstimate() {
+  const mode = ask.mode;
+  if (ask.estimate?.mode === mode && Date.now() - ask.estimate.at < 60_000) return;
+  ask.estimate = { mode, at: Date.now(), tokens: null };
+  const r = await api(`/api/ask/estimate?mode=${encodeURIComponent(mode)}`);
+  if (ask.estimate?.mode !== mode) return;
+  ask.estimate = { mode, at: Date.now(), tokens: r.ok ? r.tokens : null };
+  renderAsk();
+}
+// The advisor's memory (GET/POST /api/advisor/memory): only the owner's click changes it
+async function askMemory() {
+  const r = await api('/api/advisor/memory');
+  ask.memory = r.ok ? { items: r.items || [], problem: r.problem || '' } : { items: [], problem: r.message || "The memory couldn't be read." };
+  renderAsk();
+}
+async function askMemoryPost(body, okText) {
+  const r = await api('/api/advisor/memory', body);
+  if (!r.ok) {
+    toast(r.message || 'Not done.', 'error');
+    return false;
+  }
+  toast(okText || r.message || 'Done.', 'good');
+  await askMemory();
+  return true;
 }
 async function askChat(action, extra = {}) {
   const r = await api('/api/chats', { action, id: ask.thread?.id, ...extra });
@@ -2168,13 +2207,81 @@ async function askSendNote() {
   renderAsk();
   toast(r.message || 'Sent to the orchestrator as a note.', 'good');
 }
+// One draft of an answer: a note, a standing rule, a reply to a team's card, or a change to the advisor's memory
+const DRAFT_SEND = { note: 'Send as note', rule: 'Send as standing rule', remember: 'Remember this' };
+function askCardOf(id) {
+  return Object.values(cards.data?.handoff || {}).flat().find((x) => x && x.id === id) || null;
+}
+function askDraftBox(m, i, d, j) {
+  const key = `${ask.thread?.id || ''}:${i}:${j}`;
+  const sent = ask.drafted.get(key) || (m.sent && typeof m.sent === 'object' ? m.sent[j] : '');
+  if (sent) return h('div.ask-draft.sent', {}, h('span.badge.good', {}, String(sent)));
+  const busy = ask.sending.has(key);
+  const text = ask.drafted.get(`${key}:text`) ?? d.text ?? '';
+  const done = (label) => {
+    ask.drafted.set(key, label);
+    renderAsk();
+    // kept on the answer in its thread, so a reload shows it sent too (never a second Send)
+    if (ask.thread?.id) api('/api/chats', { action: 'sent', id: ask.thread.id, index: i, at: m.at, draft: j, label }).catch(() => {});
+  };
+  const send = async (fn, label) => {
+    if (busy) return;
+    ask.sending.add(key);
+    renderAsk();
+    try {
+      if (await fn()) done(label);
+    } finally {
+      ask.sending.delete(key);
+      renderAsk();
+    }
+  };
+  const box = (label, button, onSend, { editable = true, note = '' } = {}) => h('div.ask-draft', {},
+    h('p.small', {}, h('strong', {}, label)),
+    editable ? h('textarea', { rows: Math.min(8, Math.max(2, text.split('\n').length + 1)), 'aria-label': label, oninput: (e) => ask.drafted.set(`${key}:text`, e.target.value) }, text) : h('p.small', {}, text),
+    note ? h('p.muted.small', {}, note) : null,
+    button ? h('div.row', {}, h('button.btn.primary.small', { type: 'button', disabled: busy, onclick: onSend }, busy ? 'Sending…' : button)) : null);
+  const now = () => (ask.drafted.get(`${key}:text`) ?? d.text ?? '').trim();
+  if (d.kind === 'note' || d.kind === 'rule') {
+    return box(d.kind === 'rule' ? 'A standing rule for the orchestrator' : 'A note for the orchestrator', DRAFT_SEND[d.kind], () => send(async () => {
+      const r = await api('/api/notes', { action: 'add', text: now(), type: d.kind === 'rule' ? 'rule' : 'once' });
+      toast(r.message || (r.ok ? 'Sent to the orchestrator.' : 'Not sent.'), r.ok ? 'good' : 'error');
+      return r.ok;
+    }, 'Sent as a note'), { note: 'It becomes a note the orchestrator reads at its next start or round (Notes and handoffs).' });
+  }
+  if (d.kind === 'reply') {
+    if (!cards.data) loadCards();
+    const c = askCardOf(d.card);
+    const why = !cards.data ? '' : !c ? `${d.card} is gone` : c.guard || c.from === 'guard' ? `${d.card} is decided on its own card` : '';
+    return box(`A reply to ${d.card}`, why || !cards.data ? '' : `Send reply to ${d.card}`, () => send(async () => {
+      const r = await api('/api/handoff', { action: 'reply', id: d.card, reply: now() });
+      toast(r.message || (r.ok ? 'Sent.' : 'Not sent.'), r.ok ? 'good' : 'error');
+      if (r.ok) loadCards();
+      return r.ok;
+    }, `Sent to ${d.card}`), { editable: !why, note: why || (c ? `${d.card}: ${String(c.what || '').split('\n')[0]}` : '') });
+  }
+  if (d.kind === 'remember') {
+    const full = (ask.memory?.items?.length || 0) >= 30 && !d.replaces;
+    return box(d.replaces ? `Replace ${d.replaces} in the advisor's memory` : "Remember, in the advisor's memory", full ? '' : d.replaces ? `Replace ${d.replaces}` : DRAFT_SEND.remember, () => send(() => askMemoryPost(d.replaces ? { action: 'edit', id: d.replaces, text: now() } : { action: 'add', text: now(), kind: 'decision', from: ask.thread?.id || '' }, d.replaces ? `${d.replaces} changed.` : 'Remembered.'), d.replaces ? `Replaced ${d.replaces}` : 'Remembered'), { note: full ? 'Memory is full (30): forget one first (Memory, above).' : 'Only you change it. The next answers read it.' });
+  }
+  if (d.kind === 'forget') {
+    const entry = ask.memory?.items?.find((x) => x.id === d.id);
+    return box(`Forget ${d.id}`, entry ? `Forget ${d.id}` : '', () => send(() => askMemoryPost({ action: 'remove', id: d.id }, `Forgot ${d.id}.`), `Forgot ${d.id}`), { editable: false, note: entry ? entry.text : `${d.id} isn't in the memory.` });
+  }
+  return null;
+}
 function askMessage(m, i) {
   const owner = m.role === 'owner';
-  const meta = owner ? '' : [m.engine && (build?.teamChoices?.engines.find((e) => e.name === m.engine)?.title || m.engine), m.model, m.tokens?.tokens ? `${Number(m.tokens.tokens).toLocaleString()} tokens` : '', Number.isFinite(m.copySeconds) ? `in a copy made in ${m.copySeconds} s` : '', m.at ? time(m.at) : ''].filter(Boolean).join(' · ');
+  const MODE = { quick: 'Quick', advise: 'Advise', explain: 'Explain' };
+  const meta = owner ? '' : [MODE[m.mode] || '', m.engine && (build?.teamChoices?.engines.find((e) => e.name === m.engine)?.title || m.engine), m.model || m.reportedModel, m.tokens?.tokens ? `${Number(m.tokens.tokens).toLocaleString()} tokens` : '', m.briefing?.tokens ? `~${Number(m.briefing.tokens).toLocaleString()} of them project context` : '', Number.isFinite(m.copySeconds) ? `in a copy made in ${m.copySeconds} s` : '', m.at ? time(m.at) : ''].filter(Boolean).join(' · ');
   const box = h(`div.ask-msg.${owner ? 'owner' : 'assistant'}${m.error ? '.error' : ''}`, {},
-    h('div.ask-who', {}, owner ? 'You' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
+    h('div.ask-who', {}, owner ? 'You' : m.mode && m.mode !== 'quick' ? 'Advisor' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
     h('div.ask-text', {}, m.text));
   if (!owner && m.sources?.length) box.append(h('div.ask-sources', {}, h('span.muted', {}, 'Used: '), m.sources.join(', ')));
+  // The advisor's drafts: each whole, editable, sent only by its own button
+  if (!owner && !m.error && m.drafts?.length) {
+    box.append(h('div.ask-drafts', {}, h('p.muted.small', {}, 'Drafts for you to edit and send. Nothing goes to the team until you click. The advisor reads what the team wrote: check before you send.'), m.drafts.map((d, j) => askDraftBox(m, i, d, j))));
+    return box;
+  }
   if (!owner && !m.error) {
     if (ask.draft?.at === i) {
       const d = ask.draft;
@@ -2195,7 +2302,9 @@ function askMessage(m, i) {
 // Who answers (the Team page's assistant row): kept up to date by the live data without drawing the panel again
 function askWho() {
   const who = build?.team?.find((r) => r.key === 'assistant');
-  if (who && !who.none && $('#ask-who')) $('#ask-who').textContent = `Read-only: ${who.engineTitle}, ${who.model.text}. It answers from the project and never talks to the orchestrator.`;
+  const today = build?.usage?.roles?.find((r) => r.key === 'assistant');
+  const used = today?.count ? ` Today: ${today.count} answer(s)${today.tokens ? `, ${Number(today.tokens).toLocaleString()} tokens` : ''}.` : '';
+  if (who && !who.none && $('#ask-who')) $('#ask-who').textContent = `Read-only: ${who.engineTitle}, ${who.model.text}.${who.independent && !who.independent.ok ? ' Same engine as the orchestrator.' : ''} It never talks to the orchestrator: only your click sends its drafts.${used}`;
 }
 function renderAsk() {
   const body = $('#ask-body');
@@ -2206,7 +2315,39 @@ function renderAsk() {
     h('textarea', { id: 'ask-question', rows: 3, placeholder: ask.thread?.id ? 'A follow-up…' : 'Ask about the project: what is blocked, why a task failed, what the plan is…', disabled: ask.busy,
       oninput: (e) => (ask.question = e.target.value),
       onkeydown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) askSend(); } }, ask.question),
-    h('div.row', {}, h('button.btn.primary', { type: 'button', disabled: ask.busy, onclick: askSend }, ask.busy ? 'Thinking…' : 'Ask'), h('span.muted.small', {}, 'Ctrl+Enter')));
+    h('div.row.ask-mode', { role: 'radiogroup', 'aria-label': 'How it answers' },
+      ['advise', 'quick'].map((mode) => h('label.choice-inline', { title: mode === 'advise' ? 'The advisor: its own engine and model, its memory and more of the project' : 'A light model and a short briefing: fewer tokens, for a simple question' },
+        h('input', { type: 'radio', name: 'ask-mode', checked: ask.mode === mode, disabled: ask.busy, onchange: () => ((ask.mode = mode), askRemember(), askEstimate(), renderAsk()) }), mode === 'advise' ? ' Advise' : ' Quick')),
+      h('span.muted.small', {}, ask.estimate?.mode === ask.mode && Number.isFinite(ask.estimate.tokens) ? `about ${ask.estimate.tokens.toLocaleString()} tokens of project context` : '')),
+    h('div.row', {}, h('button.btn.primary', { type: 'button', disabled: ask.busy, onclick: () => askSend() }, ask.busy ? 'Thinking…' : 'Ask'), h('span.muted.small', {}, 'Ctrl+Enter')));
+  if (ask.estimate?.mode !== ask.mode) askEstimate();
+  if (ask.view === 'memory') {
+    if (!ask.memory) askMemory();
+    const items = ask.memory?.items || [];
+    const edit = (x) => h('div.ask-mem-edit', {},
+      h('textarea', { rows: 2, maxlength: 200, 'aria-label': `Edit ${x.id}`, oninput: (e) => (ask.memoryText = e.target.value) }, ask.memoryText),
+      h('div.row', {},
+        h('button.btn.primary.small', { type: 'button', onclick: async () => (await askMemoryPost({ action: 'edit', id: x.id, text: ask.memoryText }, `${x.id} changed.`)) && ((ask.memoryEdit = null), renderAsk()) }, 'Save'),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.memoryEdit = null), renderAsk()) }, 'Cancel')));
+    body.replaceChildren(...[
+      h('div.ask-thread-head', {}, h('button.btn.small', { type: 'button', onclick: () => ((ask.view = 'list'), askThreads()) }, '← Threads'), h('strong.ask-title', {}, `Memory (${items.length} of 30)`)),
+      h('p.muted.small', {}, "What the advisor keeps about your decisions and preferences, for this project. Only you add, change or delete an entry: from an answer's \"Remember this\", or here. Check where each came from: one you didn't add is worth a look."),
+      ask.memory?.problem ? h('p.small.bad', {}, ask.memory.problem) : null,
+      items.length
+        ? h('ul.ask-memory', {}, items.map((x) => h('li', {},
+          ask.memoryEdit === x.id ? edit(x) : [h('span.cid', {}, x.id), ' ', h('span', {}, x.text),
+            h('span.muted.small.block', {}, `${x.kind} · ${x.from === 'by hand' ? 'added by hand' : 'from a thread'} · ${ago2(x.at)}`),
+            h('span.ask-actions', {},
+              h('button.btn.small', { type: 'button', onclick: () => ((ask.memoryEdit = x.id), (ask.memoryText = x.text), renderAsk()) }, 'Edit'),
+              h('button.btn.small', { type: 'button', onclick: () => confirm(`Forget ${x.id}?`) && askMemoryPost({ action: 'remove', id: x.id }, `Forgot ${x.id}.`) }, 'Delete'))])))
+        : h('p.muted', {}, 'Nothing yet.'),
+      h('div.ask-mem-edit', {},
+        h('label.sr-only', { for: 'ask-mem-new' }, 'A new entry'),
+        h('textarea', { id: 'ask-mem-new', rows: 2, maxlength: 200, placeholder: 'Something the advisor should remember (at most 200 characters)', oninput: (e) => (ask.memoryNew = e.target.value) }, ask.memoryNew || ''),
+        h('div.row', {}, h('button.btn.small', { type: 'button', disabled: items.length >= 30, onclick: async () => (await askMemoryPost({ action: 'add', text: ask.memoryNew || '', kind: 'decision' }, 'Remembered.')) && ((ask.memoryNew = ''), renderAsk()) }, items.length >= 30 ? 'Memory is full (30): forget one first' : 'Add'))),
+    ].filter(Boolean));
+    return;
+  }
   if (ask.view === 'list') {
     body.replaceChildren(
       h('div.row.ask-tools', {},
@@ -2215,7 +2356,8 @@ function renderAsk() {
           clearTimeout(askThreads.timer);
           askThreads.timer = setTimeout(askThreads, 250);
         } }),
-        h('button.btn.small', { type: 'button', onclick: () => ((ask.thread = null), (ask.view = 'thread'), (ask.draft = null), askRemember(), renderAsk()) }, 'New thread')),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.thread = null), (ask.view = 'thread'), (ask.draft = null), askRemember(), renderAsk()) }, 'New thread'),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.view = 'memory'), askMemory()) }, 'Memory')),
       ask.threads.length
         ? h('ul.ask-threads', {}, ask.threads.map((t) => h('li', {}, h('button.linkish', { type: 'button', onclick: () => askOpenThread(t.id) }, h('strong', {}, t.title), h('span.muted.small.block', {}, `${t.count} message(s) · ${time(t.updatedAt)}`), t.match ? h('span.small.block', {}, t.match) : null))))
         : h('p.muted', {}, ask.q ? 'No thread has that.' : 'No threads yet: ask something below.'),
@@ -2232,7 +2374,10 @@ function renderAsk() {
         h('button.btn.small', { type: 'button', onclick: () => confirm('Clear this thread? Its messages go; the thread stays.') && askChat('clear') }, 'Clear'),
         h('button.btn.small', { type: 'button', onclick: () => confirm('Delete this thread?') && askChat('delete') }, 'Delete')) : null);
     const msgs = h('div.ask-messages', {}, (t?.messages || []).map(askMessage), ask.busy ? h('p.muted.small', {}, h('span.spinner'), ' A fresh read-only session is reading the project and your question (a minute or two)…') : null);
-    body.replaceChildren(head, msgs, composer);
+    if (t?.messages?.some((m) => m.drafts?.some((d) => d.kind === 'remember' || d.kind === 'forget')) && !ask.memory) askMemory();
+    // (what the thread's answers used, in all)
+    const total = (t?.messages || []).reduce((n, m) => n + (Number(m.tokens?.tokens) || 0), 0);
+    body.replaceChildren(...[head, total ? h('p.muted.small.ask-total', {}, `This thread: ${total.toLocaleString()} tokens in all`) : null, msgs, composer].filter(Boolean));
     msgs.scrollTop = msgs.scrollHeight;
   }
 }
@@ -2241,6 +2386,7 @@ $('#ask-close')?.addEventListener('click', () => askToggle(false));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && ask.open && !ask.draft && $('#report')?.hidden !== false && askToggle(false));
 try {
   const saved = JSON.parse(localStorage.getItem(ASK_KEY) || '{}');
+  if (saved.mode === 'quick') ask.mode = 'quick';
   if (saved.thread) {
     ask.thread = { id: saved.thread, title: '', messages: [] };
     ask.view = 'thread';

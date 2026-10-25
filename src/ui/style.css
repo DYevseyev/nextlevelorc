@@ -565,6 +565,15 @@ ul.needs li .row { flex: none; }
 .ask-msg .row { margin-top: 8px; }
 .ask-draft { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .ask-draft textarea, .ask-compose textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
+.ask-draft.sent { border-top-style: solid; }
+.ask-draft p { margin: 0; }
+.ask-drafts > p { margin: 10px 0 0; }
+.ask-mode { gap: 12px; flex-wrap: wrap; }
+.ask-total { margin: 0; }
+.ask-memory { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.ask-memory li { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--soft); overflow-wrap: anywhere; }
+.ask-mem-edit { display: grid; gap: 6px; margin-top: 8px; }
+.ask-mem-edit textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); resize: vertical; }
 .choice-inline { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
 .ask-compose { display: grid; gap: 8px; }
 /* Narrow screens: the tabs scroll instead of widening the page (a fixed panel would align to the wider page) */
