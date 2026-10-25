@@ -46,6 +46,9 @@
 //               nextlevel status [--json] | result <job-id> [--from <line>] [--file]
 //                                                  (a long report is shortened there and says so: --from goes on from a
 //                                                  line; --file shows a design, research or map task's result file, FR-012)
+//               nextlevel usage [--range hour|today|week|month|all] [--by role|engine|model|worker|task|reason|day]
+//                                                  [--all-projects] [--json]   (the usage ledger, lib/usage.mjs; --all-projects
+//                                                  is the owner's)
 //               nextlevel note list | seen <id>... | done <id> --reply "..." [--commit S] [--task T] | decline <id> --reply "..."
 //               nextlevel handoff list | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | cancel <id> --reply "..."
 //                                                  the owner's notes and the handoff items, as cards (src/notes.mjs, lib/cards.mjs);
@@ -62,7 +65,7 @@ import readline from 'node:readline/promises';
 import tty from 'node:tty';
 import { makeContext } from './checks/context.mjs';
 import { TRIALS, TRIAL_NO_ANSWER_MS, agyTrial, agyTrialSpec, githubRepo, keptTrial, trialStands } from './checks/engines.mjs';
-import { jsonStore } from './lib/home.mjs';
+import { jsonStore, userState } from './lib/home.mjs';
 import { parseVersion, versionText } from './checks/lib.mjs';
 import { byId, runChecks } from './checks/index.mjs';
 import { dailyReport } from './daily-report.mjs';
@@ -124,6 +127,7 @@ import { pushBlockEnv } from './lib/pushblock.mjs';
 import { PER_HOUR, REASONS, REASON_ORDER, ROUND_LIMIT_MIN, addTrigger, autopilotOn, decide, freshState, isReason, ms as isoMs, noteReal, oneLine, roundEnded, roundStarted, roundsProblem, takeWake, waitView, wakeId, wakeKey } from './lib/rounds.mjs';
 import { clockIso, clockNow } from './lib/clock.mjs';
 import { readJsonFile, updateJsonFile } from './lib/filelock.mjs';
+import { appendLedger, dayLines, ledgerDir, oldestDay, ranges, readLedger, runRecord, sumUsage, taskTokensText, tokensOf, tokensWords, usageLines } from './lib/usage.mjs';
 import { NEEDS, lacks, needsText, needsWords, specNeeds, workersThatCan } from './lib/needs.mjs';
 import { KEY_LIMIT, KEY_PROMPT, NO_GH_CONFIG, NO_PUSH, SLOT_PUSH_BLOCK, runKey, workerEnv as sharedWorkerEnv, workerRun } from './lib/workerspec.mjs';
 
@@ -277,6 +281,14 @@ const TASK_DIRS = ['.nextlevel-task']; // the task folder in a slot
 // ---------- small helpers ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const now = () => new Date().toISOString();
+// An ISO time as it was written, or '' (a record from elsewhere)
+const isoOr = (x) => (typeof x === 'string' && Number.isFinite(Date.parse(x)) ? new Date(Date.parse(x)).toISOString() : '');
+// When a run ended, for the usage ledger, on lib/clock.mjs's clock: its own record's end (a wall-clock time) moved by
+// how long ago that was, so a run the hub learned of late keeps its end, under the tests' clock too
+const ledgerEnd = (x) => {
+  const t = Date.parse(isoOr(x));
+  return Number.isFinite(t) ? new Date(clockNow() - Math.max(0, Date.now() - t)).toISOString() : clockIso();
+};
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 const uniq = () => `${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
 const mkdirp = (p) => fs.mkdirSync(p, { recursive: true });
@@ -931,6 +943,13 @@ function cmdResult(argv) {
   if (s.type === 'task' && s.engine) top.push(`engine: ${engineTitle(s.engine)}${s.profile ? ` (profile ${s.profile})` : ''}${s.engineWhy?.text ? `, ${s.engineWhy.text}` : ''}`);
   if (s.merge?.files?.length) top.push(`merge of ${s.merge.base}: conflicts in ${s.merge.files.join(', ')}${s.merge.resolved ? ', resolved by the worker' : s.merge.resolved === false ? ', not resolved' : ''}`);
   if (s.hubCommit) top.push(`the hub committed what the worker left: ${s.hubCommit} (git.log below)`);
+  // What its attempts used (the usage ledger, every attempt: status.json keeps the last 50)
+  if (s.type === 'task') {
+    // (the months from a day before the task was first queued: the orchestrator runs result often)
+    const from = (Date.parse(s.createdAt || s.startedAt || '') || Date.now()) - 86_400_000;
+    const used = taskTokensText(readLedger(DIR, { from }).records.filter((r) => r.task === id));
+    if (used) top.push(`tokens: ${used}`);
+  }
   // How its attempts ended (FR-020)
   if (s.type === 'task' && (s.attempt || 1) > 1) {
     const tally = attemptTally(s).text;
@@ -1350,6 +1369,56 @@ function workersView() {
       return { who, engine: p.engine, engineTitle: engineTitle(p.engine), profile: p.name || '', model: use.model || '', modelOwn: use.modelOwn, effort: use.effort || '', takes, how, cant };
     });
 }
+// `nextlevel usage`: the usage ledger summed for a range, by one field (docs/design/token-usage.md). --all-projects
+// adds the other projects this PC's hubs ran (state.json's list), each ledger read where it is: the owner's alone.
+function cmdUsage(argv) {
+  const a = commandArgs('usage', argv);
+  if (a['all-projects']) {
+    const session = readOnly() ? "the assistant's read-only session (nextlevel ask)" : agentSession();
+    if (session) throw new Error(ownerOnly("nextlevel usage --all-projects (other projects' usage)", 'The owner sees it on the dashboard (Home, Usage, All projects), or with this command in their own window.', session));
+  }
+  const range = ranges(clockNow()).find((r) => r.key === (a.range || 'today'));
+  const by = a.by || 'role';
+  const roots = [ROOT];
+  if (a['all-projects']) {
+    const known = (userState().get('projects') || []).filter((r) => typeof r === 'string');
+    for (const r of known) if (!roots.some((x) => samePath(x, r))) roots.push(r);
+  }
+  const projects = roots.map((root) => {
+    const stateDir = path.join(root, '.nextlevel');
+    if (!fs.existsSync(stateDir)) return { root, name: path.basename(root), found: false, records: [], notes: [] };
+    const got = readLedger(stateDir, { from: range.from, to: range.to });
+    return { root, name: path.basename(root), found: true, ...got };
+  });
+  const records = projects.flatMap((p) => p.records);
+  const rows = sumUsage(records, { by });
+  const [total] = sumUsage(records.map((r) => ({ ...r, all: 'all' })), { by: 'all' });
+  const notes = projects.flatMap((p) => p.notes.map((x) => (projects.length > 1 ? `${p.name}: ${x}` : x)));
+  const oldest = oldestDay(projects[0].records);
+  const since = range.key === 'all' && oldest ? `from ${oldest}, the oldest day counted on this PC` : range.since;
+  if (a.json) {
+    console.log(JSON.stringify({ range: range.key, title: range.title, since, by, rows, total: total || null, notes, ...(a['all-projects'] ? { projects: projects.map((p) => ({ name: p.name, root: p.root, found: p.found, total: sumUsage(p.records.map((r) => ({ ...r, all: 'all' })), { by: 'all' })[0] || null })) } : {}) }, null, 2));
+    return;
+  }
+  const out = [`Usage: ${range.title}, ${since} (runs that ended in it; what runs now counts when it ends)${a['all-projects'] ? `, ${projects.length} project(s)` : ''}`];
+  out.push(total ? `In all: ${total.runs} run(s), ${total.minutes} minutes, tokens: ${tokensWords(total)}` : 'Nothing ended in this range.');
+  if (a['all-projects']) {
+    out.push('', 'By project:');
+    for (const p of projects) {
+      const [t] = sumUsage(p.records.map((r) => ({ ...r, all: 'all' })), { by: 'all' });
+      out.push(`  ${p.name}: ${!p.found ? 'not found' : t ? `${t.runs} run(s), ${t.minutes} minutes, tokens: ${tokensWords(t)}` : 'nothing in this range'}`);
+    }
+  }
+  if (rows.length) {
+    const used = Buffer.byteLength(out.join('\n')) + 200;
+    const { lines, left } = usageLines(rows, { label: by[0].toUpperCase() + by.slice(1), maxBytes: OUTPUT_BUDGET.bytes - used });
+    out.push('', ...lines);
+    if (left) out.push(`(${left} more row(s): --json has them)`);
+  }
+  for (const x of notes) out.push(`Note: ${x}`);
+  console.log(out.join('\n'));
+}
+
 function cmdStatus(argv) {
   const a = commandArgs('status', argv);
   const jobs = allJobs();
@@ -2107,6 +2176,7 @@ function attemptEntry(s) {
     mark: s.mark || null,
     end: e ? { status: e.status || '', error: !!e.error, reason: e.reason || '', turns: e.turns ?? null, stopped: e.stopped || 0, code: e.code ?? null } : null,
     notCounted: s.stoppedOutside ? 'stopped from outside' : s.notStarted ? 'not started' : null,
+    tokens: s.tokens && typeof s.tokens === 'object' ? s.tokens : null, // (its engine's report, the usage ledger's parts)
     finishedAt: s.finishedAt || now(),
   };
 }
@@ -2300,12 +2370,30 @@ async function finishTask(id, reason = '', extra = {}) {
   const detail = gitProblem || resultProblem || resultNote || reviewNote || (endError && !missing ? `${title} ended with an error: ${end.reason || end.status} (exit ${end.code ?? 'unknown'})` : '');
   const ownFields = { ownCommits: ownCount, ownDiffStat: own && !own.lost ? own.diffStat : '', ownLost: own?.lost ? own.tip : null };
   workerOutside(id, s, wt, job.attempt || 1); // (what it did outside its slot: before the attempt reads as ended)
-  setStatus(id, { state, verify, claimed, exitCode: run.exitCode ?? null, commits: commits.length, diffStat, minutes, finishedAt: now(), acked: false, merge, hubCommit, reportFile: reportFile || null, engineEnd: end, engineError: failure, missing, mark, ...ownFields, ...(detail ? { detail } : {}), ...extra });
+  // its tokens where its engine printed them (FR-008): in the attempt's entry (the usage ledger's per task) and the day's numbers
+  const eng = adapterOf(s.engine);
+  const tokens = eng ? eng.tokens(attemptLog(id, s)) : null;
+  setStatus(id, { state, verify, claimed, exitCode: run.exitCode ?? null, commits: commits.length, diffStat, minutes, finishedAt: now(), acked: false, merge, hubCommit, reportFile: reportFile || null, engineEnd: end, engineError: failure, missing, mark, tokens: tokens ? tokensOf(tokens) : null, ...ownFields, ...(detail ? { detail } : {}), ...extra });
   addAttempt(id);
   if (failure) log(`${id}: ${failureLine(title, failure)}`);
-  // The day's numbers: this attempt's minutes, and its tokens where its engine printed them (FR-008)
-  const eng = adapterOf(s.engine);
-  addUsage('worker', s.engine || 'unknown', { runs: 1, minutes: exact || 0, tokens: eng ? eng.tokens(attemptLog(id, s)) : null });
+  // The day's numbers and the usage ledger: this attempt's minutes and tokens, with who ran it and how it ended
+  const t = jobStatus(id) || {};
+  addUsage('worker', s.engine || 'unknown', {
+    runs: 1,
+    minutes: exact || 0,
+    tokens,
+    at: ledgerEnd(run.endedAt),
+    start: isoOr(run.startedAt) || undefined,
+    model: s.model,
+    effort: s.effort,
+    profile: s.profile,
+    worker: s.worker,
+    task: id,
+    attempt: job.attempt || 1,
+    slot: s.slot,
+    end: t.state,
+    notCounted: t.stoppedOutside ? 'stopped from outside' : '',
+  });
   log(`finished ${id}: ${summary(jobStatus(id))}`);
   jobEnded(id); // a task attempt that ended, any way, starts a round (FR-019)
 }
@@ -5259,11 +5347,14 @@ function startRound({ profile, fallback }) {
   mkdirp(LOGS);
   const logFile = path.join(LOGS, `orchestrator-${stamp()}.log`);
   const startedReal = Date.now();
+  // (what it runs on, for the usage ledger's line at its end)
+  const used = jobModel(profile, CFG.config, { home: os.homedir() });
+  const roundModel = { profile: profile.name || '', model: used.model || '', effort: used.effort || '' };
   const started = rounds((s, now) => {
     keepStarts(s, now);
     const d = decide(s, { now, cfg: CFG.rounds, seen: seenJob });
     if (!d.start) return null;
-    const r = roundStarted(s, { now, reasons: d.reasons, cfg: CFG.rounds, extra: { log: rel(logFile), engine: profile.engine, startedReal } });
+    const r = roundStarted(s, { now, reasons: d.reasons, cfg: CFG.rounds, extra: { log: rel(logFile), engine: profile.engine, startedReal, ...roundModel } });
     hourStarts.push(s.starts.at(-1));
     // (the ask in wakeup.json now is the one this round clears: its id, so it is never taken again; the file is the command's)
     s.wakeCleared = wakeId(readJson(WAKEFILE)?.id) || s.wakeCleared || null;
@@ -5272,7 +5363,7 @@ function startRound({ profile, fallback }) {
   if (!started) return;
   // (any round that starts clears the wake-up, roundStarted: the ask in wakeup.json is now older than this round, so the
   // hub never takes it again; this round may ask anew)
-  addUsage('autopilot', profile.engine, { runs: 1 }, started.round.type);
+  addUsage('autopilot', profile.engine, { runs: 1, line: false }, started.round.type); // (the ledger has it at its end)
   log(`autopilot: a round starts because ${started.round.what}`);
   const jobs = allJobs();
   const toReview = jobs.filter((j) => FINAL.has(j.state) && !j.acked).length;
@@ -5407,6 +5498,23 @@ function followCycle() {
   }
 }
 
+// A round's line in the usage ledger: who ran it, and when it started and ended (cycle.json's end when it has one)
+function roundMeta(round, c) {
+  const rec = readCycle();
+  const mine = rec?.endedAt && (!rec.log || !round.log || samePath(path.resolve(ROOT, rec.log), path.resolve(ROOT, round.log)));
+  return { start: isoOr(round.startedAt) || undefined, at: ledgerEnd(mine ? rec.endedAt : ''), model: round.model, effort: round.effort, profile: round.profile };
+}
+// A round whose engine never started: its ledger line alone (usage.json counted it at its start)
+function roundLine(round, c, { end, minutes, tokens }) {
+  try {
+    const meta = roundMeta(round, c);
+    const line = runRecord({ role: 'autopilot', engine: round.engine || c?.engine || 'unknown', runs: 1, minutes, tokens, reason: round.type, end, ...meta });
+    if (line) appendLedger(DIR, [line], { onLock: lockLog(ledgerDir(DIR)) });
+  } catch (err) {
+    log(`couldn't write the usage ledger: ${err.message}`);
+  }
+}
+
 // The round ended (how: lib/rounds.mjs roundEnded). Its minutes and tokens count for what started it (Today, on Home). A
 // round whose engine never started is no round: what started it waits again, and the second in a row turns autopilot off.
 function endRound(code, how, why = '') {
@@ -5419,6 +5527,8 @@ function endRound(code, how, why = '') {
   });
   if (r.notStarted) {
     log(`autopilot: the round didn't start, so the next one may start at once (what started it waits again): ${r.failed?.why || why}`);
+    // (usage.json counted it at its start: the ledger has it too, a round that never started, so the two agree)
+    roundLine(r.round || {}, c, { end: 'not-started', minutes: 0, tokens: null });
     if (r.stop) {
       turnItselfOff(
         'not-started',
@@ -5432,7 +5542,7 @@ function endRound(code, how, why = '') {
   const eng = adapterOf(round.engine || c?.engine);
   const logFile = c?.log || (round.log ? path.resolve(ROOT, round.log) : '');
   const since = c?.startedReal || round.startedReal || Date.now();
-  addUsage('autopilot', round.engine || c?.engine || 'unknown', { minutes: (Date.now() - since) / 60000, tokens: eng && logFile && fs.existsSync(logFile) ? eng.tokens(readText(logFile)) : null }, round.type);
+  addUsage('autopilot', round.engine || c?.engine || 'unknown', { minutes: (Date.now() - since) / 60000, tokens: eng && logFile && fs.existsSync(logFile) ? eng.tokens(readText(logFile)) : null, ...roundMeta(round, c), lineRuns: 1 }, round.type);
   // A round on Antigravity whose commands clear the push block or go past it: the owner hears it (by pattern, after the
   // fact: lib/blockwatch.mjs)
   if ((round.engine || c?.engine) === 'agy' && logFile && fs.existsSync(logFile)) blockAlertFor(readText(logFile), rel(logFile));
@@ -5494,14 +5604,31 @@ function turnItselfOff(kind, text) {
 // 'orchestrator' (its interactive window), 'worker' and 'guide'. The totals the dashboard showed before M9's
 // Home (rounds, attempts, their minutes, codexTokens) are kept too. Two weeks are kept. An autopilot round is counted
 // under what started it too (`reason`, FR-019: roundsBy, lib/rounds.mjs REASONS), its Codex tokens apart.
+// Since the usage ledger (docs/design/token-usage.md, lib/usage.mjs) every ended run is also one line of
+// .nextlevel/usage/<YYYY-MM>.jsonl, kept for good, with who ran it (profile, model, worker, task); usage.json stays for an
+// older version (Go back), its `ledgered` saying what of each day this version counted, so what an older one counted
+// comes into the ledger at the hub's start (importOlderUsage).
 const usageFile = () => path.join(DIR, 'usage.json');
 const dayOf = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-function addUsage(role, engineName, { runs = 0, minutes = 0, tokens = null } = {}, reason = '') {
+// u: { runs, minutes, tokens } for usage.json, and for the ledger's line: line (false: none, a round's start), lineRuns
+// (default runs), at and start (ISO; default now, by lib/clock.mjs), model, effort, profile, worker, task, attempt, slot,
+// end, notCounted, reason (a round's trigger, the assistant's kind of answer)
+function addUsage(role, engineName, u = {}, reasonArg = '') {
+  const { runs = 0, minutes = 0, tokens = null } = u;
+  const reason = u.reason ?? reasonArg;
   try {
     // (under the file's lock: the hub, an interactive window and the assistant count into it, lib/filelock.mjs)
     updateJsonFile(usageFile(), (all) => usageAdded(all || {}, role, engineName, { runs, minutes, tokens }, reason), {}, { onLock: lockLog(usageFile()) });
   } catch (err) {
     log(`couldn't count the day's usage: ${err.message}`); // the numbers must never stop the hub
+  }
+  if (u.line === false) return;
+  try {
+    // (after usage.json's change, never inside it: updateJsonFile may run its change more than once)
+    const line = runRecord({ ...u, role, engine: engineName, runs: u.lineRuns ?? runs, minutes, tokens, reason, at: u.at || clockIso(), start: u.start });
+    if (line) appendLedger(DIR, [line], { onLock: lockLog(ledgerDir(DIR)) });
+  } catch (err) {
+    log(`couldn't write the usage ledger: ${err.message}`);
   }
 }
 function usageAdded(all, role, engineName, { runs, minutes, tokens }, reason) {
@@ -5511,15 +5638,20 @@ function usageAdded(all, role, engineName, { runs, minutes, tokens }, reason) {
     if (v) o[k] = Math.round(((o[k] || 0) + v) * 1000) / 1000; // minutes to the 60th of a second
   };
   const key = `${role}:${engineName}`;
-  const row = { ...(cur.by?.[key] || {}) };
-  add(row, 'runs', runs);
-  add(row, 'minutes', minutes);
-  if (tokens) {
-    add(row, 'reported', 1);
-    add(row, 'tokens', tokens.tokens || 0);
-    add(row, 'cached', tokens.cached || 0);
-  }
-  cur.by = { ...(cur.by || {}), [key]: row };
+  const counted = (from) => {
+    const row = { ...(from || {}) };
+    add(row, 'runs', runs);
+    add(row, 'minutes', minutes);
+    if (tokens) {
+      add(row, 'reported', 1);
+      add(row, 'tokens', tokens.tokens || 0);
+      add(row, 'cached', tokens.cached || 0);
+    }
+    return row;
+  };
+  cur.by = { ...(cur.by || {}), [key]: counted(cur.by?.[key]) };
+  // (what of the day this version counted: the ledger has it, so the hub's start imports only what an older one added)
+  cur.ledgered = { ...(cur.ledgered || {}), [key]: counted(cur.ledgered?.[key]) };
   if (role === 'autopilot' && isReason(reason)) {
     const why = { ...(cur.roundsBy?.[reason] || {}) };
     add(why, 'runs', runs);
@@ -5542,6 +5674,35 @@ function usageAdded(all, role, engineName, { runs, minutes, tokens }, reason) {
   if (engineName === 'codex' && tokens) add(cur, 'codexTokens', tokens.tokens || 0);
   const keep = Object.keys(all).filter((d) => d !== day).sort().slice(-13);
   return { ...Object.fromEntries(keep.map((d) => [d, all[d]])), [day]: cur };
+}
+// At the hub's start: what usage.json has that this version didn't count (the days before the ledger, a Go back's)
+// goes into the ledger as one line per day, role and engine, and `ledgered` catches up, so it is imported once.
+function importOlderUsage() {
+  let lines = [];
+  try {
+    updateJsonFile(
+      usageFile(),
+      (all) => {
+        lines = []; // (the change may run again: its last run's lines are the ones written)
+        const next = { ...(all || {}) };
+        for (const [day, entry] of Object.entries(next)) {
+          const found = dayLines(day, entry);
+          if (!found.length) continue;
+          lines.push(...found);
+          next[day] = { ...entry, ledgered: JSON.parse(JSON.stringify(entry.by || {})) };
+        }
+        return next;
+      },
+      {},
+      { onLock: lockLog(usageFile()) },
+    );
+    if (lines.length) {
+      appendLedger(DIR, lines, { onLock: lockLog(ledgerDir(DIR)) });
+      log(`usage: ${lines.length} line(s) of what was counted before the usage ledger (or by an older version) added to it, by day`);
+    }
+  } catch (err) {
+    log(`couldn't add the earlier usage to the ledger: ${err.message}`);
+  }
 }
 
 // The same path, as Codex or the OS may spell it (case on Windows, \\?\, a link, a short name).
@@ -5592,7 +5753,7 @@ function closedWindowsTick() {
     fs.rmSync(file, { force: true });
     const profile = (o.profile && findProfile(CFG.config, o.profile)) || { engine: o.engine, account: '' };
     const since = Date.parse(o.startedAt) || Date.now();
-    addUsage(role, o.engine, { runs: 1, minutes: (Date.now() - since) / 60000, tokens: sessionUsage(profile, since, Date.now()) });
+    addUsage(role, o.engine, { runs: 1, minutes: (Date.now() - since) / 60000, tokens: sessionUsage(profile, since, Date.now()), start: isoOr(o.startedAt) || undefined, model: o.model, effort: o.effort, profile: o.profile });
     log(`the ${role === 'guide' ? 'setup guide' : 'orchestrator'}'s window was closed without ending its session: counted it`);
   }
 }
@@ -5992,6 +6153,7 @@ async function cmdRun(argv) {
     log(`${j.id} was running when the last hub stopped: marked lost`);
     jobEnded(j.id);
   }
+  importOlderUsage(); // what usage.json has that the usage ledger doesn't (before the ledger, or a Go back's days)
   adoptRound(); // an autopilot round the last hub started: followed, or ended as what became of it (FR-019)
   let ports = '';
   try {
@@ -6289,7 +6451,8 @@ async function interactiveSession(role, profile, args, env) {
   const child = spawnBin(resolveBin(engine(profile.engine).command), args, { cwd: ROOT, env, stdio: 'inherit', windowsHide: false }); // the owner's window
   await new Promise((resolve) => child.on('exit', resolve).on('error', resolve));
   const endedAt = Date.now();
-  addUsage(role, profile.engine, { runs: 1, minutes: (endedAt - startedAt) / 60000, tokens: sessionUsage(profile, startedAt, endedAt) });
+  const used = jobModel(role === 'orchestrator' && profile.engine === 'codex' ? { ...profile, effort: '' } : profile, CFG.config, { home: os.homedir() });
+  addUsage(role, profile.engine, { runs: 1, minutes: (endedAt - startedAt) / 60000, tokens: sessionUsage(profile, startedAt, endedAt), start: new Date(startedAt).toISOString(), model: used.model, effort: used.effort, profile: profile.name });
 }
 
 // _orch: the interactive orchestrator, in the window `nextlevel orchestrator` opened (or this terminal).
@@ -7513,6 +7676,7 @@ const COMMAND_TABLE = {
   wakeup: (rest) => (process.exitCode = cmdWakeup(rest)),
   wait: (rest) => cmdWait(rest).then((code) => (process.exitCode = code)),
   status: (rest) => cmdStatus(rest),
+  usage: (rest) => cmdUsage(rest),
   result: (rest) => cmdResult(rest),
   cleanup: (rest) => cmdCleanup(rest).then((code) => (process.exitCode = code)),
   'daily-report': (rest) => cmdDailyReport(rest),
