@@ -28,7 +28,7 @@
     <a href="#notes" data-tab="notes">Notes and handoffs <span class="count" id="notes-count" hidden></span></a>
   </nav>
   <div class="conn" id="conn" data-state="connecting"><span class="dot"></span><span id="conn-text">Connecting…</span></div>
-  <button type="button" class="btn ask-open" id="ask-open" aria-controls="ask" aria-expanded="false" title="Ask the assistant about the project (read-only)">Ask</button>
+  <button type="button" class="btn ask-open" id="ask-open" aria-controls="ask" aria-expanded="false" title="Ask the advisor about the project (read-only)">Advisor</button>
 </header>
 
 <main>
@@ -116,14 +116,14 @@
   </div>
 </div>
 
-<!-- Ask: the owner's read-only side chat about the project (src/ask.mjs), on every page -->
+<!-- The Advisor (Ask): the owner's read-only side chat about the project (src/ask.mjs, docs/design/advisor.md), on every page -->
 <aside class="ask" id="ask" hidden aria-labelledby="ask-title">
   <div class="ask-head">
     <div>
-      <h2 id="ask-title">Ask</h2>
-      <p class="muted small" id="ask-who">A read-only assistant: it answers from the project, and never talks to the orchestrator.</p>
+      <h2 id="ask-title">Advisor</h2>
+      <p class="muted small" id="ask-who">A read-only advisor: it answers from the project, never talks to the orchestrator, and only your click sends its drafts.</p>
     </div>
-    <button type="button" class="btn small" id="ask-close" aria-label="Close the Ask panel">Close</button>
+    <button type="button" class="btn small" id="ask-close" aria-label="Close the Advisor panel">Close</button>
   </div>
   <div class="ask-body" id="ask-body"></div>
 </aside>

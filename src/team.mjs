@@ -28,7 +28,7 @@ import { accessFacts } from './checks/argon.mjs';
 import { recordOwner } from './lib/guard.mjs';
 import { needsLockTest } from './lib/rolespec.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
-import { runQuiet } from './lib/proc.mjs';
+import { resolveBin, runQuiet } from './lib/proc.mjs';
 import { checksView, readRepoFacts, keepFacts, offer, repoFacts, repoSlug } from './lib/ghrepo.mjs';
 import { githubRepo } from './checks/engines.mjs';
 import { TEAM_ROWS, codexWorkerArgs, codexWorkersView, engineChoices, listModels, rowByKey, teamView, windowView } from './lib/team.mjs';
@@ -59,7 +59,7 @@ export async function cmdTeam(argv, { root, stateDir, hubAlive = () => false, lo
     }
     // (what the doctor knows of this PC for the notes: the orchestrator's lock test on Antigravity, agy's own settings)
     const ctx = makeContext({ root, config: loaded.config, stateDir, hubAlive });
-    const rows = teamView(loaded.config, { home: os.homedir(), access: accessFacts(ctx) });
+    const rows = teamView(loaded.config, { home: os.homedir(), access: accessFacts(ctx), available: (e) => !!resolveBin(ADAPTERS[e].command) });
     const win = windowView(loaded.config);
     const codex = codexWorkersView(loaded.config);
     if (a.json) return print({ ok: true, rows, engines: engineChoices(), window: win, codexWorkers: codex, file: CONFIG_FILE }), 0;

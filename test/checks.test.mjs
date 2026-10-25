@@ -1984,6 +1984,26 @@ test('runner.collaborators: anyone but the owner who can push is named (each cou
   assert.match(more.detail, /1 other account can push to owner\/app: pal$/);
 });
 
+test('advisor.independent: the engine the advisor runs on, whether it is the orchestrator\'s, and the sign-in of an engine only the advisor uses', async () => {
+  const signedIn = { 'claude auth status': JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'me@example.com', subscriptionType: 'max' }) };
+  // Claude Code installed and signed in, no role on it: the automatic advisor is on it, apart from the Codex orchestrator
+  const ok = await check('advisor.independent', { commands: { 'claude --version': '2.1.284 (Claude Code)', ...signedIn } });
+  assert.deepEqual([ok.status, ok.severity], ['ok', 'info']);
+  assert.match(ok.detail, /^on Claude Code \(automatic\)\. Independent of the orchestrator \(Codex\): it can disagree with it\.$/);
+  // ... not signed in: a warning with its login command, since no other row covers that engine
+  const out = await check('advisor.independent', { commands: { 'claude --version': '2.1.284 (Claude Code)', 'claude auth status': { ok: false, out: JSON.stringify({ loggedIn: false }) } } });
+  assert.deepEqual([out.status, out.severity], ['fail', 'warn']);
+  assert.match(out.detail, /which no other role uses, and it isn't signed in: not signed in/);
+  assert.deepEqual(out.steps.map((s) => [s.window, s.command]), [['terminal', 'claude auth login']]);
+  // Claude Code not installed: the orchestrator's engine, said so (information)
+  const same = await check('advisor.independent', { commands: { 'codex --version': 'codex-cli 0.164.0' } });
+  assert.deepEqual([same.status, same.severity], ['ok', 'info']);
+  assert.match(same.detail, /^on Codex \(automatic\)\. Same engine as the orchestrator \(Codex\): it may agree with it too easily\. Another engine for it: nextlevel team set assistant --engine claude/);
+  // Pinned in nextlevel.json: no sign-in asked here (the engine's own row covers a role in nextlevel.json)
+  const pinned = await check('advisor.independent', { config: { roles: { assistant: { engine: 'claude', model: 'sonnet' } } }, commands: { 'claude --version': '2.1.284 (Claude Code)', 'claude auth status': { ok: false, out: '' } } });
+  assert.deepEqual([pinned.status, pinned.detail], ['ok', 'on Claude Code. Independent of the orchestrator (Codex): it can disagree with it.']);
+});
+
 test('every registered check is valid, has a unique id and a learnMore, and is covered above', () => {
   const ids = CHECKS.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length, 'ids are unique');

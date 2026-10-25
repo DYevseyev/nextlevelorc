@@ -100,7 +100,8 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
-import { cmdAsk } from './ask.mjs';
+import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
+import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
@@ -5603,7 +5604,7 @@ const USAGE_ROLES = [
   { key: 'orchestrator', title: 'Orchestrator window', unit: 'session', kind: 'interactive' },
   { key: 'worker', title: 'Workers', unit: 'attempt', kind: 'headless' },
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
-  { key: 'assistant', title: 'Assistant (Ask)', unit: 'question', kind: 'headless' },
+  { key: 'assistant', title: 'Advisor', unit: 'question', kind: 'headless' },
 ];
 // Today's numbers, with what runs now counted so far (its minutes; an open window as a session).
 function usageToday(jobs) {
@@ -7054,7 +7055,7 @@ function dashboardState() {
       ? { mode: orch.mode, since: orch.startedAt, engine: engineTitle(orch.engine || CFG.orchestrator.engine), model: orch.model || '', effort: orch.effort || '', log: orch.log ? tailLines(path.join(ROOT, orch.log), 20, { engineName: orch.engine }) : [] }
       : null,
     // who fills each role, with the model and effort in use (the Team page), and the engines the guide is offered on
-    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }) }),
+    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }), available: (e) => !!resolveBin(engine(e).command) }),
     workerWindow: windowView(CFG.config), // how a worker's process shows (workers.window, FR-010)
     codexWorkers: { ...codexWorkersView(CFG.config), windows: IS_WIN }, // Codex workers' sandbox (engines.codex.workerArgs)
     githubChecks: githubChecksView(), // the project's GitHub checks on this PC (the self-hosted runner's part A)
@@ -7387,6 +7388,8 @@ function dashboardApi() {
     checkLockAgain, // Check again on the card of the orchestrator held by its lock test: the hub runs it again
     blockAlertSeen, // Seen, on the card of a round on Antigravity that ran commands clearing the push block
     slotEscapeSeen, // Seen, on the card of a worker that did something outside its slot
+    askEstimate, // the Advisor panel's estimate of what a question sends
+    advisorMemory, // the Advisor panel's Memory: list, and the owner's add, edit and remove
     askTripwireSeen: (say = (m) => console.log(m)) => {
       setSetting('askTripwire', null);
       say('Marked as seen.');
@@ -7577,6 +7580,13 @@ function askContext() {
     secrets: () => activitySecrets(),
     env: () => readEnv({ ...workerEnv(childEnv()), NEXTLEVEL_READ_ONLY: '1' }),
     addUsage: (engineName, u) => addUsage('assistant', engineName, u),
+    // the advisor's wider briefing (docs/design/advisor.md section 3): what the hub reads itself
+    plan: () => advisorPlan(),
+    decisions: () => readText(path.join(ROOT, CFG.config.paths.decisions || 'docs/DECISIONS.md')),
+    rounds: () => advisorRounds(),
+    hubLog: () => tailBytes(path.join(LOGS, 'hub.log'), 3000),
+    verifies: () => advisorVerifies(allJobs()),
+    usage: () => advisorUsage(allJobs()),
     // the assistant on Antigravity (src/ask.mjs askAgy): its lock test, the protected files the tripwire looks at, agy's
     // version, a console with no window for agy, and what the tripwire found (a Home card)
     lockProblem: (role, profile) => lockProblem(role, profile),
@@ -7589,6 +7599,90 @@ function askContext() {
       setSetting('askTripwire', { at: now(), changes: changes.slice(0, 10) });
     },
   };
+}
+
+// ---------- what the advisor reads (docs/design/advisor.md section 3) ----------
+// The end of a file, cut by bytes, so one very long line can't take what is read of it
+function tailBytes(file, n) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - n * 2);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString('utf8').replace(ANSI_RE, '');
+    return (start ? text.slice(text.indexOf('\n') + 1) : text).slice(-n);
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+// The current milestone (the Project page's) and its plan file
+function advisorPlan() {
+  const m = projectView().roadmap.find((x) => x.current);
+  if (!m) return '';
+  const tasks = m.tasks.map((t) => `- ${t.id}: ${t.state}${t.attempts > 1 ? ` (attempt ${t.attempts})` : ''}`).join('\n');
+  const text = m.plan?.file ? readText(path.join(ROOT, m.plan.file)) : '(no plan found for it)';
+  return { milestone: `${m.key} ${m.name} (${m.state}; ${m.counts.merged} of ${m.counts.total} task(s) merged)`, file: m.plan?.file || '', text: `${text.trim()}${tasks ? `\n\nIts tasks (the hub's):\n${tasks}` : ''}` };
+}
+// The hub's reading of rounds.json, through its shape check: never a file the hub wouldn't read
+function advisorRounds() {
+  if (!fs.existsSync(ROUNDSFILE)) return 'No autopilot round yet.';
+  const saved = readJson(ROUNDSFILE);
+  if (saved === null || roundsProblem(saved && typeof saved === 'object' && !Array.isArray(saved) ? { ...freshState(), ...saved } : saved)) return 'rounds: not readable';
+  const s = { ...freshState(), ...saved };
+  const last = s.last ? `The last round: started ${s.last.startedAt}${s.last.endedAt ? `, ended ${s.last.endedAt}` : ''}${s.last.type ? `, started by ${s.last.type}` : ''}${s.last.what ? ` (${s.last.what})` : ''}${s.last.how ? `, ${s.last.how}` : ''}${s.last.real ? ', with something real after it' : ''}.` : 'No round has ended yet.';
+  return [
+    `Autopilot is ${getSettings().autopilot ? 'on' : 'off'}.`,
+    s.round ? `A round runs, since ${s.round.startedAt} (${(s.round.reasons || []).join(', ')}).` : '',
+    last,
+    `Rounds in the last hour: ${s.starts.length}. Since the last real event (${s.real.at || 'none'}: ${s.real.what || '-'}): ${s.sinceReal} round(s); in a row with nothing real: ${s.streak}.`,
+    s.pending.length ? `Waiting to start a round: ${s.pending.map((x) => x.what || x.type).join('; ')}.` : 'Nothing waits to start a round.',
+    s.fuse ? `Autopilot turned itself off on ${s.fuse.at}: ${s.fuse.text}` : '',
+  ].filter(Boolean).join('\n');
+}
+// The hub's own verify of the last task jobs: its state from the job's status, and a failing verify's first lines that
+// say so (never a worker's claim)
+function advisorVerifies(jobs) {
+  const done = jobs.filter((j) => j.type === 'task' && j.verify).sort((a, b) => String(a.finishedAt || a.updatedAt || '').localeCompare(String(b.finishedAt || b.updatedAt || ''))).slice(-10);
+  return done
+    .map((j) => {
+      const failing = j.verify === 'pass' ? [] : readText(path.join(jobDir(j.id), 'verify.log')).split(/\r?\n/).filter((l) => /\b(fail|failed|error|not ok)\b|✖/i.test(l)).slice(0, 4).map((l) => `    ${l.slice(0, 300)}`);
+      return [`- ${j.id} (attempt ${j.attempt || 1}): verify ${j.verify}${j.finishedAt ? `, ${j.finishedAt}` : ''}`, ...failing].join('\n');
+    })
+    .join('\n');
+}
+// Today's usage, a line per role
+function advisorUsage(jobs) {
+  const u = usageToday(jobs);
+  return u.roles.filter((r) => r.count).map((r) => `- ${r.title}: ${r.count} ${r.unit}(s), ${r.minutes} min${r.tokens ? `, ${r.tokens.toLocaleString('en-US')} tokens` : ''} (${r.engines.map((e) => e.title).join(', ')})`).join('\n') || 'Nothing ran today yet.';
+}
+// The composer's estimate (dashboardApi): the briefing's size for a mode and a card, kept until the project's stamp, the
+// mode or the card changes
+let estimateCache = null;
+function askEstimate({ mode = 'advise', card = '' } = {}) {
+  const m = ['advise', 'quick', 'explain'].includes(mode) ? mode : 'advise';
+  const stamp = `${projectStamp(allJobs())}|${m}|${card || ''}`;
+  if (estimateCache?.stamp === stamp) return estimateCache.value;
+  const ctx = askContext();
+  const value = briefingSize(ctx, { mode: card ? 'explain' : m, card: card ? cardFor(ctx, card) : null });
+  estimateCache = { stamp, value };
+  return value;
+}
+// The advisor's memory on the dashboard: the owner's own click, behind its session key. A change is no "owner acting"
+// for autopilot: it gives the team nothing to do.
+function advisorMemory(b = {}) {
+  const store = memoryStore(advisorDir(ROOT));
+  if (!b.action || b.action === 'list') {
+    const { items, problem } = store.read();
+    return { items, problem };
+  }
+  if (b.action === 'add') return { item: store.add({ text: b.text, kind: b.kind || undefined, from: b.from }), message: 'Remembered.' };
+  if (b.action === 'edit') return { item: store.edit(b.id, { text: b.text, kind: b.kind || undefined }), message: 'Changed.' };
+  if (b.action === 'remove') return { removed: store.remove(b.id).id, message: 'Forgotten.' };
+  throw new Error('action must be list, add, edit or remove');
 }
 
 // Run one hub command (or the menu, with no command) on the project at `root`.

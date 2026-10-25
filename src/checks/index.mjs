@@ -30,7 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { agyPermissionsCheck, lockCheck } from './argon.mjs';
-import { claudeChecks, codexChecks, agyChecks, fullAccessCheck, profilesCheck, workerAddonsCheck } from './engines.mjs';
+import { advisorCheck, claudeChecks, codexChecks, agyChecks, fullAccessCheck, profilesCheck, workerAddonsCheck } from './engines.mjs';
 import { toolFilesCheck } from './files.mjs';
 import { ghAuthCheck, ghTool, gitTool, identityCheck, readTokenCheck, repoChecks } from './git.mjs';
 import { guardCheck } from './guard.mjs';
@@ -69,6 +69,7 @@ export const CHECKS = [
   denyListCheck,
   ...claudeChecks,
   workerAddonsCheck,
+  advisorCheck,
   ...projectFiles,
   ...repoChecks,
   ...runnerChecks,

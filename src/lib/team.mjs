@@ -15,7 +15,7 @@ export const TEAM_ROWS = [
   { key: 'worker-fallback', role: 'worker', fallback: true, title: 'Fallback worker', does: 'takes a task the orchestrator sends on (retry --fallback)' },
   { key: 'guide', role: 'guide', fallback: false, title: 'Setup guide', does: 'walks you through setup, one step at a time' },
   { key: 'orchestrator-fallback', role: 'orchestrator', fallback: true, title: 'Fallback orchestrator', does: "takes over when the orchestrator's engine isn't ready", optional: true },
-  { key: 'assistant', role: 'assistant', fallback: false, title: 'Assistant (Ask)', does: 'answers your questions about the project, read-only, apart from the orchestrator' },
+  { key: 'assistant', role: 'assistant', fallback: false, title: 'Advisor', does: 'advises you and answers your questions about the project, read-only, apart from the orchestrator; it drafts notes and replies that only your click sends' },
 ];
 export const rowByKey = (key) => TEAM_ROWS.find((r) => r.key === key);
 
@@ -92,7 +92,8 @@ export function teamView(config, where = {}) {
   const home = where.home || '';
   return TEAM_ROWS.map((row) => {
     const r = config.roles[row.role] || {};
-    const p = roleProfile(config, row.role, { fallback: row.fallback, second: !!row.second });
+    // (the advisor's automatic choice: among the engines `where.available` says are there, as its run picks)
+    const p = roleProfile(config, row.role, { fallback: row.fallback, second: !!row.second, ...(row.role === 'assistant' && where.available ? { available: where.available } : {}) });
     // (the second worker: what it takes, and the choices for it)
     const takes = row.second ? { value: p?.takes || 'no-docker', text: SECOND_TAKES[p?.takes] || '', choices: Object.entries(SECOND_TAKES).map(([value, text]) => ({ value, text })) } : null;
     const base = { key: row.key, role: row.role, fallback: row.fallback, second: !!row.second, title: row.title, does: row.does, ...(takes ? { takes } : {}) };
@@ -100,9 +101,9 @@ export function teamView(config, where = {}) {
     const eng = ADAPTERS[p.engine];
     const use = inUse(p, config, where);
     const keys = settingKeys(config, row.role, { fallback: row.fallback, second: !!row.second });
-    // The assistant's automatic choice: a light model (Codex's smallest listed model is picked when it runs)
+    // The advisor's automatic choice: the engine's own default model for Advise (Quick: a light model, picked when it runs)
     const auto = row.role === 'assistant' && p.auto;
-    const modelShown = auto && !p.model ? `the smallest model ${eng.title} lists (picked when it runs)` : modelText(p, use, home);
+    const modelShown = modelText(p, use, home);
     // (a worker's own arguments: engines.<name>.workerArgs, else args)
     const args = row.role === 'worker' ? workerArgsOf(config, p.engine) : config.engines?.[p.engine]?.args || [];
     // (where.access: what the doctor knows of this PC for the note, checks/argon.mjs accessFacts)
@@ -132,8 +133,17 @@ export function teamView(config, where = {}) {
         full?.level === 'warn' ? full.text : '',
       ].filter(Boolean),
       notices: full?.level === 'info' ? [full.text] : [],
+      // the advisor: whether it is on another engine than the orchestrator, so it can disagree with it
+      ...(row.role === 'assistant' ? { independent: advisorIndependent(config, p) } : {}),
     };
   }).filter(Boolean);
+}
+
+// Whether the advisor runs on another engine than the orchestrator: { ok, text }
+export function advisorIndependent(config, p) {
+  const o = roleProfile(config, 'orchestrator');
+  const ok = !!p && !!o && p.engine !== o.engine;
+  return { ok, text: ok ? `Independent of the orchestrator (${ADAPTERS[o.engine]?.title || o.engine}): it can disagree with it.` : `Same engine as the orchestrator (${ADAPTERS[p?.engine]?.title || p?.engine || '?'}): it may agree with it too easily. Another engine for it: nextlevel team set assistant --engine claude (or codex).` };
 }
 
 // How a worker's process shows (workers.window, FR-010), for the Team page and `nextlevel team`. What each choice

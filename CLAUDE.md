@@ -95,8 +95,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
 - `src/lib/reports.mjs` — what the orchestrator gets of a report, a log or the owner's words (FR-012): the output
   budget, the parts that fit it, cuts that say so, and a task's kind and result file (pure). The hub's side:
   `cmdResult` and `resultPart`, `keepReport` (each attempt's report, whole), `checkResultFile` in a task's verify.
-- `src/ask.mjs` — `nextlevel ask`: the assistant's briefing, one read-only session per question (the engine's
-  `readOnly` arguments, the question on stdin), its answer, sources and suggested note. `src/lib/chats.mjs` — its
+- `src/ask.mjs` — `nextlevel ask`: the advisor (the assistant role, `docs/design/advisor.md`): its briefing for Advise,
+  Quick or Explain of a card, one read-only session per question (the engine's `readOnly` arguments, the question on
+  stdin), its answer, sources and drafts, and `ask memory`. `src/lib/advisor.mjs` — the drafts read from an answer (a
+  note, a rule, a reply to a card, a memory change; none can approve or deploy) and the owner's memory store
+  (`~/.nextlevel/advisor/<project key>/`, its shape check). `src/lib/chats.mjs` — its
   threads (`.nextlevel/chats/`). `src/lib/readonly.mjs` — what nextlevel runs under `NEXTLEVEL_READ_ONLY=1` (the
   assistant's engine gets it): only commands that look. `src/lib/github.mjs` — GitHub reads for verify commands
   (FR-017): the read-only token's name, the git credential helper that gives it to github.com only, its expiry from
@@ -166,7 +169,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   covers M11's parsing (the project page, plan headers, decisions, the roadmap and pace, Home's Blockers) and FR-016
   (plans shaped like a real project's, `test/fixtures/fr016`: found by their Milestone line or name, the warnings, the doctor's
   `project.plans` on a real folder and git); `test/ask.test.mjs`
-  covers Ask (threads, the briefing and its redaction, read-only engines and commands, the automatic choice, usage); `test/gitlock.test.mjs`
+  covers Ask and the advisor (threads, the briefing and its redaction, read-only engines and commands, the automatic
+  choices, usage; Advise's sections, drafts, Explain, the memory and who may change it); `test/gitlock.test.mjs`
   reproduces the index.lock race between the dashboard's reads and the hub's commits (a stub holds the lock);
   `test/guard.test.mjs` covers the guard (matching, summaries, the watch, a worker's hook held, approved and rejected on
   the dashboard, an orchestrator's START.cmd edit set back); `test/guard-git-secrets.test.mjs` its second part (a changed
