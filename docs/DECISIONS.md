@@ -1936,6 +1936,24 @@ One entry each: date, decision, why, alternatives.
   tools must never become a public issue without the owner saying so; the report says "public" when its issue would be.
   The releases seen there are kept, marked `left`: never said to be gone, and a same-named tag in the new repository is
   refused like a moved tag. Fixes waiting there end as `left`: their merge commits never reach the new releases.
+- 2026-10-25 — **Usage is kept as one line per ended run, for good, beside the day's totals (the usage ledger,
+  `docs/design/token-usage.md`).** `usage.json` kept two weeks of totals per day, role and engine: a month or all time,
+  and anything per task, model or worker, couldn't be told from it. Each run that ends is now a line of
+  `.nextlevel/usage/<YYYY-MM>.jsonl` (the local month of its end) with who ran it; the sums are made when they are read.
+  `usage.json` is still written, for an older version after a Go back; each of its days says what this version counted
+  (`ledgered`), so what an older version counted comes into the ledger at the hub's start, as one line per day, role and
+  engine, exactly once. The line is appended after `usage.json`'s change, under the month file's own lock, never inside
+  `updateJsonFile`'s change (which may run again when its lock was taken over); a line cut by a power loss costs only
+  itself. A run counts at its end, by `lib/clock.mjs`, or by its own record's end when the hub learned of it late (it
+  ended while the hub was stopped). A round counts in `usage.json` at its start, as before, and in the ledger at its
+  end, a round whose engine never started too, so the two agree. The ledger is in a folder the team can write, so every
+  line is read through a shape check (ids, names and numbers; no free text). Tokens keep each engine's meaning of the
+  total; the parts (`input`, `cacheWrite`, `output`) add up to it, and `thinking` is a part of nothing, since agy's
+  output doesn't say whether its output count has it. "This week" is from Monday, like Today and This month, all
+  calendar ranges. `nextlevel usage --all-projects` reads other projects' ledgers where they are: the owner's alone,
+  refused in an agent's or the assistant's session, so one project's agent never learns another project's tasks.
+  A hub that stops between `usage.json`'s change (which raises `ledgered`) and the line's append loses that one run from
+  the ledger for good; the order is kept so that nothing is ever counted twice, and the loss is one run at most.
 - 2026-10-25 — **The advisor keeps the assistant's key, and takes the orchestrator's other engine by default.** Ask
   grows into an advisor (`docs/design/advisor.md`). The role stays `assistant` in nextlevel.json, `nextlevel team`, the
   lock test, `.nextlevel/chats/` and usage.json: a rename would need an alias, a `format.json` note and a new lock-test

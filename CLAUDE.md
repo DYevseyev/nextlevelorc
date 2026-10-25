@@ -83,6 +83,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   length. `src/lib/ghrepo.mjs` — a repository's facts with the owner's gh (GETs), their cache, `offer()` (never a public,
   internal or organization's repository) and the Team card's view (`checksView`; `githubChecksView` in `hub.mjs`, Check
   again in `src/dashboard.mjs`). `src/checks/runner.mjs` — `runner.visibility`, `runner.forks`, `runner.collaborators`.
+- `src/lib/usage.mjs` — the usage ledger (`docs/design/token-usage.md`): one line per ended run in
+  `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
+  today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
+  counted in `usage.json` (`dayLines`). The hub's side is "the day's numbers" in `hub.mjs` (addUsage, which also keeps
+  `usage.json` and its `ledgered`; importOlderUsage at the hub's start; cmdUsage, `nextlevel usage`).
 - `src/lib/closures.mjs` — closed tasks (FR-021): `.nextlevel/closed.json` read through a shape check, the reason's
   rules, how a closure reads. The hub's side is "closing a task" in `hub.mjs` (cmdClose, closeProblem, GIT_OPS.close,
   recordClosure, reopenClosed); the roadmap counts it (`buildRoadmap`'s `closed`).
@@ -212,6 +217,9 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   the guard's lines, the stub gh's repositories in `~/.fake-github/repos/`: public, internal, an organization's and gh
   that can't answer offer nothing, a private one on paid runners is recommended, `team runner on` refused, the
   dashboard's card, a task branch moving a job onto the PC held on a card), its checks in `test/checks.test.mjs`;
+  `test/usage.test.mjs` covers the usage ledger (each engine's token parts, a cut line, planted lines, the ranges across a
+  clock change, the import once and after a Go back, a worker's line end to end, `nextlevel usage` and `--all-projects`
+  refused in agents' sessions; the rounds' lines in `test/autopilot.test.mjs`);
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),

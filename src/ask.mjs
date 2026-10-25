@@ -294,7 +294,7 @@ async function cmdMemory(a, rest, { ctx, print, fail }) {
 
 // ---------- the command ----------
 // `ctx` (hub.mjs askContext): root, stateDir, config, status(), jobs(), cards(), commits(), secrets(), env(),
-// addUsage(engine, { runs, minutes, tokens }), home. Returns the exit code.
+// addUsage(engine, { runs, minutes, tokens, model, effort, start, reason }), home. Returns the exit code.
 export async function cmdAsk(argv, ctx) {
   const a = commandArgs('ask', argv);
   const store = chatStore(path.join(ctx.stateDir, 'chats'));
@@ -454,7 +454,7 @@ async function askEngine(ctx, prompt, mode = 'advise') {
   const tokens = eng.tokens(out.text);
   const got = answerOf(profile.engine, out.text);
   // (its mode as the usage ledger's reason: quick, advise, explain; the model it ran on)
-  ctx.addUsage(profile.engine, { runs: 1, minutes, tokens, reason: mode, model: base.model || got.model || '' });
+  ctx.addUsage(profile.engine, { runs: 1, minutes, tokens, model: base.model || got.model || '', effort: base.effort, start: new Date(startedAt).toISOString(), reason: mode });
   const error = got.error || (out.code !== 0 ? `${eng.title} stopped (exit ${out.code})${got.text ? '' : ': no answer'}` : '');
   return { ...base, ...(got.model && !base.model ? { reportedModel: got.model } : {}), text: got.text, error: out.code === 0 && got.text && !got.error ? '' : error || (got.text ? '' : 'no answer'), tokens, minutes: Math.round(minutes * 100) / 100 };
 }
@@ -508,7 +508,7 @@ async function askAgy(ctx, profile, prompt, { base, env, startedAt, mode = 'advi
   const minutes = (Date.now() - startedAt) / 60000;
   const eng = engine('agy');
   const tokens = eng.tokens(out.out);
-  ctx.addUsage('agy', { runs: 1, minutes, tokens, reason: mode, model: base.model || '' });
+  ctx.addUsage('agy', { runs: 1, minutes, tokens, model: base.model, effort: base.effort, start: new Date(startedAt).toISOString(), reason: mode });
   const result = agyResult(out.out);
   const text = result?.ok ? result.response.trim() : '';
   const failed = !text ? agyFailure(out.out, { code: out.code }).reason || (out.timedOut ? `no answer in ${TIMEOUT_MIN} minutes` : 'no answer') : '';

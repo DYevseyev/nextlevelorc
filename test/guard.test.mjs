@@ -362,7 +362,7 @@ test('a worker branch that adds .claude/settings.json with a hook is held for th
     // code, a key in the address or a cookie, another Host: refused, and the change stays held
     for (const [why, opts] of [
       ['no key', {}],
-      ['a wrong key', { headers: { 'x-nextlevel-token': `${ui.token.slice(0, -1)}A` } }],
+      ['a wrong key', { headers: { 'x-nextlevel-token': `${ui.token.slice(0, -1)}${ui.token.endsWith('A') ? 'B' : 'A'}` } }],
       ["the link's used code", { headers: { 'x-nextlevel-token': ui.code } }],
       ['a key in the address', { path: `/api/guard?token=${ui.token}` }],
       ['a cookie', { headers: { cookie: `token=${ui.token}; key=${ui.token}` } }],
