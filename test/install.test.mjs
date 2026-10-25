@@ -322,7 +322,7 @@ test('install.ps1 takes a folder (NEXTLEVEL_DIR): the install moves there, the c
   try {
     assert.match(installer(s, {}, reg), /nextlevel is installed\./);
     s.box.gitIn(s.tool, 'branch', 'kept-branch'); // the clone's own state goes with it
-    const dest = path.join(s.box.tmp, 'Desktop', 'DEV', 'claude', 'nextlevel');
+    const dest = path.join(s.box.tmp, 'Tools', 'apps', 'nextlevel');
     const moved = installer(s, { NEXTLEVEL_DIR: dest }, reg);
     assert.match(moved, /the tool goes in .*nextlevel/, moved);
     assert.match(moved, /Moved nextlevel from .*tool to .*nextlevel\./);
@@ -352,9 +352,9 @@ test('install.ps1 takes a folder (NEXTLEVEL_DIR): the install moves there, the c
     assert.notEqual(s.box.gitIn(dest, 'rev-parse', 'HEAD'), s.gh.git('rev-parse', 'origin/main'));
 
     // A folder with other things in it is the owner's: refused, and nothing moves
-    const busy = path.join(s.box.tmp, 'Desktop', 'DEV');
+    const busy = path.join(s.box.tmp, 'Tools', 'apps');
     const refused = installer(s, { NEXTLEVEL_DIR: busy }, reg);
-    assert.match(refused, /already has other files in it\. nextlevel goes in a folder of its own: name a new one, for example .*DEV.nextlevel/, refused);
+    assert.match(refused, /already has other files in it\. nextlevel goes in a folder of its own: name a new one, for example .*apps.nextlevel/, refused);
     assert.ok(fs.existsSync(path.join(dest, 'bin', 'nextlevel.mjs')));
   } finally {
     reg?.remove();
