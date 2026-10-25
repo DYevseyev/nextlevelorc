@@ -92,11 +92,22 @@ export const COMMANDS = {
   ask: {
     group: 'owner',
     lines: [
-      ['nextlevel ask "question" [--thread <id>]', 'ask the assistant about the project (read-only; never the orchestrator)'],
+      ['nextlevel ask "question" [--thread <id>] [--quick]', 'ask the advisor about the project (read-only; never the orchestrator). --quick: a light model and a short briefing'],
+      ['nextlevel ask --card H<n> ["question"] [--thread <id>]', 'explain a team\'s card in micro-steps, and draft your reply to it'],
       ['nextlevel ask threads | show <id> | new | rename <id> "title" | clear <id> | delete <id>', 'its threads'],
+      ['nextlevel ask memory [list | add --file <path> [--kind decision|preference] | edit M<n> --file <path> | remove M<n>]', "the advisor's memory of your decisions and preferences (yours alone to change)"],
     ],
-    text: 'A question that starts with "-" goes after "--": nextlevel ask -- "-h in git means?"',
-    options: { thread: S('<id>', 'go on in this thread'), search: S('<text>', 'threads: only those with this text'), json: JSON_OPT },
+    text: 'A question that starts with "-" goes after "--": nextlevel ask -- "-h in git means?" (after "--" it is always a question, never one of the commands above).',
+    options: {
+      thread: S('<id>', 'go on in this thread'),
+      search: S('<text>', 'threads: only those with this text'),
+      quick: B('a light model and a short briefing (fewer tokens)'),
+      card: S('<H id>', 'explain this card and draft the reply to it (always Advise)'),
+      file: S('<path>', 'memory add / edit: the entry, from a file in the project (or - for stdin)'),
+      kind: S('decision|preference', 'memory add / edit: what the entry is (decision by default)'),
+      json: JSON_OPT,
+    },
+    dashdash: 'mark',
     args: [0, ANY],
   },
   'bridge-test': {
@@ -446,7 +457,12 @@ export function parseCommand(name, argv = []) {
   delete out.help;
   if (spec.dashdash === 'command') {
     if (term) out['--'] = positional(true);
-  } else out._.push(...positional(true));
+  } else {
+    // 'mark': where "--" was, so a command can tell what came after it (ask: always a question, never a subcommand);
+    // not enumerable, so the arguments read as they always have
+    if (term && spec.dashdash === 'mark') Object.defineProperty(out, 'dashAt', { value: out._.length });
+    out._.push(...positional(true));
+  }
   let rest = out._;
   let allowed = Object.keys(options);
   let count = spec.args || [0, 0];

@@ -1954,3 +1954,16 @@ One entry each: date, decision, why, alternatives.
   refused in an agent's or the assistant's session, so one project's agent never learns another project's tasks.
   A hub that stops between `usage.json`'s change (which raises `ledgered`) and the line's append loses that one run from
   the ledger for good; the order is kept so that nothing is ever counted twice, and the loss is one run at most.
+- 2026-10-25 — **The advisor keeps the assistant's key, and takes the orchestrator's other engine by default.** Ask
+  grows into an advisor (`docs/design/advisor.md`). The role stays `assistant` in nextlevel.json, `nextlevel team`, the
+  lock test, `.nextlevel/chats/` and usage.json: a rename would need an alias, a `format.json` note and a new lock-test
+  key for a word the owner never types, so only the words on screen change. Advise's automatic choice is the first
+  read-only engine that isn't the orchestrator's and whose CLI is installed, on that engine's own default model (a
+  pinned name would go stale), so it can disagree with the orchestrator; `advisorAuto` stays pure and takes "installed"
+  as a predicate from its callers, since the hub's loop reads the role every tick. Quick is today's Ask unchanged (its
+  light model and briefing), so a simple question costs what it did. The memory lives outside the project and only the
+  owner's window or the dashboard changes it (not a wall: KNOWN_ISSUES); a memory change starts no round, since it
+  gives the team nothing to do. Drafts are read from the answer's own lines by code and sent only through the Notes
+  page's existing routes; there is no draft for an Approve, a push, a deploy or a card's Done. The briefing's estimate
+  is worked out in the dashboard's own process, not by a second `nextlevel ask`. The mode goes to the usage ledger as
+  its reason (quick, advise, explain), which the token-usage work owns.

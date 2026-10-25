@@ -878,6 +878,11 @@ command**. A determined agent, running as the owner, can still:
 - **Turn on the GitHub checks runner, or turn off fork pull requests' workflows, as the owner.** `nextlevel team runner
   on` and the doctor's fix of `runner.forks` refuse in an agent's session, read by the same variables; a command that
   clears them is taken for the owner's. In part A `on` changes nothing; the fork fix closes a setting, never opens one.
+- **Write the advisor's memory.** It is kept in `~/.nextlevel/advisor/<project>/memory.json`, outside the project, and
+  only the owner's own window (`nextlevel ask memory`, which refuses in an agent's session) or the dashboard's Memory
+  changes it. An agent running as the owner without permission checks (Antigravity) can still write the file, as it can
+  the guard's records, and steer the advice the owner reads. The panel's Memory shows where each entry says it came
+  from, but whoever writes the file writes that too: an entry you don't remember adding is worth deleting.
 - **Use gh as the owner from a worker or a verify command.** Both get gh's folder with no sign-in (`GH_CONFIG_DIR`) and a
   `GH_TOKEN` that doesn't work; a command that unsets both reads the owner's keyring login again ("GitHub CLI", above).
 - **Push from a verify command anyway.** `nextlevel verify` switches Git pushes and GitHub sign-ins off through the

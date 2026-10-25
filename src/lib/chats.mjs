@@ -85,6 +85,15 @@ export function chatStore(dir) {
       t.updatedAt = now();
       return save(t);
     },
+    // A draft of an answer the owner sent (the dashboard's mark, so a reload shows it sent, never its Send button
+    // again): the message at `index`, told by its time too (older messages drop off the front), its draft `draft`
+    markSent(id, index, at, draft, label) {
+      const t = must(id);
+      const m = t.messages[index];
+      if (!m || m.role === 'owner' || m.at !== at || !Number.isInteger(draft) || draft < 0 || draft >= (m.drafts?.length || 0)) throw new Error('that answer or its draft is gone');
+      m.sent = { ...(m.sent && typeof m.sent === 'object' ? m.sent : {}), [draft]: cut(oneLine(label), 60) || 'Sent' };
+      return save(t);
+    },
     rename(id, title) {
       const t = must(id);
       const next = cut(oneLine(title), LIMITS.title);
