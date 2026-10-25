@@ -9,6 +9,7 @@ import test from 'node:test';
 import { engine } from '../src/engines/index.mjs';
 import { appendLedger, cleanRecord, dayLines, perDay, ranges, readLedger, runRecord, sumUsage, taskTokensText } from '../src/lib/usage.mjs';
 import { REPO, makeProject, makeSandbox } from './helpers.mjs';
+import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 
 const tmpState = () => fs.mkdtempSync(path.join(makeSandbox().tmp, 'state-'));
 const lines = (dir) =>
@@ -199,6 +200,77 @@ test("--all-projects is the owner's: refused in the assistant's and an agent's s
     assert.match(r.out, /^ {2}gone: not found$/m);
     assert.match(r.out, /^X-1\s+1\s/m);
   } finally {
+    p.cleanup();
+  }
+});
+
+test("the dashboard's Usage card: Today from the ledger (a role it doesn't list gets a row), other ranges, groupings and all projects from /api/usage with the key, a task's tokens on the Build page", async () => {
+  const p = makeProject();
+  const other = makeProject({ box: p, dir: 'other' });
+  let ui;
+  try {
+    p.spec('M5-03-ok', 'node -e "0"');
+    p.hub(['dispatch', 'M5-03-ok']);
+    p.runUntilIdle();
+    assert.equal(p.status('M5-03-ok').state, 'done');
+    const ago = (ms) => new Date(Date.now() - ms).toISOString();
+    appendLedger(p.state(), [
+      runRecord({ role: 'worker', engine: 'codex', task: 'M5-04', attempt: 1, end: 'failed', worker: 'second', model: 'gpt-6', at: ago(4 * 86_400_000), minutes: 5, tokens: { tokens: 1000, cached: 50 } }),
+      runRecord({ role: 'reviewer', engine: 'claude', at: ago(60_000), minutes: 3, tokens: { tokens: 42 } }),
+      runRecord({ role: 'autopilot', engine: 'codex', reason: 'job', at: ago(30_000), minutes: 1, tokens: { tokens: 7 } }),
+    ]);
+    appendLedger(other.state(), [runRecord({ role: 'worker', engine: 'agy', task: 'X-2', at: ago(60_000), tokens: { tokens: 99 } })]);
+    const home = path.join(p.tmp, 'nl-home');
+    fs.mkdirSync(home, { recursive: true });
+    ui = await startUi(p, { NEXTLEVEL_HOME: home });
+    const api = client(ui);
+    // (written after the dashboard's start, which records its own project and leaves out folders that are gone)
+    const st = JSON.parse(fs.readFileSync(path.join(home, 'state.json'), 'utf8'));
+    fs.writeFileSync(path.join(home, 'state.json'), JSON.stringify({ ...st, projects: [p.repo, other.repo, path.join(p.tmp, 'gone')] }));
+
+    // Today, in the live feed's data: from the ledger, with the role nextlevel doesn't list titled by its key
+    const b = (await api.get('/api/state')).json;
+    const role = (k) => b.usage.roles.find((r) => r.key === k);
+    assert.deepEqual([role('worker').count, role('worker').tokens], [1, 2150]);
+    assert.deepEqual([role('reviewer').title, role('reviewer').count, role('reviewer').tokens], ['reviewer', 1, 42]);
+    assert.deepEqual(b.usage.roundsBy.map((r) => [r.key, r.count, r.tokens]), [['job', 1, 7]]);
+    // The Build page: what the task's attempts used
+    const job = [...b.review, ...b.recent].find((j) => j.id === 'M5-03-ok');
+    assert.deepEqual([job.usage.attempts, job.usage.tokens, job.usage.reported], [1, 2150, 1]);
+    const details = (await api.get('/api/job?id=M5-03-ok')).json;
+    assert.equal(details.attempt.list.at(-1).tokens, 2150, "the attempt's own tokens");
+
+    // Another range and grouping: all time by task, the days for the chart per engine
+    const all = (await api.get('/api/usage?range=all&by=task')).json;
+    assert.equal(all.ok, true);
+    assert.deepEqual(all.rows.map((g) => [g.key, g.runs, g.tokens, g.failedTokens]).sort(), [['', 2, 49, 0], ['M5-03-ok', 1, 2150, 0], ['M5-04', 1, 1000, 1000]]);
+    assert.equal(all.rows.find((g) => g.key === '').title, 'not a task');
+    assert.ok(all.days.length >= 5, `a day each from the oldest: ${all.days.length}`);
+    assert.deepEqual(all.days[0].engines.map((e) => [e.engine, e.title, e.tokens]), [['codex', 'Codex', 1000]]);
+    assert.equal(all.days.at(-1).tokens, 2150 + 42 + 7);
+    assert.equal(all.projects, null, 'this project alone unless asked');
+    const byEngine = (await api.get('/api/usage?range=today&by=engine')).json;
+    assert.deepEqual(byEngine.rows.map((g) => [g.title, g.tokens]), [['Antigravity', 2150], ['Claude Code', 42], ['Codex', 7]]);
+    assert.deepEqual(byEngine.days, [], 'no chart for a day');
+    // A month file an agent made huge (well under the 32 MB cap): Home still reads (no spread of its lines)
+    fs.writeFileSync(path.join(p.state(), 'usage', '2026-01.jsonl'), `${JSON.stringify({ v: 1, at: '2026-01-15T10:00:00.000Z', role: 'a', engine: 'b' })}\n`.repeat(200_000));
+    const big = (await api.get('/api/state')).json;
+    assert.equal(big.ok, true, big.error);
+    assert.equal(big.usage.roles.find((r) => r.key === 'worker').tokens, 2150, "Today is today's lines");
+    assert.equal((await api.get('/api/usage?range=all&by=role')).json.rows.find((g) => g.key === 'a').runs, 200_000);
+    // All projects: a row each, one not found said; the other project's lines counted
+    const both = (await api.get('/api/usage?range=today&by=role&all=1')).json;
+    assert.deepEqual(both.projects.map((x) => [x.name, x.found, x.total?.tokens ?? null]), [[path.basename(p.repo), true, 2199], ['other', true, 99], ['gone', false, null]]);
+    // A new line is read at the next look (the cache follows the month files)
+    appendLedger(p.state(), [runRecord({ role: 'guide', engine: 'claude', at: ago(1000), minutes: 2 })]);
+    const again = (await api.get('/api/usage?range=today&by=role')).json;
+    assert.deepEqual(again.rows.find((g) => g.key === 'guide') && [again.rows.find((g) => g.key === 'guide').runs, again.rows.find((g) => g.key === 'guide').title], [1, 'Setup guide']);
+    // Only with the page's key, and only the ranges and fields there are
+    assert.equal((await request(ui.port, { path: '/api/usage?range=all&by=task' })).status, 403);
+    assert.equal((await api.get('/api/usage?range=year&by=task')).status, 400);
+    assert.equal((await api.get('/api/usage?range=all&by=secret')).status, 400);
+  } finally {
+    await stopUi(ui);
     p.cleanup();
   }
 });

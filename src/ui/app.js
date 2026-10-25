@@ -678,6 +678,11 @@ function renderHome() {
   const b = build;
   const root = $('#home');
   if (!b || selecting(root)) return;
+  if (usagePicking && Date.now() - usagePicking < PICKING_MS) {
+    usageHeld = true;
+    return;
+  }
+  usagePicking = 0;
   if (!b.ok) return root.replaceChildren(h('div.callout.bad', {}, `The dashboard couldn't read the project's state: ${b.error}`));
   const st = teamState(b);
   const ot = orchestratorTile(b);
@@ -726,7 +731,7 @@ function renderHome() {
   }
   progress.append(h('p.muted.small', {}, `Last activity ${b.lastActivity}. `, h('button.linkish', { type: 'button', onclick: () => goTo('project') }, 'The roadmap')));
 
-  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), progress, todayCard(b)))].filter(Boolean));
+  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), progress, usageCard(b)))].filter(Boolean));
 }
 
 // The update in progress, paused or just done (src/updater.mjs): its steps, what it waits for, and the owner's buttons
@@ -842,13 +847,122 @@ function tokensText(r) {
   return r.reported < done ? `${n} (${r.reported} of ${done} reported)` : n;
 }
 const runsText = (count, unit, running) => `${plural(count, unit)}${running ? `, ${running} now` : ''}`;
-// Home's "Today" (FR-008): each role's rounds, sessions or attempts, minutes and tokens, then each engine's
-function todayCard(b) {
+// A number of tokens in a few characters (the chart's scale, a task's tag)
+const compact = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : Number(n).toLocaleString());
+
+// ---------- Home's Usage card (docs/design/token-usage.md) ----------
+// Today per role comes with the live feed (what runs now counted so far); any other range, grouping or all projects is
+// read from the usage ledger (GET /api/usage). The browser remembers the choice (localStorage).
+const USAGE_KEY = 'nextlevel.usage';
+const USAGE_RANGES = [['hour', 'Last hour'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
+const USAGE_BY = [['role', 'Role'], ['engine', 'Engine'], ['model', 'Model'], ['worker', 'Worker'], ['task', 'Task']];
+const usage = { range: 'today', by: 'role', all: false, data: null, want: '', at: 0, loading: '' };
+try {
+  const v = JSON.parse(localStorage.getItem(USAGE_KEY) || '{}');
+  if (USAGE_RANGES.some(([k]) => k === v.range)) usage.range = v.range;
+  if (USAGE_BY.some(([k]) => k === v.by)) usage.by = v.by;
+  usage.all = v.all === true;
+} catch {
+  // Today, by role
+}
+function saveUsage() {
+  try {
+    localStorage.setItem(USAGE_KEY, JSON.stringify({ range: usage.range, by: usage.by, all: usage.all }));
+  } catch {
+    // kept for this page only
+  }
+}
+const usageWant = () => `range=${usage.range}&by=${usage.by}${usage.all ? '&all=1' : ''}`;
+const usageLive = () => usage.range === 'today' && usage.by === 'role' && !usage.all;
+// Read again when the choice changed, or at most every 30 s while the page updates
+async function loadUsage(force = false) {
+  const want = usageWant();
+  if (usageLive() || usage.loading === want || (!force && usage.want === want && Date.now() - usage.at < 30_000)) return;
+  usage.loading = want;
+  const r = await api(`/api/usage?${want}`);
+  if (usage.loading === want) usage.loading = '';
+  if (want !== usageWant()) return; // the owner chose another meanwhile
+  Object.assign(usage, { data: r, want, at: Date.now() });
+  renderHome();
+}
+// While a picker's list is open, Home isn't drawn again (a live update would close it); a redraw it held comes when it
+// closes. Only an open list holds it, and for 20 s at most (a list closed on the same choice says nothing): a picker
+// that merely has the focus doesn't.
+const PICKING_MS = 20_000;
+let usagePicking = 0; // when a picker's list was opened
+let usageHeld = false;
+function usagePickDone() {
+  if (!usagePicking) return;
+  usagePicking = 0;
+  if (!usageHeld) return;
+  usageHeld = false;
+  // (a blur comes on the pointerdown of what was clicked: draw after its click, or the click lands on a node that's gone)
+  let done = false;
+  const later = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener('pointerup', later, true);
+    setTimeout(renderHome, 0);
+  };
+  document.addEventListener('pointerup', later, true);
+  setTimeout(later, 500);
+}
+function usageControls() {
+  const changed = (e, set) => {
+    set(e.currentTarget);
+    usagePicking = 0;
+    usageHeld = false;
+    saveUsage();
+    loadUsage(true);
+    renderHome();
+  };
+  const opening = () => (usagePicking = Date.now());
+  const pick = (label, list, value, set) => h('label.usage-pick', {}, h('span', {}, label),
+    h('select', {
+      onchange: (e) => changed(e, set),
+      onpointerdown: opening,
+      // (the keys that open a select's list; Escape closes it without a change)
+      onkeydown: (e) => (e.key === 'Escape' || e.key === 'Tab' ? usagePickDone() : (e.altKey || [' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) && opening()),
+      onblur: usagePickDone,
+    }, list.map(([k, t]) => h('option', { value: k, selected: k === value }, t))));
+  return h('div.usage-controls', {},
+    pick('Range', USAGE_RANGES, usage.range, (el) => (usage.range = el.value)),
+    pick('Group by', USAGE_BY, usage.by, (el) => (usage.by = el.value)),
+    h('label.usage-all', {}, h('input', { type: 'checkbox', checked: usage.all, onchange: (e) => changed(e, (el) => (usage.all = el.checked)) }), 'All projects'));
+}
+// Home's "Usage": the range and grouping chosen, then its numbers
+function usageCard(b) {
+  const card = h('div.card.usage-card', {}, h('h2', {}, 'Usage'), usageControls());
+  if (usageLive()) card.append(...todayParts(b));
+  else {
+    loadUsage();
+    const d = usage.data;
+    if (!d || usage.want !== usageWant()) card.append(h('p.muted', {}, 'Reading the usage ledger...'));
+    else if (!d.ok) card.append(h('div.callout.bad', {}, d.message || "The usage ledger couldn't be read."));
+    else card.append(...rangeParts(d));
+  }
+  card.append(h('p.muted.small', {}, "Tokens as each engine reports them: Codex's JSON output (codex exec --json) and its session files, Claude Code's and Antigravity's JSON output (cache reads apart); interactive Claude Code and Antigravity windows are counted in minutes only. A run counts when it ends."));
+  return card;
+}
+// FR-019: autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
+function roundsParts(why) {
+  if (!why.length) return [];
+  return [h('h4', {}, 'Autopilot rounds, by what started them'),
+    h('table.usage', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
+      h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
+        h('td', {}, r.title),
+        h('td.num', {}, String(r.count)),
+        h('td.num', {}, String(Math.round(r.minutes))),
+        h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—')))))];
+}
+// Today per role (FR-008): each role's rounds, sessions or attempts, minutes and tokens, then each engine's
+function todayParts(b) {
   const u = b.usage || {};
-  const card = h('div.card', {}, h('h2', {}, 'Today'));
+  const out = [];
   const roles = u.roles || [];
   const row = (cells, cls = '') => h(`tr${cls}`, {}, cells.map((c, i) => h(i === 0 ? 'td' : i === 3 ? 'td.num.wrap' : 'td.num', {}, c)));
-  card.append(
+  out.push(
     h('table.usage', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Who'), h('th.num', {}, 'Runs'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
       h('tbody', {}, roles.flatMap((r) => [
@@ -856,30 +970,102 @@ function todayCard(b) {
         ...(r.engines.length > 1 || (r.engines.length === 1 && r.count) ? r.engines.map((e) => row([h('span.sub', {}, e.title), runsText(e.count, r.unit, e.running), String(Math.round(e.minutes)), tokensText(e)], '.sub')) : []),
       ]))),
   );
-  // FR-019: the day's autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
-  const why = u.roundsBy || [];
-  if (why.length) {
-    // (every engine's tokens: a column of Codex's alone showed an Argon round's as "—")
-    card.append(h('h4', {}, 'Autopilot rounds, by what started them'),
-      h('table.usage', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
-        h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
-          h('td', {}, r.title),
-          h('td.num', {}, String(r.count)),
-          h('td.num', {}, String(Math.round(r.minutes))),
-          h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—'))))));
-  }
+  out.push(...roundsParts(u.roundsBy || []));
   const engines = u.engines || [];
   if (engines.length) {
-    card.append(h('h4', {}, 'By engine'),
+    out.push(h('h4', {}, 'By engine'),
       h('table.usage', {},
         h('tbody', {}, engines.map((e) => h('tr', {},
           h('td', {}, h('strong', {}, e.title), h('div.muted.small', {}, e.parts.map((p) => plural(p.count, p.unit)).join(', ') || 'nothing yet')),
           h('td.num', {}, `${Math.round(e.minutes)} min`),
           h('td.num', { title: !e.tokensKnown ? e.notReported : '' }, e.reported ? `${Number(e.tokens).toLocaleString()} tokens` : e.tokensKnown ? 'none reported yet' : 'not reported'))))));
   }
-  card.append(h('p.muted.small', {}, "Tokens as each engine reports them: Codex's JSON output (codex exec --json) and its session files, Claude Code's and Antigravity's JSON output (cache reads not counted); interactive Claude Code and Antigravity windows are counted in minutes only."));
-  return card;
+  return out;
+}
+// A group's tokens: how many of its runs reported them, when not all did
+function groupTokens(g) {
+  if (!g.reported) return g.runs ? 'not reported' : '—';
+  const n = Number(g.tokens).toLocaleString();
+  return g.reported < g.runs ? `${n} (${g.reported} of ${g.runs} reported)` : n;
+}
+const USAGE_ROWS = 40;
+// Another range or grouping, from the usage ledger (GET /api/usage)
+function rangeParts(d) {
+  const out = [h('p.muted.small', {}, `${d.title}, ${d.since}: runs that ended in it.${d.running ? ` ${plural(d.running, 'run')} going now ${d.running === 1 ? 'counts' : 'count'} when ${d.running === 1 ? 'it ends' : 'they end'}.` : ''}`)];
+  const t = d.total;
+  if (!t) out.push(h('p.muted', {}, 'Nothing ended in this range.'));
+  else {
+    out.push(h('div.usage-total', {},
+      h('div', {}, h('strong', {}, groupTokens(t)), h('span.muted', {}, ' tokens')),
+      h('div.muted.small', {}, `${plural(t.runs, 'run')}, ${Math.round(t.minutes)} minutes${t.cached ? `, ${Number(t.cached).toLocaleString()} cache reads` : ''}`)));
+    if (d.days?.length > 1) out.push(dayChart(d.days));
+    const label = USAGE_BY.find(([k]) => k === d.by)?.[1] || d.by;
+    const rows = d.rows.slice(0, USAGE_ROWS);
+    out.push(h('table.usage', {},
+      h('thead', {}, h('tr', {}, h('th', {}, label), h('th.num', {}, 'Runs'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'), h('th.num.quiet', {}, 'Cache reads'))),
+      h('tbody', {}, rows.map((g) => h('tr', {},
+        h('td', {}, g.key && (d.by === 'task' || d.by === 'model') ? h('code.nowrap', {}, g.title) : g.title),
+        h('td.num', {}, String(g.runs)),
+        h('td.num', {}, String(Math.round(g.minutes))),
+        h('td.num.wrap', {}, groupTokens(g)),
+        h('td.num.quiet', {}, g.cached ? Number(g.cached).toLocaleString() : '—'))))));
+    if (d.rows.length > rows.length) out.push(h('p.muted.small', {}, `${d.rows.length - rows.length} more: nextlevel usage --range ${d.range} --by ${d.by} --json has them all.`));
+  }
+  if (d.projects) {
+    out.push(h('h4', {}, 'By project'),
+      h('table.usage', {}, h('tbody', {}, d.projects.map((p) => h('tr', {},
+        h('td', {}, p.name),
+        h('td.num', {}, !p.found ? 'not found' : p.total ? plural(p.total.runs, 'run') : 'nothing'),
+        h('td.num.wrap', {}, p.total ? groupTokens(p.total) : '—'))))));
+  }
+  out.push(...roundsParts(d.roundsBy || []));
+  for (const x of d.notes || []) out.push(h('p.muted.small', {}, `Note: ${x}`));
+  return out;
+}
+// The per-day chart: tokens a day, stacked by engine (each engine keeps its color whatever else is shown), a bar's numbers
+// in its tooltip. Inline SVG made with the page's DOM calls, never from HTML text.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, String(v));
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const ENGINE_ORDER = ['codex', 'claude', 'agy'];
+const engineClass = (e) => (ENGINE_ORDER.includes(e) ? `eng-${e}` : 'eng-other');
+function dayChart(days) {
+  const max = Math.max(...days.map((x) => x.tokens));
+  if (!max) return h('p.muted.small', {}, 'No engine reported tokens on these days.');
+  const W = 600;
+  const H = 120;
+  const top = 2;
+  const base = H - 1;
+  const step = W / days.length;
+  const bw = Math.max(1, step - Math.min(6, step * 0.25));
+  const order = (list) => [...list].sort((a, b) => (ENGINE_ORDER.indexOf(a.engine) + 1 || 9) - (ENGINE_ORDER.indexOf(b.engine) + 1 || 9));
+  const seen = new Map();
+  const bars = days.map((x, i) => {
+    let y = base;
+    const segs = order(x.engines).filter((e) => e.tokens > 0).map((e) => {
+      seen.set(e.engine, e.title);
+      const hgt = Math.max(1, ((base - top) * e.tokens) / max);
+      y -= hgt;
+      return svg('rect', { class: `seg ${engineClass(e.engine)}`, x: (i * step + (step - bw) / 2).toFixed(1), y: y.toFixed(1), width: bw.toFixed(1), height: hgt.toFixed(1) });
+    });
+    const tip = [`${x.day}: ${x.tokens.toLocaleString()} tokens, ${plural(x.runs, 'run')}`, ...order(x.engines).filter((e) => e.tokens > 0).map((e) => `${e.title}: ${e.tokens.toLocaleString()}`)].join('\n');
+    // (the whole column answers the pointer, not only the bar)
+    return svg('g', { class: 'day' }, svg('title', {}, tip), svg('rect', { class: 'hit', x: (i * step).toFixed(1), y: 0, width: step.toFixed(1), height: base }), ...segs);
+  });
+  const legend = [...seen].sort((a, b) => (ENGINE_ORDER.indexOf(a[0]) + 1 || 9) - (ENGINE_ORDER.indexOf(b[0]) + 1 || 9));
+  // (the scale and the dates are the page's text, so they stay readable at a phone's width)
+  return h('figure.usage-chart', {},
+    h('div.usage-axis', {}, `${compact(max)} tokens`),
+    svg('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': `Tokens a day, ${days[0].day} to ${days.at(-1).day}, by engine; the table below has the numbers` },
+      svg('line', { class: 'grid', x1: 0, x2: W, y1: top, y2: top }),
+      ...bars,
+      svg('line', { class: 'baseline', x1: 0, x2: W, y1: base, y2: base })),
+    h('div.usage-axis.dates', {}, h('span', {}, days[0].day), h('span', {}, days.at(-1).day)),
+    h('figcaption.usage-legend', {}, legend.map(([e, title]) => h('span', {}, h(`i.swatch.${engineClass(e)}`, {}), title))));
 }
 
 // Home's "Fallbacks and engine switches" (FR-008): what ran on another engine than its role's, and why
@@ -1084,6 +1270,8 @@ function jobLine(j) {
   if (j.type === 'task' && j.state !== 'queued' && (j.model || j.modelOwn)) bits.push(h('span.tag', { title: j.modelOwn ? "the engine's own choice" : '' }, j.model || 'own model'));
   if (j.effort) bits.push(h('span.tag', {}, j.effort));
   if (j.attempt > 1) bits.push(h(`span.tag${j.attempt > 3 ? '.alert' : ''}`, {}, `attempt ${j.attempt}`));
+  // what its ended attempts used, from the usage ledger (where their engines reported tokens)
+  if (j.usage?.reported) bits.push(h('span.tag', { title: `${plural(j.usage.attempts, 'attempt')} ended, ${Math.round(j.usage.minutes)} minutes${j.usage.reported < j.usage.attempts ? `; ${j.usage.reported} of them reported tokens` : ''}` }, `${compact(j.usage.tokens)} tokens`));
   // a task closed with nextlevel close (FR-021): closed, with its reason; what its job ended as stays in the tooltip
   if (j.closed) bits.push(h('span.state.s-closed', { title: j.summary }, j.closed.text));
   else bits.push(h(`span.state.s-${j.state}`, {}, j.summary));
@@ -1119,7 +1307,7 @@ function attemptBox(a) {
   if (a.list.length > 1 || a.tally) {
     out.push(h('h4', {}, 'Its attempts'));
     if (a.tally) out.push(h('p.muted.small', {}, a.tally));
-    out.push(h('ol.plain.attempts', {}, a.list.map((x) => h('li', {}, h('strong', {}, `Attempt ${x.attempt}`), x.engine ? ` · ${x.engine}${x.model ? ` (${x.model})` : ''}` : '', ` · ${x.how}`, x.commits ? ` · ${x.commits}` : ''))));
+    out.push(h('ol.plain.attempts', {}, a.list.map((x) => h('li', {}, h('strong', {}, `Attempt ${x.attempt}`), x.engine ? ` · ${x.engine}${x.model ? ` (${x.model})` : ''}` : '', ` · ${x.how}`, x.commits ? ` · ${x.commits}` : '', x.tokens !== null && x.tokens !== undefined ? ` · ${Number(x.tokens).toLocaleString()} tokens` : ''))));
   }
   return out;
 }
