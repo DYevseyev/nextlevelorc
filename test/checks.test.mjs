@@ -2008,6 +2008,12 @@ test('advisor.independent: the engine the advisor runs on, whether it is the orc
   // Pinned in nextlevel.json: no sign-in asked here (the engine's own row covers a role in nextlevel.json)
   const pinned = await check('advisor.independent', { config: { roles: { assistant: { engine: 'claude', model: 'sonnet' } } }, commands: { 'claude --version': '2.1.284 (Claude Code)', 'claude auth status': { ok: false, out: '' } } });
   assert.deepEqual([pinned.status, pinned.detail], ['ok', 'on Claude Code. Independent of the orchestrator (Codex): it can disagree with it.']);
+  // No read-only engine installed (an Antigravity orchestrator): said "isn't installed", with the install command,
+  // never a sign-in asked of a CLI that isn't there
+  const none = await check('advisor.independent', { config: { roles: { orchestrator: { engine: 'agy' }, worker: { engine: 'agy', fallback: '' } } }, commands: { 'agy --version': '1.4.6' } });
+  assert.deepEqual([none.status, none.severity], ['fail', 'warn']);
+  assert.match(none.detail, /^the advisor runs on Codex \(automatic\), which no other role uses, and it isn't installed$/);
+  assert.deepEqual(none.steps.map((s) => [s.window, s.command]), [['terminal', 'npm install -g @openai/codex']]);
 });
 
 test('every registered check is valid, has a unique id and a learnMore, and is covered above', () => {

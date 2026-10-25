@@ -881,8 +881,8 @@ command**. A determined agent, running as the owner, can still:
 - **Write the advisor's memory.** It is kept in `~/.nextlevel/advisor/<project>/memory.json`, outside the project, and
   only the owner's own window (`nextlevel ask memory`, which refuses in an agent's session) or the dashboard's Memory
   changes it. An agent running as the owner without permission checks (Antigravity) can still write the file, as it can
-  the guard's records, and steer the advice the owner reads. The panel's Memory shows where each entry came from and
-  when, so one the owner didn't add stands out.
+  the guard's records, and steer the advice the owner reads. The panel's Memory shows where each entry says it came
+  from, but whoever writes the file writes that too: an entry you don't remember adding is worth deleting.
 - **Use gh as the owner from a worker or a verify command.** Both get gh's folder with no sign-in (`GH_CONFIG_DIR`) and a
   `GH_TOKEN` that doesn't work; a command that unsets both reads the owner's keyring login again ("GitHub CLI", above).
 - **Push from a verify command anyway.** `nextlevel verify` switches Git pushes and GitHub sign-ins off through the

@@ -7132,6 +7132,16 @@ function toolDetails() {
   toolInfo = { at: Date.now(), value };
   return value;
 }
+// Whether an engine's CLI is installed (the advisor's automatic choice on the Team page), kept a minute: the dashboard
+// builds its state every 1.5 s, and looking for a CLI that isn't there starts `where` (or sh) each time
+const installedSeen = new Map();
+function installedEngine(name) {
+  const seen = installedSeen.get(name);
+  if (seen && Date.now() - seen.at < 60_000) return seen.ok;
+  const ok = !!resolveBin(engine(name).command);
+  installedSeen.set(name, { at: Date.now(), ok });
+  return ok;
+}
 function dashboardState() {
   refreshConfig();
   const jobs = allJobs();
@@ -7218,7 +7228,7 @@ function dashboardState() {
       ? { mode: orch.mode, since: orch.startedAt, engine: engineTitle(orch.engine || CFG.orchestrator.engine), model: orch.model || '', effort: orch.effort || '', log: orch.log ? tailLines(path.join(ROOT, orch.log), 20, { engineName: orch.engine }) : [] }
       : null,
     // who fills each role, with the model and effort in use (the Team page), and the engines the guide is offered on
-    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }), available: (e) => !!resolveBin(engine(e).command) }),
+    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }), available: installedEngine }),
     workerWindow: windowView(CFG.config), // how a worker's process shows (workers.window, FR-010)
     codexWorkers: { ...codexWorkersView(CFG.config), windows: IS_WIN }, // Codex workers' sandbox (engines.codex.workerArgs)
     githubChecks: githubChecksView(), // the project's GitHub checks on this PC (the self-hosted runner's part A)

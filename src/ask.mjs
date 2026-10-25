@@ -58,11 +58,16 @@ const readText = (f) => {
 
 // ---------- the briefing ----------
 // A section of the briefing: its heading and text, cut to `max` characters (the end kept for a log, else the start)
-const section = (title, text, max = 6000, { end = false } = {}) => {
+// `end`: keep its end; `entry`: there, start at the first line that begins an entry (whole entries, never one cut)
+const section = (title, text, max = 6000, { end = false, entry = null } = {}) => {
   const t = String(text || '').trim();
   if (!t) return '';
   if (t.length <= max) return `## ${title}\n${t}\n`;
-  return end ? `## ${title}\n[... cut: ${t.length - max} earlier characters]\n${t.slice(-max)}\n` : `## ${title}\n${t.slice(0, max)}\n[... cut: ${t.length - max} more characters]\n`;
+  if (!end) return `## ${title}\n${t.slice(0, max)}\n[... cut: ${t.length - max} more characters]\n`;
+  let tail = t.slice(-max);
+  const k = entry ? tail.search(entry) : -1;
+  if (k > 0) tail = tail.slice(k + 1);
+  return `## ${title}\n[... cut: ${t.length - tail.length} earlier characters]\n${tail}\n`;
 };
 // What a section reads may fail (a file an agent wrote, a store being written): the rest of the briefing still helps
 const tryText = (fn) => {
@@ -158,7 +163,7 @@ export function briefing(ctx, { thread, question, mode = 'advise', card = null, 
     // its shape check, the end of hub.log, its own verify of the last task jobs, Today's usage)
     const plan = tryText(() => ctx.plan?.());
     parts.push(section(`The current milestone's plan${plan?.file ? ` (${plan.file})` : ''}`, typeof plan === 'string' ? plan : plan?.text ? `${plan.milestone ? `Milestone: ${plan.milestone}\n` : ''}${plan.text}` : '', 6000));
-    parts.push(section(`Decisions (the end of ${config.paths.decisions || 'docs/DECISIONS.md'})`, tryText(() => ctx.decisions?.()), 4000, { end: true }));
+    parts.push(section(`Decisions (the end of ${config.paths.decisions || 'docs/DECISIONS.md'})`, tryText(() => ctx.decisions?.()), 4000, { end: true, entry: /\n(?=- \d{4}-\d{2}-\d{2}\b)/ }));
     parts.push(section('The last autopilot rounds (the hub)', tryText(() => ctx.rounds?.()), 2000, { end: true }));
     parts.push(section("The hub's log (its end)", tryText(() => ctx.hubLog?.()), 3000, { end: true }));
     parts.push(section("The hub's own verify of the last task jobs", tryText(() => ctx.verifies?.()), 3000));

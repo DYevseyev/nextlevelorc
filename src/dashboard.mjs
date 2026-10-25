@@ -434,7 +434,11 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
       if (b.action === 'rename') return [200, { ok: true, thread: api.chats.rename(id, String(b.title || '').slice(0, 120)) }];
       if (b.action === 'clear') return [200, { ok: true, thread: api.chats.clear(id) }];
       if (b.action === 'delete') return [200, { ok: true, deleted: api.chats.remove(id) ?? id }];
-      return [400, { ok: false, message: 'action must be new, rename, clear or delete' }];
+      if (b.action === 'sent') {
+        if (!Number.isInteger(b.index) || !Number.isInteger(b.draft) || typeof b.at !== 'string') return [400, { ok: false, message: 'which answer and draft?' }];
+        return [200, { ok: true, thread: api.chats.markSent(id, b.index, b.at, b.draft, String(b.label || '')) }];
+      }
+      return [400, { ok: false, message: 'action must be new, rename, clear, delete or sent' }];
     } catch (err) {
       return [409, { ok: false, message: err.message }];
     }

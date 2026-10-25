@@ -41,6 +41,11 @@ export const advisorCheck = {
     const on = `${ADAPTERS[p.engine].title}${p.auto ? ' (automatic)' : ''}`;
     if (p.auto && !ctx.uses(p.engine) && ADVISOR_LOGIN[p.engine]) {
       const eng = ADAPTERS[p.engine];
+      // (no read-only engine installed: the automatic choice falls back to one that isn't there)
+      if (!ctx.which(eng.command)) {
+        const how = TOOLS[p.engine].install(ctx);
+        return fail(`the advisor runs on ${on}, which no other role uses, and it isn't installed`, { severity: 'warn', next: 'install it, or choose another engine for the advisor on the Team page', steps: [how.command ? step('terminal', how.command) : step('terminal', null, { text: how.text })] });
+      }
       const r = eng.loginResult(ctx.run(eng.command, eng.login.status, { cacheMs: RUN_CACHE_MS, timeoutMs: 30000 }));
       if (!r.ok) {
         const [command, text] = ADVISOR_LOGIN[p.engine];

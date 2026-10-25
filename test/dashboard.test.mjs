@@ -1101,6 +1101,17 @@ test('Ask: the panel on every page, a question answered read-only, its threads, 
     const explained = await api.post('/api/ask', { card: 'H1' });
     assert.equal(explained.status, 200, explained.text);
     assert.deepEqual([explained.json.answer.mode, explained.json.thread.title], ['explain', 'Explain H1']);
+    // a draft the owner sent is marked on its answer in the thread, so a reload shows it sent and never its Send again
+    const eid = explained.json.thread.id;
+    const msgs = (await api.get(`/api/chat?id=${eid}`)).json.thread.messages;
+    const at = msgs.length - 1;
+    const answer = msgs[at];
+    assert.equal(answer.drafts[0].kind, 'note');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: 'an old time', draft: 0, label: 'Sent as a note' })).status, 409, 'another answer');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: answer.at, draft: 9, label: 'x' })).status, 409, 'no such draft');
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: '1', at: answer.at, draft: 0 })).status, 400);
+    assert.equal((await api.post('/api/chats', { action: 'sent', id: eid, index: at, at: answer.at, draft: 0, label: 'Sent as a note' })).status, 200);
+    assert.deepEqual((await api.get(`/api/chat?id=${eid}`)).json.thread.messages[at].sent, { 0: 'Sent as a note' });
     const est = await api.get('/api/ask/estimate?mode=advise');
     assert.equal(est.status, 200, est.text);
     assert.ok(est.json.tokens > 100 && est.json.tokens === Math.round(est.json.chars / 4));

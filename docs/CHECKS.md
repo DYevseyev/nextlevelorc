@@ -529,7 +529,9 @@ run read-only (Claude Code, then Codex) that isn't the orchestrator's and is ins
 "Same engine as the orchestrator", with `nextlevel team set assistant --engine claude` to change it). **info**: one
 engine is fine. When the automatic choice is an engine no other role uses, no other sign-in row covers it, so this one
 asks that engine whether it is signed in, and says so as a **warn** with its login command (`claude auth login`,
-`codex login`, PowerShell) when it isn't. See `docs/design/advisor.md`.
+`codex login`, PowerShell) when it isn't. When no engine that can run read-only is installed at all (an Antigravity
+team), the automatic choice falls back to Codex, and this row says it isn't installed (a **warn** with its install
+command) instead of asking a missing CLI for its sign-in. See `docs/design/advisor.md`.
 
 ## The repository
 

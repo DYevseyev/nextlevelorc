@@ -494,4 +494,11 @@ test('the advisor\'s pieces: drafts, the memory store and its shape check, the a
   const size = briefingSize(ctx, { mode: 'advise' });
   assert.ok(size.chars > quick.length && size.tokens === Math.round(size.chars / 4));
   assert.ok(briefingSize(ctx, { mode: 'quick' }).chars < size.chars);
+  // Decisions kept as whole entries: the cut starts at an entry's first line, never inside one
+  const entries = Array.from({ length: 40 }, (_, n) => `- 2026-10-${String((n % 28) + 1).padStart(2, '0')} — **Decision ${n}.** ${'why '.repeat(30)}\n  ${'more '.repeat(20)}`).join('\n');
+  const whole = briefing({ ...ctx, decisions: () => `# Decisions\n${entries}` }, { thread: null, question: 'q' });
+  const kept = whole.match(/## Decisions[^\n]*\n\[\.\.\. cut: \d+ earlier characters\]\n([^\n]*)/);
+  assert.ok(kept, 'the decisions are cut');
+  assert.match(kept[1], /^- 2026-10-\d{2} — \*\*Decision \d+\.\*\*/);
+  assert.match(whole, /Decision 39\./);
 });

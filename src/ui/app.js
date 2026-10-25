@@ -2026,12 +2026,15 @@ function askCardOf(id) {
 }
 function askDraftBox(m, i, d, j) {
   const key = `${ask.thread?.id || ''}:${i}:${j}`;
-  if (ask.drafted.has(key)) return h('div.ask-draft.sent', {}, h('span.badge.good', {}, ask.drafted.get(key)));
+  const sent = ask.drafted.get(key) || (m.sent && typeof m.sent === 'object' ? m.sent[j] : '');
+  if (sent) return h('div.ask-draft.sent', {}, h('span.badge.good', {}, String(sent)));
   const busy = ask.sending.has(key);
   const text = ask.drafted.get(`${key}:text`) ?? d.text ?? '';
   const done = (label) => {
     ask.drafted.set(key, label);
     renderAsk();
+    // kept on the answer in its thread, so a reload shows it sent too (never a second Send)
+    if (ask.thread?.id) api('/api/chats', { action: 'sent', id: ask.thread.id, index: i, at: m.at, draft: j, label }).catch(() => {});
   };
   const send = async (fn, label) => {
     if (busy) return;

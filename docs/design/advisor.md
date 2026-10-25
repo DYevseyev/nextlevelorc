@@ -105,7 +105,8 @@ file: changing that file changes the lock test's key (`roleKey`).
   A sent note or reply does, as on the Notes page.
 - **Not a wall:** like the guard's records, it is outside every agent's folder, but an agent running as the owner
   without permission checks (Antigravity) could still write the file (`docs/KNOWN_ISSUES.md`; FR-017 part 2B closes
-  it). The Memory tab shows each entry's origin, so an entry the owner didn't add stands out.
+  it). The Memory tab shows where each entry says it came from (which whoever writes the file writes too): an entry the owner
+  doesn't remember adding is worth deleting.
 
 ## 5. How it advises, and its drafts
 
