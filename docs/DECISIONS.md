@@ -1980,3 +1980,15 @@ One entry each: date, decision, why, alternatives.
   the focus holds nothing. A project whose hub hasn't started on this version yet (its dashboard only) hasn't brought
   in what `usage.json` counted before, so its numbers start at the ledger's first line until its hub starts; the update
   restarts the hubs, so this lasts only where a hub wasn't running.
+- 2026-10-26 — **Undo Done is a pending change on the card, not a timer; closings are events beside the thread.** A Done
+  from the dashboard writes only `pending` (with when it becomes final), so the team, autopilot and docs/HANDOFF.md see
+  nothing for 10 seconds, and nothing needs the page or a process to stay up: every reader past that time sees it final,
+  and the next write (any change, the hub's tick, the dashboard's) makes it so on disk, a tick with nothing due writing
+  nothing. Any other write on that card makes the Done final first, in a write of its own, so a refused cancel never
+  takes the owner's click back with it and a team answer is never hidden under it; Undo then says "Too late" and offers
+  Reopen. Only the dashboard's Done waits: a typed `nextlevel handoff done` is deliberate, and the owner has no Cancel.
+  A card's closings and reopenings are a list of their own (`events`), not entries in `thread`, which older readers take
+  to be messages with text. FR-018 adds no status (an older version would misread one): a card the team closes is
+  `done` with `closedBy: 'team'`, and a cancel on a card the owner replied to becomes that close, so an orchestrator on
+  an older role doc doesn't repeat H18. The cards redesign and undo Done went in one pull request: both rewrite the
+  same card, and one Windows run is about 20 paid minutes.

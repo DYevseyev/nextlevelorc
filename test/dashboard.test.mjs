@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { mergePath } from '../src/lib/proc.mjs';
-import { BIN, REPO, fileExists, installedTool, isAlive, makeProject, processesGone, sleep, waitUntil, withEnv } from './helpers.mjs';
+import { BIN, REPO, fileExists, installedTool, isAlive, makeProject, processesGone, sleep, testClock, waitUntil, withEnv } from './helpers.mjs';
 import { client, launchUi, linksIn, request, startUi, stopUi, trade } from './ui-helpers.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -379,6 +379,7 @@ test('Report and fix: the page gets the report\'s exact text, filing needs that 
 
 test('Build shows the hub, milestones, workers with their log, reviews and handoff items; the controls work', async () => {
   const p = makeProject();
+  const clock = testClock(p, Date.now());
   let ui;
   let live;
   const secret = 'planted-secret-value-9c1e';
@@ -393,7 +394,7 @@ test('Build shows the hub, milestones, workers with their log, reviews and hando
     p.hub(['dispatch', 'M1-01-ok']);
     p.hub(['dispatch', 'M1-02-slow']);
 
-    ui = await startUi(p);
+    ui = await startUi(p, clock.env);
     live = feed(ui);
     const api = client(ui);
     const first = await live.until('build');
@@ -445,7 +446,11 @@ test('Build shows the hub, milestones, workers with their log, reviews and hando
     assert.equal(item.id, 'H1');
     const tick = await api.post('/api/handoff', { action: 'done', id: 'H1' });
     assert.equal(tick.status, 200, tick.text);
-    assert.match(fs.readFileSync(path.join(p.repo, 'docs', 'HANDOFF.md'), 'utf8'), /^- \[x\] \*\*H1\*\* Add the SMTP password to \.env$/m);
+    // (undo Done: final 10 seconds later, by the test clock; until then the file still has it open)
+    const handoffMd = () => fs.readFileSync(path.join(p.repo, 'docs', 'HANDOFF.md'), 'utf8');
+    assert.match(handoffMd(), /^- \[ \] \*\*H1\*\* Add the SMTP password to \.env$/m);
+    clock.addSeconds(11);
+    await waitUntil('the Done made final', () => /^- \[x\] \*\*H1\*\* Add the SMTP password to \.env$/m.test(handoffMd()));
     const again = await api.post('/api/handoff', { action: 'done', id: 'H1' });
     assert.equal(again.status, 409);
     assert.match(again.json.message, /H1 is done already/);

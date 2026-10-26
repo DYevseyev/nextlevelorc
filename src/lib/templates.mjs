@@ -33,7 +33,8 @@ export const templateHash = (text) => createHash('sha256').update(String(text).r
 // fallback (a real project's task reached attempt 13, its review rounds all retries of one task); and the
 // orchestrator's before FR-021 had no way to close a task it won't build (a real project's orchestrator closed five at the owner's
 // word by writing "closed" in their specs, and the Project page counted them as planned); and the orchestrator's before
-// Codex workers' part B knew no second worker and no "Needs:" line, and told it never to pick an engine itself.
+// Codex workers' part B knew no second worker and no "Needs:" line, and told it never to pick an engine itself; and the
+// orchestrator's before handoff close (FR-018) knew only cancel, and nothing of a reopened card.
 export const OLD_TEMPLATES = {
   'docs/agents/ORCHESTRATOR.md': [
     'bb38c3a0a3ed60ea7e5cfa9d41bca9765be25ee1dc67223ff1d724b85fa30be5', // M1
@@ -54,6 +55,7 @@ export const OLD_TEMPLATES = {
     'e8f15cab01b9efd38acc151be25b4dec427fcd06115f5fce14ad61dbcef029b3', // FR-020 (a push that changes a protected file unsaid)
     'c7a340293bdfc33d61b4f31b10f811bbc69a81acc60829f0e70f6900e4b3ca73', // the push guard, #37 (no second worker, no Needs: lines)
     '14d6eb904a5685f77c6ac6b311ee8c4049dedb619b9f1494bd9a8ff96889de0a', // Codex workers' part B (the first public version reworded one example)
+    '34846aac319924a1dc8809377c681b7ef56491c2967c4f637de7dc04ff90dde7', // the public versions to v0.2.0 (only cancel, no reopened cards)
   ],
   'docs/agents/WORKER.md': [
     '76eb1176642564d6e2612d232aacc0433041ad191327f2b69809251e29923d21', // M1

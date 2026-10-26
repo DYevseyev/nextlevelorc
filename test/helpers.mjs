@@ -406,3 +406,32 @@ export function consoleWorksHere() {
   consoleAnswer = r.stdout === 'yes';
   return consoleAnswer;
 }
+
+// The test's clock (lib/clock.mjs, NEXTLEVEL_TEST_CLOCK): { set(iso|ms), add(minutes), addSeconds(s), env }. The time
+// stands where the test puts it, so an hour, or an Undo's 10 seconds, passes without waiting for it.
+export function testClock(p, at) {
+  const file = path.join(p.tmp, 'clock.json');
+  const clock = {
+    file,
+    now: 0,
+    env: { NEXTLEVEL_TEST_CLOCK: file },
+    set(t) {
+      clock.now = typeof t === 'number' ? t : Date.parse(t);
+      const tmp = `${file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ at: new Date(clock.now).toISOString() }));
+      for (let i = 0; ; i++) {
+        try {
+          fs.renameSync(tmp, file);
+          return;
+        } catch (err) {
+          if (i > 50) throw err; // (Windows: the hub may be reading it)
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        }
+      }
+    },
+    add: (min) => clock.set(clock.now + min * 60_000),
+    addSeconds: (sec) => clock.set(clock.now + sec * 1000),
+  };
+  clock.set(at);
+  return clock;
+}

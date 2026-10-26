@@ -255,6 +255,11 @@ export function ownerNeeds(b, checks = {}) {
   const items = (b.handoff || b.waiting.map((what) => ({ what }))).filter((x) => !x.guard);
   for (const x of items) {
     const what = String(x.what || '').split('\n')[0].trim();
+    // (marked done on the dashboard, and still undoable: nothing reached the team yet. `pending`: when it is final)
+    if (x.pending?.finalAt && x.id) {
+      needs.push({ kind: 'pending', level: 'info', id: x.id, text: `${x.id}: marked ${x.unread ? 'read' : 'done'}: ${what}`, why: '', pending: x.pending.finalAt, action: { label: 'Undo', post: '/api/handoff', body: { action: 'undo', id: x.id } }, more: null });
+      continue;
+    }
     if (x.unread && x.id) {
       needs.push({ kind: 'answer', level: 'warn', id: x.id, text: `${x.id}: the team answered: ${what}`, why: x.why || '', action: { label: 'Read the answer', page: 'notes', focus: x.id }, more: null });
       continue;

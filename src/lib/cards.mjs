@@ -15,6 +15,13 @@
 //   'team', text, at }, each text whole with its line breaks; `reply`/`repliedAt` are the owner's last reply (what
 //   older nextlevels read), `answeredAt` the team's last answer, `readAt` when the owner marked an answer on a done
 //   card read. A card the team answered waits for the owner until the owner replies or marks it done.
+//   Since undo Done and FR-018: `pending` ({ action: 'done', reply, at, finalAt }) is a Done from the dashboard that
+//   can still be undone: until `finalAt` the card is what it was for everyone (the team, autopilot, the Markdown), and
+//   any writer or reader past `finalAt` makes it final (`settle`), so it never needs the page or a timer. `closedBy`
+//   ('owner' | 'team') says whose a done card's closing was (the team closes one with `close`, after the owner acted);
+//   `events` ({ kind: 'done' | 'closed' | 'cancelled' | 'reopened', by, how, note, at }) are the card's closings and
+//   reopenings, beside `thread` (messages only, as older readers know it); `reopenedAt` and `reopenedHow` ('dashboard'
+//   | 'terminal' | 'reply') the last reopening, which the orchestrator is told of.
 //
 // The first time a store is needed, the project's current Markdown is imported (bullets under "New" become new
 // notes, under "Done" done ones; "- [ ]" items become open handoff items, "- [x]" done ones). A file edited by
@@ -28,6 +35,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { clockNow } from './clock.mjs';
 import { withFileLock } from './filelock.mjs';
 import { cleanText } from './textin.mjs';
 
@@ -36,12 +44,15 @@ const VERSION = 1;
 export const MAX_MESSAGE = 20_000;
 export const MAX_REQUEST = 4000;
 export const MAX_LINE = 2000;
+// How long a Done on the dashboard can be undone (undo Done): the card's `pending.finalAt` is this after the click
+export const UNDO_MS = 10_000;
 const count = (n) => n.toLocaleString('en-US');
 const hash = (text) => createHash('sha256').update(String(text).replace(/\r\n/g, '\n')).digest('hex').slice(0, 16);
-// Times that only go forward in this process: "did the owner answer after the team last looked" compares them
+// Times that only go forward in this process: "did the owner answer after the team last looked" compares them. From
+// lib/clock.mjs: the tests move a test clock past an Undo's 10 seconds instead of waiting for them.
 let last = 0;
 const now = () => {
-  last = Math.max(Date.now(), last + 1);
+  last = Math.max(clockNow(), last + 1);
   return new Date(last).toISOString();
 };
 const norm = (s) => String(s || '').replace(/\*\*[NH]\d+\*\*/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -160,7 +171,7 @@ function markdownItems(text, { checkboxes }) {
       }
       cur.entry = null;
       // its fields: "- Where: ..." (as nextlevel writes them), or "Where: ..." on a line of its own
-      const labels = 'Where|Why|Reply|Replied|Added|Asked|Seen|Done|Declined|Withdrawn|Removed|Edited|Switched off|Cancelled';
+      const labels = 'Where|Why|Reply|Replied|Added|Asked|Seen|Done|Declined|Withdrawn|Removed|Edited|Switched off|Cancelled|Closed|Reopened';
       const sub = line.trim().match(new RegExp(`^[-*]\\s+(${labels})\\b:?\\s*(.*)$`, 'i')) || line.trim().match(new RegExp(`^(${labels}):\\s*(.*)$`, 'i'));
       if (sub) {
         const key = sub[1].toLowerCase();
@@ -276,9 +287,11 @@ export function handoffMarkdown(items, { store = '.nextlevel/handoff.json' } = {
     if (x.where) out.push(`  - Where: ${x.where}`);
     if (x.why) out.push(`  - Why: ${x.why}`);
     out.push(`  - Asked ${when(x.createdAt)}${x.task ? ` (task ${x.task})` : ''}`);
-    for (const e of threadOf(x)) out.push(`  - The ${e.by === 'team' ? 'team answered' : 'owner replied'} ${when(e.at)}:`, '', quoted(e.text, '    '), '');
-    if (x.status === 'done') out.push(`  - Done ${when(x.doneAt)} by the owner`);
-    if (x.status === 'cancelled') out.push(`  - Cancelled ${when(x.doneAt)}: ${x.note || 'no longer needed'}`);
+    // (the replies and answers, and the card's closings and reopenings, in time order: undo Done, FR-018)
+    for (const e of conversation(x)) {
+      if (e.text !== undefined) out.push(`  - The ${e.by === 'team' ? 'team answered' : 'owner replied'} ${when(e.at)}:`, '', quoted(e.text, '    '), '');
+      else out.push(`  - ${eventWords(e, when)}`);
+    }
     return out.join('\n');
   };
   return [
@@ -330,6 +343,35 @@ export function threadOf(x) {
     list.splice(i < 0 ? list.length : i, 0, entry);
   }
   return list;
+}
+// A card's closings and reopenings (undo Done, FR-018), oldest first. A card closed before them has none kept: its one
+// closing is read from its state (a done card's the owner's, as every one was then, unless `closedBy` says the team's).
+const EVENT_KINDS = new Set(['done', 'closed', 'cancelled', 'reopened']);
+const HOW = new Set(['dashboard', 'terminal', 'reply']);
+const BY = new Set(['owner', 'team', 'hub']);
+export function eventsOf(x) {
+  const list = Array.isArray(x.events)
+    ? x.events.filter((e) => e && EVENT_KINDS.has(e.kind)).map((e) => ({ kind: e.kind, by: BY.has(e.by) ? e.by : 'owner', how: HOW.has(e.how) ? e.how : '', note: typeof e.note === 'string' ? e.note : '', at: e.at || null }))
+    : [];
+  // (a held change's card the hub closed itself: "Closed by nextlevel", never "Done by you")
+  // (and a card closed again by an older version, or ticked in the Markdown, after a reopening: its closing from its state)
+  const unsaid = x.status !== 'open' && (!list.length || list.at(-1).kind === 'reopened');
+  if (unsaid && x.status === 'done') list.push({ kind: x.closedBy === 'team' ? 'closed' : 'done', by: BY.has(x.closedBy) ? x.closedBy : 'owner', how: '', note: x.closedBy === 'team' ? x.note || '' : '', at: x.doneAt || null });
+  if (unsaid && x.status === 'cancelled') list.push({ kind: 'cancelled', by: 'team', how: '', note: x.note || '', at: x.doneAt || null });
+  return list;
+}
+// The thread's messages and the card's events in one list, by time (an event at the same time as a message after it)
+export function conversation(x) {
+  const all = [...threadOf(x).map((e, i) => ({ ...e, i, k: 0 })), ...eventsOf(x).map((e, i) => ({ ...e, i, k: 1 }))];
+  return all.sort((a, b) => ms(a.at) - ms(b.at) || a.k - b.k || a.i - b.i).map(({ i, k, ...e }) => e);
+}
+// An event in the Markdown's and the terminal's words. `when(iso)`: the time as the reader says it.
+export function eventWords(e, at = when) {
+  const t = at(e.at);
+  if (e.kind === 'done') return e.by === 'hub' ? `Closed by nextlevel ${t}` : `Done ${t} by the owner`;
+  if (e.kind === 'closed') return `Closed by the team ${t}${e.note ? `: ${e.note}` : ''}`;
+  if (e.kind === 'cancelled') return `Cancelled ${t}: ${e.note || 'no longer needed'}`;
+  return `Reopened ${t} by the owner${e.how === 'reply' ? ' (by a reply)' : e.how === 'terminal' ? ' (from the terminal)' : ''}`;
 }
 // The team answered after the owner's last reply, and after the owner marked the card done or read the answer
 export const unreadAnswer = (x) => x.status !== 'cancelled' && !!x.answeredAt && ms(x.answeredAt) > Math.max(ms(x.repliedAt), x.status === 'done' ? ms(x.doneAt) : 0, ms(x.readAt));
@@ -402,6 +444,8 @@ export function cardStore({ root, stateDir, files, onLock }) {
         path.join(stateDir, 'cards'),
         (stillMine) => {
           const { data } = load(kind);
+          // (a Done past its Undo becomes final first, in the same write as this change: never lost to it)
+          if (kind === 'handoff') settleIn(data);
           const r = fn(data);
           data.next = Math.max(data.next || 1, ...data.items.map((x) => Number(x.id.slice(1)) + 1 || 1));
           const md = KINDS[kind].markdown(data.items, { store: storeName(kind) });
@@ -551,8 +595,20 @@ export function cardStore({ root, stateDir, files, onLock }) {
   const guarded = (x) => {
     if (x.guard) throw new Error(`${x.id} is a change nextlevel holds (${x.guard}): the owner approves or rejects it on the dashboard (Notes and handoffs), where its exact diff is. It can't be done, answered or cancelled from here.`);
   };
+  // (a reader past a Done's Undo sees it final, before anyone wrote it: settled in what it reads, never written here)
+  const settled = () => {
+    const { data } = load('handoff');
+    settleIn(data);
+    return data;
+  };
+  // A card's pending Done made final in a write of its own before another write on it, so that one being refused
+  // (a cancel on a card now done) never takes the owner's Done back with it
+  const settleFirst = (id) => {
+    const x = load('handoff').data.items.find((i) => i.id.toLowerCase() === String(id || '').trim().toLowerCase());
+    if (x?.pending) change('handoff', (data) => settleCard(data, find(data, id)));
+  };
   const handoff = {
-    list: () => load('handoff').data.items,
+    list: () => settled().items,
     add({ what, where, why, task = '' }) {
       return change('handoff', (data) => {
         const at = now();
@@ -583,51 +639,84 @@ export function cardStore({ root, stateDir, files, onLock }) {
           .filter((x) => x.guard === guard && x.status === 'open')
           .map((x) => {
             ownerSays(x, oneLine(reply, 'the decision').slice(0, 1000), at);
-            return Object.assign(x, { status: 'done', doneAt: at });
+            // (whose closing it was: the owner's Approve or Reject, or the hub's own, FR-018)
+            return Object.assign(x, { status: 'done', doneAt: at, closedBy: hub ? 'hub' : 'owner' });
           });
         if (list.length && !hub) acted(data, `your decision on ${list.map((x) => x.id).join(', ')}`, at);
         return list;
       });
     },
     // The owner's side. Done on a card the team answered after it was done: the answer is read (the team isn't woken
-    // for that, unless the owner says something with it).
-    done(id, { reply = '' } = {}) {
+    // for that, unless the owner says something with it). `delay` (the dashboard's Done, UNDO_MS): nothing changes but
+    // `pending`, which becomes this Done once its time has passed, unless the owner undoes it first.
+    done(id, { reply = '', delay = 0 } = {}) {
+      if (!delay) settleFirst(id);
       return change('handoff', (data) => {
         const x = find(data, id);
         guarded(x);
+        if (x.pending && delay > 0) throw new Error(`${x.id} is marked done already: Undo, or wait until it is final`);
+        settleCard(data, x);
         const r = cleanText(reply);
         const said = r.trim() ? ownerText(r) : '';
         const at = now();
-        if (x.status === 'done' && unreadAnswer(x)) {
-          if (said) {
-            ownerSays(x, said, at);
-            acted(data, `your reply on ${x.id}`, at);
-          }
-          return Object.assign(x, { readAt: at, updatedAt: at });
+        if (!(x.status === 'done' && unreadAnswer(x)) && x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
+        if (delay > 0) {
+          // (`was`: what the click was made on; it becomes final only on a card still in that state)
+          x.pending = { action: 'done', was: x.status, reply: said, at, finalAt: new Date(ms(at) + delay).toISOString() };
+          return x;
         }
-        if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
-        if (said) ownerSays(x, said, at);
-        acted(data, said ? `your reply on ${x.id}, marked done` : `you marked ${x.id} done`, at);
-        return Object.assign(x, { status: 'done', doneAt: at, updatedAt: at });
+        return markDone(data, x, said, at);
       });
     },
-    reply(id, reply) {
+    // Undo a pending Done (only before its time: settled first, a Done past it is final and "too late")
+    undo(id) {
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        if (!x.pending) throw new Error(x.status === 'open' ? `${x.id} has no Done to undo` : `Too late: ${x.id} is ${x.status} now. Reopen it if you need to.`);
+        delete x.pending;
+        return x;
+      });
+    },
+    // Back to "The team needs from you", with its whole thread (`how`: dashboard, terminal, or reply: a reply on a
+    // closed card reopens it first). What the team did since isn't undone: its next round is told the card is open again.
+    reopen(id, { how = 'dashboard' } = {}) {
+      settleFirst(id);
       return change('handoff', (data) => {
         const x = find(data, id);
         guarded(x);
+        settleCard(data, x);
+        if (x.status === 'open') throw new Error(`${x.id} is open`);
+        const at = now();
+        reopenIn(x, how, at);
+        acted(data, `you reopened ${x.id}`, at);
+        return x;
+      });
+    },
+    reply(id, reply) {
+      settleFirst(id);
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        guarded(x);
+        settleCard(data, x);
         const said = ownerText(reply);
         const at = now();
+        // (FR-018: a reply on a closed card is a follow-up the team must see: it reopens the card)
+        const closed = x.status !== 'open';
+        if (closed) reopenIn(x, 'reply', at);
         ownerSays(x, said, at);
-        acted(data, `your reply on ${x.id}`, at);
+        acted(data, closed ? `your reply on ${x.id}, which reopened it` : `your reply on ${x.id}`, at);
         return x;
       });
     },
     // The team's answer on a card (FR-014): whole, with its line breaks, after the owner's words; the owner reads it on
     // the card, which waits for the owner again until the owner replies or marks it done
     answer(id, text) {
+      settleFirst(id);
       return change('handoff', (data) => {
         const x = find(data, id);
         guarded(x);
+        // (an owner's pending Done is made final first: the answer then waits for the owner on a done card, FR-014)
+        settleCard(data, x);
         if (x.status === 'cancelled') throw new Error(`${x.id} is cancelled: ask the owner with a new item (nextlevel handoff add --file <path>)`);
         const said = whole(text, 'the answer', MAX_MESSAGE, 'put the long part in a file under docs/, commit it, and name it in the answer');
         const at = now();
@@ -644,26 +733,107 @@ export function cardStore({ root, stateDir, files, onLock }) {
         return ids.map((id) => Object.assign(find(data, id), { seenAt: at }));
       });
     },
+    // Withdrawn: no longer needed, before the owner acted. On a card the owner replied to it is closed as resolved
+    // instead (FR-018: "Cancelled" after the owner's "Deployed" read as abandoned), and `closedInstead` says so.
     cancel(id, { reply }) {
+      settleFirst(id);
       return change('handoff', (data) => {
         const x = find(data, id);
         guarded(x);
+        settleCard(data, x);
         if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
         const at = now();
-        return Object.assign(x, { status: 'cancelled', note: line(reply, 'why'), doneAt: at, updatedAt: at, seenAt: at });
+        if (threadOf(x).some((e) => e.by === 'owner')) return { ...closeIn(x, whole(reply, 'why', MAX_MESSAGE, 'put the long part in a file under docs/, commit it, and name it here'), at), closedInstead: true };
+        const note = line(reply, 'why');
+        x.events = [...eventsOf(x), { kind: 'cancelled', by: 'team', how: '', note, at }];
+        return Object.assign(x, { status: 'cancelled', note, doneAt: at, updatedAt: at, seenAt: at });
       });
     },
+    // Closed as resolved by the team (FR-018): the owner did it or answered, and nothing is left; with the team's note
+    close(id, { note }) {
+      settleFirst(id);
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        guarded(x);
+        settleCard(data, x);
+        if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
+        const said = whole(note, 'what resolved it', MAX_MESSAGE, 'put the long part in a file under docs/, commit it, and name it here');
+        return closeIn(x, said, now());
+      });
+    },
+    // Make every Done past its Undo final, in a write (the hub's tick, the dashboard): nothing is written when none is
+    settle() {
+      if (!load('handoff').data.items.some(due)) return [];
+      return change('handoff', () => []);
+    },
   };
+  // (the store's own steps on a card, inside a change)
+  function markDone(data, x, said, at) {
+    if (x.status === 'done' && unreadAnswer(x)) {
+      if (said) {
+        ownerSays(x, said, at);
+        acted(data, `your reply on ${x.id}`, at);
+      }
+      return Object.assign(x, { readAt: at, updatedAt: at });
+    }
+    if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
+    if (said) ownerSays(x, said, at);
+    acted(data, said ? `your reply on ${x.id}, marked done` : `you marked ${x.id} done`, at);
+    x.events = [...eventsOf(x), { kind: 'done', by: 'owner', how: '', note: '', at }];
+    return Object.assign(x, { status: 'done', closedBy: 'owner', doneAt: at, updatedAt: at });
+  }
+  // (what the owner had read stays read: an answer read before Done isn't new again; the closing a card from before
+  // these events had only in its state is written first, so the reopen never hides it)
+  function reopenIn(x, how, at) {
+    const h = HOW.has(how) ? how : 'dashboard';
+    x.events = [...eventsOf(x), { kind: 'reopened', by: 'owner', how: h, note: '', at }];
+    const readAt = Math.max(ms(x.readAt), ms(x.doneAt));
+    delete x.closedBy;
+    Object.assign(x, { status: 'open', doneAt: null, readAt: readAt ? new Date(readAt).toISOString() : null, note: '', reopenedAt: at, reopenedHow: h, updatedAt: at });
+  }
+  // Closed as resolved by the team: its words whole in the thread (FR-014's rule), the event and `note` their first line
+  function closeIn(x, text, at) {
+    const note = firstLine(text).slice(0, 400);
+    x.thread = threadOf(x);
+    x.thread.push({ by: 'team', text, at });
+    x.events = [...eventsOf(x), { kind: 'closed', by: 'team', how: '', note, at }];
+    return Object.assign(x, { status: 'done', closedBy: 'team', note, doneAt: at, updatedAt: at, seenAt: at });
+  }
+  // A pending Done whose time has come (by lib/clock.mjs)
+  const due = (x) => !!x.pending && ms(x.pending.finalAt) <= clockNow();
+  // Each due Done made as it would have been at the click's end: an owner's act, the Markdown written with the change.
+  function settleIn(data) {
+    for (const x of data.items.filter(due)) settleCard(data, x);
+  }
+  // A card's pending Done made final now, due or not (any write on the card but Undo does it first: the owner's click is
+  // never lost, the team's words never hidden). Only on a card still as it was clicked; on any other (an older version
+  // changed it after a Go back) the pending is dropped, its reply kept in the thread, nothing reopened.
+  function settleCard(data, x) {
+    if (!x.pending) return;
+    const p = x.pending;
+    delete x.pending;
+    const reply = typeof p.reply === 'string' ? p.reply : '';
+    const at = now();
+    const was = p.was || 'open';
+    if (x.status === was && (was === 'open' || unreadAnswer(x))) {
+      markDone(data, x, reply, at);
+      return;
+    }
+    if (reply.trim()) {
+      ownerSays(x, reply, at);
+      acted(data, `your reply on ${x.id}`, at);
+    }
+  }
 
   // Something the orchestrator hasn't answered or picked up: a new note or rule (on), a handoff item the owner
   // did or replied to since it last looked.
   const news = () => ({
     notes: notes.list().filter((n) => n.status === 'new' && !n.off).map((n) => n.id),
-    handoff: handoff.list().filter((x) => x.status !== 'cancelled' && Math.max(Date.parse(x.doneAt || 0) || 0, Date.parse(x.repliedAt || 0) || 0) > (Date.parse(x.seenAt || 0) || 0)).map((x) => x.id),
+    handoff: handoff.list().filter((x) => x.status !== 'cancelled' && Math.max(ms(x.doneAt), ms(x.repliedAt), ms(x.reopenedAt)) > ms(x.seenAt)).map((x) => x.id),
   });
   // What the owner did on each store, as counted (FR-019): { notes: { n, at, what }, handoff: { n, at, what } }. Reading
   // never writes: a note typed into the Markdown counts from the first look on, and the same once it is saved.
-  const ownerActs = () => ({ notes: load('notes').data.owner || { n: 0 }, handoff: load('handoff').data.owner || { n: 0 } });
+  const ownerActs = () => ({ notes: load('notes').data.owner || { n: 0 }, handoff: settled().owner || { n: 0 } });
   // Changes whenever either store or its Markdown does (the dashboard reads the cards again)
   const stamp = () =>
     ['notes', 'handoff']
