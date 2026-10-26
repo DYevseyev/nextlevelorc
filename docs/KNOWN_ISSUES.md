@@ -230,12 +230,13 @@ against 0.157.1 (FR-011, FR-013).
 - **Its Windows sandbox blocks writes outside the workspace, not reads (FR-023).** Measured on 0.164.0, Windows 11
   (26 October), in a throwaway workspace: with `--sandbox workspace-write`, the owner's `windows.sandbox = "elevated"`
   and again with `-c windows.sandbox=elevated`, `type` of a file beside the workspace and of a `.env` there exited 0 and
-  the model got their contents; a write beside it was refused, a write inside allowed, and curl failed (network off).
+  the model got their contents; a write beside it was refused, a write inside allowed, and curl failed with a TLS error
+  (`SEC_E_NO_CREDENTIALS`), which suggests the network is off but doesn't prove it.
   So the orchestrator and Codex workers can read what the owner's user can read (another project's `.env`,
   `~\.codex\auth.json`). Codex has permission profiles (`default_permissions`, `permissions.<name>.filesystem` with
   `{ "." = "deny" }` for a path: Codex Security's own scan uses them, `":root" = "read"` on Windows since the elevated
-  sandbox needs it), which nextlevel doesn't use yet. A wall needs another user or a container (ROADMAP, "Safety: from
-  bars to walls").
+  sandbox needs it), which nextlevel doesn't use yet; whether a deny works on Windows isn't measured (0.164.0 documents
+  no spelling for it). A wall needs another user or a container (ROADMAP, "Safety: from bars to walls").
 - **Not every add-on switches off per run (FR-023).** On 0.164.0 `-c mcp_servers.<name>.enabled=false` for the Codex
   app's own `codex_app` and `cua_repl` fails the run at config load (`Error loading config.toml: invalid transport in
   mcp_servers.codex_app`), so nextlevel can't keep them from a run; `codex debug models` prints JSON already (its

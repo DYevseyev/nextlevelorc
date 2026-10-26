@@ -893,10 +893,11 @@ for anything that happened: nothing was read but two harmless files planted for 
    folder beside it and a `.env` holding a harmless value, with the owner's config (`windows.sandbox = "elevated"`) and
    again with `-c windows.sandbox=elevated` on the command line: both `type` commands exited 0, no sandbox denial. The
    same runs were refused a write outside the workspace ("Access to the path ... is denied") and allowed one inside it.
-   So on Windows the sandbox is a wall for writes and network, not for reads: **the orchestrator and Codex workers in
-   their sandbox can read what the owner's Windows user can read**, the main checkout's `.env` and
-   `~\.codex\auth.json` included (a worker out of the sandbox, the Team page's switch, could already). Codex Security's
-   own documentation says the same of its scans ("The scan profile allows reads across the local filesystem").
+   So on Windows the sandbox is a wall for writes (and seemingly the network: curl failed with a TLS error), not for
+   reads: **the orchestrator and Codex workers in their sandbox can read what the owner's Windows user can read**, the
+   main checkout's `.env` and `~\.codex\auth.json` included (a worker out of the sandbox, the Team page's switch, could
+   already). Codex Security's own documentation says the same of its scans ("The scan profile allows reads across the
+   local filesystem").
    *Recorded:* KNOWN_ISSUES ("Codex CLI"), and the roadmap's "Safety: from bars to walls"; the security engineer's scan
    (coming) will run in OpenAI's scanner container instead, whose only host paths are its mounts.
 2. **Not every add-on can be switched off per run:** `-c mcp_servers.<name>.enabled=false` for two of the Codex app's
