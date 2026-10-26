@@ -9,7 +9,8 @@
 //        runner itself is the design's part B, docs/design/self-hosted-runner.md)
 //   nextlevel team set <role> --engine E [--model M] [--effort X] | --profile P  [--check] [--json]
 //        role: orchestrator, worker, worker-fallback, guide, orchestrator-fallback (--engine orchestrator puts
-//        the setup guide back on the orchestrator's)
+//        the setup guide back on the orchestrator's), assistant (--engine auto), security (--engine off turns it off;
+//        --daybreak on|off: its scans with OpenAI's Daybreak Blue)
 // A change is checked before nextlevel.json is written: the file's own rules, then the doctor's checks for
 // that engine (installed, signed in, the model accepted), run on the changed settings. Only an error about the
 // role being changed keeps it from being saved; warnings are shown with the result (--check: check only;
@@ -40,6 +41,7 @@ const APPLIES = {
   worker: 'to the next task that starts (running tasks go on as they are; a task sent to a named engine or profile keeps it)',
   guide: 'the next time you open the setup guide',
   assistant: 'to the next question you ask (a question being answered goes on as it is)',
+  security: 'to the next scan you start (a scan running now goes on as it is)',
 };
 
 const readRaw = (file) => {
@@ -135,15 +137,20 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   if (has('takes') && !row.second) return fail("--takes is the second worker's: nextlevel team set worker-second --engine E --takes no-docker|any|asked");
   if (has('takes') && !Object.hasOwn(SECOND_TAKES, a.takes)) return fail(`--takes is ${Object.keys(SECOND_TAKES).join(', ')}, not "${a.takes}"`);
   if (row.second && a.engine === 'none') return saveNoSecond({ root, print, fail });
+  // The security engineer: --engine off turns it off; --daybreak is its alone
+  if (has('daybreak') && row.key !== 'security') return fail("--daybreak is the security engineer's: nextlevel team set security --engine codex --daybreak on|off");
+  if (has('daybreak') && !['on', 'off'].includes(a.daybreak)) return fail(`--daybreak is on or off, not "${a.daybreak}"`);
+  if (row.key === 'security' && a.engine === 'off') return saveSecurityOff({ root, print, fail });
   // The setup guide can go back to the orchestrator's engine: --engine orchestrator
   // ... and the assistant to its automatic choice: --engine auto
   const sameAsOrchestrator = (row.key === 'guide' && a.engine === 'orchestrator') || (row.key === 'assistant' && a.engine === 'auto');
-  if (has('engine') && !ENGINE_NAMES.includes(a.engine) && !sameAsOrchestrator) return fail(`--engine must be ${ENGINE_NAMES.join(', ')}${row.key === 'assistant' ? ', or auto' : ''}`);
+  if (has('engine') && !ENGINE_NAMES.includes(a.engine) && !sameAsOrchestrator) return fail(`--engine must be ${ENGINE_NAMES.join(', ')}${row.key === 'assistant' ? ', or auto' : row.key === 'security' ? ', or off' : ''}`);
   // The assistant runs read-only by construction: only an engine that can be run so (src/ask.mjs)
   const assistantOn = row.key === 'assistant' && (has('profile') ? loaded.config.profiles?.[a.profile]?.engine : a.engine);
   // (Antigravity: in a copy of the project per question, once its lock test passes: lock.test below)
   if (assistantOn && ENGINE_NAMES.includes(assistantOn) && assistantOn !== 'agy' && !ADAPTERS[assistantOn].readOnly) return fail(`The assistant can't run on ${engineTitle(assistantOn)}: ${notReadOnly(assistantOn)}. Choose Codex or Claude Code, or --engine auto.`);
   const change = has('profile') ? { profile: a.profile } : sameAsOrchestrator ? { engine: '', model: '', effort: '' } : { engine: a.engine, model: a.model || '', effort: a.effort || '' };
+  if (has('daybreak')) change.daybreak = a.daybreak === 'on';
 
   // The engine's efforts: its adapter's, and what its CLI lists for the model
   const engineName = change.profile ? loaded.config.profiles?.[change.profile]?.engine : change.engine;
@@ -171,7 +178,10 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   const ctx = makeContext({ root, config, configInfo: { exists: true, file, warnings: candidate.warnings, error: null, overrides: candidate.overrides }, stateDir, hubAlive });
   ctx.retryRefusals = true; // (a refusal the model check kept is tried again at once: the owner is choosing now, FR-022)
   // (the orchestrator on Antigravity starts only with a passing lock test for what it would run: lock.test, an error)
-  const ids = [`tool.${profile.engine}`, `${profile.engine}.login`, MODEL_CHECK[profile.engine], 'profiles.accounts', ...(row.role === 'worker' ? ['codex.worker-windows'] : []), ...(needsLockTest(profile, row.role) ? ['lock.test'] : [])];
+  // (the security engineer: its own checks, never the model check of the roles in use, which doesn't see its model)
+  const ids = row.role === 'security'
+    ? [`tool.${profile.engine}`, `${profile.engine}.login`, 'security.engine', 'security.daybreak', 'profiles.accounts']
+    : [`tool.${profile.engine}`, `${profile.engine}.login`, MODEL_CHECK[profile.engine], 'profiles.accounts', ...(row.role === 'worker' ? ['codex.worker-windows'] : []), ...(needsLockTest(profile, row.role) ? ['lock.test'] : [])];
   const checks = ids.map((id) => byId(id)).filter(Boolean);
   const results = (await runChecks(ctx, { checks })).map((r) => ({
     id: r.id,
@@ -191,7 +201,8 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   const aboutRole = (r) => r.id !== 'profiles.accounts' || (!row.fallback && !!accountProblem(profile));
   const blocking = results.filter((r) => aboutRole(r) && (r.status === 'fail' ? r.severity === 'error' : r.status === 'skip' && !r.quiet && /^needs /.test(r.detail) && severityOf(byId(r.id), ctx) === 'error'));
   const warnings = results.filter((r) => r.status === 'fail' && r.severity !== 'info' && !blocking.includes(r));
-  const who = `${row.title}: ${profile.name ? `profile ${profile.name} (${engineTitle(profile.engine)})` : engineTitle(profile.engine)}${profile.model ? `, model ${profile.model}` : ''}${profile.effort ? `, effort ${profile.effort}` : ''}`;
+  const daybreakWords = row.role === 'security' ? (config.roles.security.daybreak ? ', Daybreak Blue' : ", standard safeguards (OpenAI's cyber screening may block parts of a scan)") : '';
+  const who = `${row.title}: ${profile.name ? `profile ${profile.name} (${engineTitle(profile.engine)})` : engineTitle(profile.engine)}${profile.model ? `, model ${profile.model}` : ''}${profile.effort ? `, effort ${profile.effort}` : ''}${daybreakWords}`;
   const applies = APPLIES[row.role];
   const base = { role: row.key, who, results, applies };
   const said = (list) => list.map((r) => `${r.title}: ${r.detail}`).join('; ');
@@ -212,6 +223,32 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
   const message = `Saved. ${who}. It applies ${applies}.${warned}`;
   print({ ok: true, saved: true, message, ...base }, [message, ...howTo(warnings), 'Commit nextlevel.json with your next change.'].join('\n'));
+  return 0;
+}
+
+// The security engineer off (nextlevel team set security --engine off): no engine, nothing checked. Its Daybreak setting
+// stays for the next time it is turned on.
+function saveSecurityOff({ root, print, fail }) {
+  const file = path.join(root, CONFIG_FILE);
+  let raw;
+  let crlf;
+  try {
+    ({ raw, crlf } = readRaw(file));
+  } catch (err) {
+    return fail(`${CONFIG_FILE} is not valid JSON (${err.message}): fix it first (the Setup page shows it).`);
+  }
+  const next = withRole(raw, 'security', { engine: '', model: '', effort: '' });
+  try {
+    loadConfig(root, { raw: next });
+  } catch (err) {
+    return fail(err.message.replace(/^Settings problem \([^)]*\):\s*/, ''));
+  }
+  let text = formatConfig(next);
+  if (crlf) text = text.replace(/\n/g, '\r\n');
+  fs.writeFileSync(file, text);
+  recordOwner(root, [CONFIG_FILE]);
+  const message = 'Saved. The security engineer is off: no scan runs until you turn it on.';
+  print({ ok: true, saved: true, message, role: 'security' }, `${message}\nCommit nextlevel.json with your next change.`);
   return 0;
 }
 

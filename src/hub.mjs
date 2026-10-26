@@ -5760,6 +5760,7 @@ const USAGE_ROLES = [
   { key: 'worker', title: 'Workers', unit: 'attempt', kind: 'headless' },
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
   { key: 'assistant', title: 'Advisor', unit: 'question', kind: 'headless' },
+  { key: 'security', title: 'Security engineer', unit: 'scan', kind: 'headless' },
 ];
 // The usage ledger as the dashboard reads it: each month file's lines, read again only when that file changed (its
 // size or time), so the live feed's every look costs a stat per month and a run's end re-reads one month

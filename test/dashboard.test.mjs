@@ -789,7 +789,7 @@ test('Home and Team (M9): what needs the owner with the next action, autopilot w
     const first = await live.until('build', (b) => b.ok && b.needs);
     assert.equal(fs.realpathSync.native(first.tool.root).toLowerCase(), fs.realpathSync.native(REPO).toLowerCase(), "the tool's location is on the page");
     assert.match(first.tool.installCommand, /install\.ps1/);
-    assert.deepEqual(first.team.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant']);
+    assert.deepEqual(first.team.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant', 'security']);
     assert.match(first.team[0].model.text, /^gpt-6 \(Codex's own, from ~[\\/]\.codex[\\/]config\.toml\)$/);
     assert.deepEqual(first.alerts.map((a) => [a.id, a.kind]), [['M9-04-gateway', 'attempts']]);
     assert.equal(first.usage.rounds, 0);

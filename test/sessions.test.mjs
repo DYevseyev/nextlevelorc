@@ -27,8 +27,24 @@ test("agentSession: whose session a nextlevel command runs in, from what the hub
   assert.equal(agentSession({ NEXTLEVEL_AGENT: 'git-job' }), "a project hook during the hub's git work for the orchestrator");
   assert.equal(agentSession({ NEXTLEVEL_AGENT: 'push' }), 'a project hook during a push');
   assert.equal(agentSession({ NEXTLEVEL_READ_ONLY: '1' }), "the assistant's read-only session (nextlevel ask)");
+  assert.equal(agentSession({ NEXTLEVEL_AGENT: 'security' }), "the security engineer's scan");
   assert.equal(agentSession({ NEXTLEVEL_AGENT: 'robot' }), "the robot's session");
   assert.equal(ownerOnly('nextlevel update --to', 'The owner runs it in their own PowerShell window.', 'an autopilot round'), "nextlevel update --to is the owner's, so it doesn't run in an agent's session (this is an autopilot round): nothing was done. The owner runs it in their own PowerShell window.");
+});
+
+test("the security engineer's scan runs no nextlevel command, its help included, and starts nothing", () => {
+  const p = makeProject();
+  try {
+    const calls = path.join(p.tmp, 'calls.log');
+    for (const args of [['status'], ['--help'], ['team', '--help'], ['doctor'], ['ask', 'what is this?'], ['security', 'scan']]) {
+      const r = p.hub(args, { extraEnv: { NEXTLEVEL_AGENT: 'security', STUB_CALLS: calls } });
+      assert.equal(r.code, 1, `${args.join(' ')}: ${r.out}`);
+      assert.match(r.out, /nextlevel doesn't run in the security engineer's scan/);
+    }
+    assert.ok(!fs.existsSync(calls), 'no stub CLI started');
+  } finally {
+    p.cleanup();
+  }
 });
 
 // ---------- nextlevel verify ----------

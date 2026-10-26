@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ADAPTERS, engineTitle, fullAccessNote, workerCaveat } from '../engines/index.mjs';
-import { SECOND_TAKES, notReadOnly, roleProfile, settingKeys, workerArgsOf } from './config.mjs';
+import { SECOND_TAKES, SECURITY_ENGINES, notReadOnly, notSecurity, roleProfile, settingKeys, workerArgsOf } from './config.mjs';
 
 // The rows of the Team page, in order. `role` and `fallback` say where in nextlevel.json each one is.
 export const TEAM_ROWS = [
@@ -16,6 +16,7 @@ export const TEAM_ROWS = [
   { key: 'guide', role: 'guide', fallback: false, title: 'Setup guide', does: 'walks you through setup, one step at a time' },
   { key: 'orchestrator-fallback', role: 'orchestrator', fallback: true, title: 'Fallback orchestrator', does: "takes over when the orchestrator's engine isn't ready", optional: true },
   { key: 'assistant', role: 'assistant', fallback: false, title: 'Advisor', does: 'advises you and answers your questions about the project, read-only, apart from the orchestrator; it drafts notes and replies that only your click sends' },
+  { key: 'security', role: 'security', fallback: false, title: 'Security engineer', does: "finds and confirms security problems in the project's code, in a checkout of its own, when you start a scan; it never changes the code" },
 ];
 export const rowByKey = (key) => TEAM_ROWS.find((r) => r.key === key);
 
@@ -97,7 +98,7 @@ export function teamView(config, where = {}) {
     // (the second worker: what it takes, and the choices for it)
     const takes = row.second ? { value: p?.takes || 'no-docker', text: SECOND_TAKES[p?.takes] || '', choices: Object.entries(SECOND_TAKES).map(([value, text]) => ({ value, text })) } : null;
     const base = { key: row.key, role: row.role, fallback: row.fallback, second: !!row.second, title: row.title, does: row.does, ...(takes ? { takes } : {}) };
-    if (!p) return row.optional ? null : { ...base, none: true, warnings: [], notices: [], text: row.fallback ? 'none: a failed task stays with the orchestrator' : row.second ? 'none: every task goes to the workers (or where its spec or the orchestrator sends it)' : 'none' };
+    if (!p) return row.optional ? null : { ...base, none: true, ...(row.role === 'security' ? { off: true, daybreak: false } : {}), warnings: [], notices: [], text: row.fallback ? 'none: a failed task stays with the orchestrator' : row.second ? 'none: every task goes to the workers (or where its spec or the orchestrator sends it)' : row.role === 'security' ? 'off: turn it on to scan the code (Codex)' : 'none' };
     const eng = ADAPTERS[p.engine];
     const use = inUse(p, config, where);
     const keys = settingKeys(config, row.role, { fallback: row.fallback, second: !!row.second });
@@ -135,6 +136,8 @@ export function teamView(config, where = {}) {
       notices: full?.level === 'info' ? [full.text] : [],
       // the advisor: whether it is on another engine than the orchestrator, so it can disagree with it
       ...(row.role === 'assistant' ? { independent: advisorIndependent(config, p) } : {}),
+      // the security engineer: whether its scans run with OpenAI's Daybreak Blue, and what that means
+      ...(row.role === 'security' ? { daybreak: r.daybreak === true, daybreakText: r.daybreak === true ? "Daybreak Blue: OpenAI's cyber access program for defensive work, on the models it covers" : "Standard safeguards: OpenAI's cyber screening may block parts of a scan" } : {}),
     };
   }).filter(Boolean);
 }
@@ -222,7 +225,7 @@ export function codexWorkersView(config) {
 // What the page offers for each engine: its efforts, the names its --model takes without a list, what choosing it
 // means for each role, and whether it can be the assistant (only an engine that can be run read-only; else why not).
 export const engineChoices = () =>
-  Object.values(ADAPTERS).map((e) => ({ name: e.name, title: e.title, efforts: e.efforts, levelInModel: !e.efforts.length, modelHints: e.modelHints || [], notes: e.notes, effortNote: e.effortNote || '', canHaveAccount: !!e.account, assistant: !!e.readOnly || e.name === 'agy', notAssistant: e.readOnly || e.name === 'agy' ? '' : notReadOnly(e.name) }));
+  Object.values(ADAPTERS).map((e) => ({ name: e.name, title: e.title, efforts: e.efforts, levelInModel: !e.efforts.length, modelHints: e.modelHints || [], notes: e.notes, effortNote: e.effortNote || '', canHaveAccount: !!e.account, assistant: !!e.readOnly || e.name === 'agy', notAssistant: e.readOnly || e.name === 'agy' ? '' : notReadOnly(e.name), security: SECURITY_ENGINES.includes(e.name), notSecurity: SECURITY_ENGINES.includes(e.name) ? '' : notSecurity(e.name) }));
 
 // The models an engine's CLI lists, run with the profile's account: { list, from } or { list: [], why }.
 export function listModels(engineName, run) {

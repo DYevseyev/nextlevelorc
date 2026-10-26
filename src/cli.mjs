@@ -14,6 +14,7 @@ import { readOnly, readOnlyRefusal } from './lib/readonly.mjs';
 import { cmdFix, fixStore, followFixes } from './fix.mjs';
 import { cmdInit } from './init.mjs';
 import { COMMANDS, helpText, parseCommand, usageText } from './lib/commands.mjs';
+import { SECURITY_REFUSAL } from './lib/session.mjs';
 import { installCommand } from './lib/install.mjs';
 import { TOOL_ROOT, findProject } from './lib/project.mjs';
 import { AVAILABLE_EVERY_MS, checkReleases, cmdChannel, cmdUpdate, describeTool, rememberProject, startNotice, updateBlocker } from './lib/update.mjs';
@@ -87,6 +88,12 @@ function version() {
 
 export async function main(argv) {
   pinChildren();
+  // The security engineer's scan runs no nextlevel command at all, its help included: it reads and reports, and the
+  // hub does everything else (docs/design/security-engineer.md). A bar, not a wall: KNOWN_ISSUES.
+  if (process.env.NEXTLEVEL_AGENT === 'security') {
+    console.error(SECURITY_REFUSAL);
+    return 1;
+  }
   const parsed = takeProject(argv);
   // (best effort: the update lists what still runs an old version, and never removes a folder in use)
   register({ version: runningVersion(TOOL_ROOT), project: parsed.project || process.cwd(), command: argv.find((x) => !x.startsWith('-')) || 'menu' });

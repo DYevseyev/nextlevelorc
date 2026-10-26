@@ -13,7 +13,10 @@ const WHO = {
   check: 'a verify command the orchestrator asked for (nextlevel verify)',
   'git-job': "a project hook during the hub's git work for the orchestrator",
   push: 'a project hook during a push',
+  security: "the security engineer's scan",
 };
+// What every nextlevel command prints in the security engineer's scan, where none runs (src/cli.mjs)
+export const SECURITY_REFUSAL = "nextlevel doesn't run in the security engineer's scan: the scan reads the code and reports in the findings format; the hub does everything else. Nothing was done.";
 
 // -> '' in the owner's own window, else whose session this is, in words
 export function agentSession(env = process.env) {

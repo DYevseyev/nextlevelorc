@@ -885,7 +885,7 @@ export const profilesCheck = {
 // or deploy directly and can move to a sandboxed engine: a warning. Workers run in slots behind the push block and need
 // Antigravity's unattended mode: information, the risk accepted by design. Said here and on the Team page (lib/team.mjs);
 // nothing is refused.
-const ROLE_WHO = { orchestrator: 'the orchestrator', worker: 'the workers', guide: 'the setup guide', assistant: 'the assistant' };
+const ROLE_WHO = { orchestrator: 'the orchestrator', worker: 'the workers', guide: 'the setup guide', assistant: 'the assistant', security: 'the security engineer' };
 const roleWho = (p) => (p.second ? 'the second worker' : p.fallback ? `${p.role === 'worker' ? "the workers'" : `the ${p.role}'s`} fallback` : ROLE_WHO[p.role] || p.role);
 export const fullAccessCheck = {
   id: 'profiles.full-access',
