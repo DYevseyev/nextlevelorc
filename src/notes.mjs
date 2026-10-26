@@ -385,7 +385,8 @@ export async function cmdHandoff(argv, ctx) {
     case 'cancel': {
       const reply = freeText(a, flag(a, 'reply'), c, 'why');
       need(rest[0] && reply.trim(), 'cancel <id> --reply "why it is no longer needed"   (or --file <path>)');
-      const x = store.handoff.cancel(rest[0], { reply });
+      // (redacted like an answer: on a card the owner replied to it is kept whole in the thread, and HANDOFF.md goes into Git)
+      const x = store.handoff.cancel(rest[0], { reply: clean(reply) });
       const said = x.closedInstead
         ? `${x.id}: the owner replied on it, so it is closed as resolved, not cancelled: "${x.note}". Next time use nextlevel handoff close ${x.id} --file <path> for a card the owner acted on.`
         : `${x.id} is cancelled: "${x.note}".`;

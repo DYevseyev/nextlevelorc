@@ -354,8 +354,10 @@ export function eventsOf(x) {
     ? x.events.filter((e) => e && EVENT_KINDS.has(e.kind)).map((e) => ({ kind: e.kind, by: BY.has(e.by) ? e.by : 'owner', how: HOW.has(e.how) ? e.how : '', note: typeof e.note === 'string' ? e.note : '', at: e.at || null }))
     : [];
   // (a held change's card the hub closed itself: "Closed by nextlevel", never "Done by you")
-  if (!list.length && x.status === 'done') list.push({ kind: x.closedBy === 'team' ? 'closed' : 'done', by: BY.has(x.closedBy) ? x.closedBy : 'owner', how: '', note: x.closedBy === 'team' ? x.note || '' : '', at: x.doneAt || null });
-  if (!list.length && x.status === 'cancelled') list.push({ kind: 'cancelled', by: 'team', how: '', note: x.note || '', at: x.doneAt || null });
+  // (and a card closed again by an older version, or ticked in the Markdown, after a reopening: its closing from its state)
+  const unsaid = x.status !== 'open' && (!list.length || list.at(-1).kind === 'reopened');
+  if (unsaid && x.status === 'done') list.push({ kind: x.closedBy === 'team' ? 'closed' : 'done', by: BY.has(x.closedBy) ? x.closedBy : 'owner', how: '', note: x.closedBy === 'team' ? x.note || '' : '', at: x.doneAt || null });
+  if (unsaid && x.status === 'cancelled') list.push({ kind: 'cancelled', by: 'team', how: '', note: x.note || '', at: x.doneAt || null });
   return list;
 }
 // The thread's messages and the card's events in one list, by time (an event at the same time as a message after it)

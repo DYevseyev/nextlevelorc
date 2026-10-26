@@ -1996,7 +1996,7 @@ function handoffCard(x) {
   const badge = handoffBadge(x);
   if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits ? '.waits' : '', x.pending ? countdown(x.pending.finalAt) : null);
   const card = h(`div.cardx.handoff.s-${waits ? 'open' : x.status}${x.unread ? '.answered' : ''}.is-open`, { id: `card-${x.id}` },
-    cardBar(x.id, req.title, badge, waits ? jumpTo(x.id) : null, 'Reply'),
+    cardBar(x.id, req.title, badge, waits && !x.pending ? jumpTo(x.id) : null, 'Reply'),
     requestBlock(x.id, req.rest),
     h('dl.facts', {}, x.where ? [h('dt', {}, 'Where'), h('dd', {}, x.where)] : null, x.why ? [h('dt', {}, 'Why'), h('dd', {}, x.why)] : null,
       h('dt', {}, 'Asked'), h('dd', {}, ago2(x.createdAt), x.task ? [' · ', taskLink(x.task)] : null)),
@@ -2006,7 +2006,14 @@ function handoffCard(x) {
   if (x.pending) {
     const busy = cards.busy.has(key);
     card.append(h('div.row.undo', {}, h('span', {}, x.pending.was === 'done' ? `${x.id}'s answer marked read` : `${x.id} marked done`, ' · final in ', countdown(x.pending.finalAt)),
-      h('button.btn.primary', { type: 'button', disabled: busy, onclick: () => cardPost('/api/handoff', { action: 'undo', id: x.id }, key) }, busy ? '…' : 'Undo')));
+      h('button.btn.primary', { type: 'button', disabled: busy, onclick: async () => {
+        const res = await cardPost('/api/handoff', { action: 'undo', id: x.id }, key);
+        // (as it was: the reply the owner sent with the Done is back in its box)
+        if (res?.ok && x.pending.reply && !(cards.replies.get(x.id) || '').trim()) {
+          cards.replies.set(x.id, x.pending.reply);
+          renderCards();
+        }
+      } }, busy ? '…' : 'Undo')));
     return card;
   }
   // A closed card (FR-018): Reopen, and a reply box whose reply reopens it

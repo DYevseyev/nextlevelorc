@@ -543,7 +543,7 @@ button.card-line .badge, button.card-line .cid { flex: none; }
 .request-wrap { display: grid; gap: 4px; justify-items: start; }
 ol.thread li.event { font-size: 13px; color: var(--muted); padding: 2px 8px; border-left: 3px solid var(--line); }
 .row.undo { align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; background: var(--info-bg); }
-span.countdown { font-variant-numeric: tabular-nums; }
+span.countdown { font-variant-numeric: tabular-nums; white-space: nowrap; }
 details.earlier > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 4px 0; }
 details.earlier[open] > summary { margin-bottom: 6px; }
 .thread-wrap { display: grid; gap: 8px; min-width: 0; }
