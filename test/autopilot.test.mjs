@@ -9,36 +9,10 @@ import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { REPO, hubRounds, makeProject, processesGone, waitUntil } from './helpers.mjs';
+import { REPO, hubRounds, makeProject, processesGone, testClock, waitUntil } from './helpers.mjs';
 import { readLedger } from '../src/lib/usage.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
-// The test's clock: { set(iso|ms), add(minutes), env }
-function testClock(p, at) {
-  const file = path.join(p.tmp, 'clock.json');
-  const clock = {
-    file,
-    now: 0,
-    env: { NEXTLEVEL_TEST_CLOCK: file },
-    set(t) {
-      clock.now = typeof t === 'number' ? t : Date.parse(t);
-      const tmp = `${file}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ at: new Date(clock.now).toISOString() }));
-      for (let i = 0; ; i++) {
-        try {
-          fs.renameSync(tmp, file);
-          return;
-        } catch (err) {
-          if (i > 50) throw err; // (Windows: the hub may be reading it)
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-        }
-      }
-    },
-    add: (min) => clock.set(clock.now + min * 60_000),
-  };
-  clock.set(at);
-  return clock;
-}
 
 const hubLog = (p) => (fs.existsSync(p.state('logs', 'hub.log')) ? fs.readFileSync(p.state('logs', 'hub.log'), 'utf8') : '');
 const started = (p) => (hubLog(p).match(/autopilot: a round starts because/g) || []).length;
@@ -980,6 +954,54 @@ test("writers at once lose nothing: four on settings.json under its lock (the on
     const store = cardStore({ root: p.repo, stateDir: p.state(), files: { notes: 'docs/OWNER_NOTES.md', handoff: 'docs/HANDOFF.md' } });
     assert.deepEqual([store.notes.list().length, store.ownerActs().notes.n], [40, 40]);
   } finally {
+    p.cleanup();
+  }
+});
+
+test("undo Done: a Done on the dashboard starts a round only once its Undo time is over; an undone one starts none and changes nothing; one made just before the hub stopped is final after it starts again; a reopen starts one", async () => {
+  const p = project();
+  const clock = testClock(p, Date.now());
+  let bg;
+  let ui;
+  try {
+    bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
+    await looks(p, 2);
+    ui = await startUi(p, clock.env);
+    const api = client(ui);
+    const md = fs.readFileSync(path.join(p.repo, 'docs/HANDOFF.md'), 'utf8');
+    const head = p.git('rev-parse', 'HEAD');
+    // Done, then Undo inside the 10 seconds: no round, no change, no commit
+    assert.equal((await api.post('/api/handoff', { action: 'done', id: 'H1', reply: 'Resume it' })).status, 200);
+    await looks(p, 3);
+    clock.addSeconds(5);
+    await looks(p, 2);
+    assert.equal(started(p), 0, hubLog(p));
+    assert.equal((await api.post('/api/handoff', { action: 'undo', id: 'H1' })).status, 200);
+    clock.addSeconds(30);
+    await looks(p, 3);
+    assert.equal(started(p), 0, hubLog(p));
+    assert.equal(fs.readFileSync(path.join(p.repo, 'docs/HANDOFF.md'), 'utf8'), md, 'docs/HANDOFF.md as it was');
+    assert.equal(p.git('rev-parse', 'HEAD'), head);
+    assert.match(p.hub(['handoff', 'list']).out, /H1 {4}open/, "the orchestrator's list has it open");
+    // Done, and the hub stops before its time is over (no dashboard either): it is final once the hub runs again
+    assert.equal((await api.post('/api/handoff', { action: 'done', id: 'H1', reply: 'Resume it' })).status, 200);
+    await stopUi(ui);
+    ui = null;
+    await stopHub(p, bg);
+    clock.addSeconds(11);
+    bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
+    await until(p, 'a round for the Done, and its end', () => started(p) === 1 && ended(p) === 1);
+    assert.deepEqual(reasons(p), ['your reply on H1, marked done']);
+    assert.match(fs.readFileSync(path.join(p.repo, 'docs/HANDOFF.md'), 'utf8'), /- \[x\] \*\*H1\*\*/);
+    // Reopened from the terminal: one more round, which reads it as reopened
+    clock.addSeconds(60);
+    assert.match(p.hub(['handoff', 'reopen', 'H1']).out, /H1 is open again/);
+    await until(p, 'a round for the reopen', () => started(p) === 2 && ended(p) === 2);
+    assert.deepEqual(reasons(p).at(-1), 'you reopened H1');
+    assert.match(p.hub(['handoff', 'list']).out, /reopened by the owner from the terminal .*after it was done by the owner/);
+  } finally {
+    await stopUi(ui);
+    await stopHub(p, bg);
     p.cleanup();
   }
 });

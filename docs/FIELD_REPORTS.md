@@ -670,6 +670,30 @@ determined one still can. Part 2, a later change: workers can't reach the hub at
    for workers, whose risk is accepted by design (slots behind the push block, Antigravity's unattended mode). The setup
    guide on Antigravity, which asks before it runs anything, doesn't count.
 
+## FR-018 — A real project, 2026-10-01: a card the team closed after the owner's reply read "Cancelled"
+Tools: Codex CLI orchestrator; nextlevel after FR-014. Low severity: nothing was lost, but the owner read the card as
+abandoned and couldn't follow up on it.
+
+1. **"Cancelled" after "Deployed".** The owner replied "Deployed" on card H18; the orchestrator, with nothing left to do,
+   ran `nextlevel handoff cancel H18 --reply "..."`, the only way it had to close a card, and the dashboard showed
+   "Cancelled", which reads as the team giving up on it. **Cause:** a card had two ends, the owner's Done and the team's
+   cancel, and nothing said who closed it or why. *Fixed:* `nextlevel handoff close <id> --file <path>` closes a card as
+   resolved, its text kept whole in the card's conversation; the card says "Done by you", "Closed by the team" (with
+   the team's words) or "Cancelled by the team" (withdrawn before the owner acted), and a held change's card "Approved
+   by you", "Rejected by you" or "Closed by nextlevel". A `cancel` on a card the owner replied to is recorded as a close
+   and says so, so an orchestrator on an older role doc gets it right too. The role doc says when to use which (a new
+   template version).
+2. **No follow-up on a closed card.** A reply on a done or cancelled card was kept, but the card stayed closed: the team
+   wasn't told. *Fixed:* every closed card has Reopen, and a reply reopens it ("Reopened by your reply"); `nextlevel
+   handoff reopen <id>` does it from the terminal ("Reopened from the terminal"). The card comes back under "The team
+   needs from you" with its whole conversation and its closings and reopenings in time order; the next round's
+   `handoff list` says it was reopened, after what, and that what the team did since may need another look.
+3. **Done by mistake had no way back** (the owner, with this report). *Fixed:* a Done on the dashboard can be undone for
+   10 seconds. Until then nothing happens (the team, autopilot and docs/HANDOFF.md see the card open); the click is kept
+   with the time it becomes final, so a reload shows Undo with the seconds left and a Done whose page closed still
+   counts, after a hub restart too. A write on the card in those seconds makes the Done final first, so the owner's
+   words are never lost.
+
 ## FR-019 — A real project, 2026-10-04: autopilot ran rounds while it only waited for the owner
 Tools: Codex CLI orchestrator (gpt-6.1-sol, effort xhigh) on autopilot, Antigravity and Claude Code workers; nextlevel
 facd8e9. Medium severity: nothing broke, but it spent Codex, the scarce plan, on rounds that had nothing to do.

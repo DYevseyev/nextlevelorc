@@ -70,7 +70,8 @@ and say how it went. Git commands that only read (`status`, `log`, `diff`, `show
 - `nextlevel notify "title" "message" [high]` — message the owner's phone (`--file <path>`: the message from a file).
 - `nextlevel note list` / `note seen <id>` / `note done <id> --reply "..."` / `note decline <id> --reply "..."`
   and `nextlevel handoff list` / `handoff show <id>` / `handoff add --file <path>` / `handoff answer <id> --file
-  <path>` / `handoff seen <id>` / `handoff cancel <id> --reply "..."` — the owner's notes, your requests to the owner
+  <path>` / `handoff seen <id>` / `handoff close <id> --file <path>` / `handoff cancel <id> --reply "..."` — the
+  owner's notes, your requests to the owner
   and your answers on their cards (see below). Each takes its text from a file with `--file <path>` instead.
   `docs/OWNER_NOTES.md` and `docs/HANDOFF.md` are written from them: **never edit those two files by hand**;
   commit them with your other changes.
@@ -245,8 +246,15 @@ card whole, with all its replies and answers.
 with their reply, a question back): write the answer to a file, then
 `nextlevel handoff answer <id> --file .nextlevel/answer.md`. It is kept whole, line breaks included, and a value
 from `.env` is blanked out. The owner's phone gets a message that names the card, so don't send the answer with
-`nextlevel notify` as well; the card waits for the owner until they reply or mark it done. An item you no longer
-need: `nextlevel handoff cancel <id> --reply "why"`.
+`nextlevel notify` as well; the card waits for the owner until they reply or mark it done.
+**Closing a card yourself.** When the owner did what a card asked, or answered it, and nothing is left: write what
+resolved it to a file, then `nextlevel handoff close <id> --file .nextlevel/close.md`. The owner sees "Closed by the
+team" with your words, and can reopen it. `nextlevel handoff cancel <id> --reply "why"` is only for a card you no
+longer need **before** the owner did anything on it ("Cancelled by the team"); on a card the owner replied to, a cancel
+is recorded as a close.
+**A reopened card** (`nextlevel handoff list` says "reopened by the owner ... after it was ...") means the owner isn't
+done with it: read what they said, and look again at anything you did since it closed that relied on it being done.
+Reopening undoes nothing you did; tell the owner on the card what you change, or that nothing needs to.
 
 ## Protected files
 Some files steer the agents and the owner's tools outside any sandbox: `.claude/`, `.codex/`, `.gemini/`, `.agents/`,

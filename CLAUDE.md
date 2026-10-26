@@ -58,7 +58,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
 - `src/dashboard.mjs` — `nextlevel ui`: the local server (127.0.0.1, a one-time code traded for a session key in a
   header, FR-017 part 2A; server-sent events); the hub
   hands it what it may read and do (`dashboardApi` in `hub.mjs`). The page is `src/ui/` (plain
-  HTML/CSS/JS): Home, Project, Setup, Build, Team, Tools, Notes and handoffs; `src/ui/dom.js` has `h()`, which puts
+  HTML/CSS/JS): Home, Project, Setup, Build, Team, Tools, Notes and handoffs (one line per card, one open at a time
+  with its bar pinned, its own address `#H<id>`); `src/ui/dom.js` has `h()`, which puts
   every text in as a text node, and a handoff card's conversation. Setup runs `nextlevel doctor --json` and, for
   Fix, `doctor --fix <id> --json`; Team runs `nextlevel team models|set ... --json`. `src/lib/overview.mjs`
   — Home's sentences, alerts, what needs the owner and the Blockers card (pure). `src/lib/roadmap.mjs` — the Project
@@ -93,10 +94,13 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   rules, how a closure reads. The hub's side is "closing a task" in `hub.mjs` (cmdClose, closeProblem, GIT_OPS.close,
   recordClosure, reopenClosed); the roadmap counts it (`buildRoadmap`'s `closed`).
 - `src/lib/cards.mjs` — the owner's notes and the handoff items as cards (`.nextlevel/notes.json`, `handoff.json`,
-  a lock for several writers), a handoff card's thread of replies and answers (FR-014), the import of the old Markdown,
+  a lock for several writers), a handoff card's thread of replies and answers (FR-014), its closings and reopenings
+  (`events`, `conversation`, beside the thread), a Done from the dashboard that can be undone for 10 seconds (`pending`,
+  made final by any writer or reader past its time: `settle`, the hub's tick and the dashboard's), who closed a card
+  (`closedBy`, FR-018: the owner's Done, the team's `close`, nextlevel's own), the import of the old Markdown,
   hand edits read back, and the Markdown written from them (`paths.notes`, `paths.handoff`; replies and answers in
-  quoted blocks). `src/notes.mjs` — `nextlevel note` and `nextlevel handoff` (`show`, `answer`; what `handoff list` gives
-  the orchestrator within the output budget). `src/lib/textin.mjs` — free text from `--file` (a file in the project, or
+  quoted blocks). `src/notes.mjs` — `nextlevel note` and `nextlevel handoff` (`show`, `answer`, the team's `close`, the
+  owner's `reopen`; what `handoff list` gives the orchestrator within the output budget, a reopened card said). `src/lib/textin.mjs` — free text from `--file` (a file in the project, or
   stdin), never from the command line.
 - `src/lib/reports.mjs` — what the orchestrator gets of a report, a log or the owner's words (FR-012): the output
   budget, the parts that fit it, cuts that say so, and a task's kind and result file (pure). The hub's side:
@@ -184,7 +188,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   covers FR-012 (a 2,000-line report kept whole and read in parts within the budget, result files checked by the hub,
   the owner's long notes and replies); `test/handoff.test.mjs` covers FR-014 (a 3,000-character reply on the dashboard,
   in HANDOFF.md and in the stub orchestrator's input; an answer through the real `nextlevel.cmd`; What needs you and the
-  phone; a card rendered in a DOM that parses HTML); `test/push.test.mjs` covers FR-015 (every command with `--help`,
+  phone; a card rendered in a DOM that parses HTML, its earlier messages folded); `test/undo.test.mjs` covers undo Done,
+  reopening and FR-018 (with the test clock: undone in time leaves nothing, past its time final for every reader, a write
+  on a pending card makes it final first, several writers, `handoff reopen` and `close`, the dashboard alone), and
+  `test/autopilot.test.mjs` its round (none for an undone Done, one after a hub restart, one for a reopen);
+  `test/push.test.mjs` covers FR-015 (every command with `--help`,
   `-h` and an unknown option, through `nextlevel.cmd` too, changes nothing and starts no stub CLI, `STUB_CALLS`; push's
   targets, the deploy branch's card approved, rejected and moved, with a bare origin whose hook records which push job
   pushed; nothing in `src/` runs `git push` but `pushBranch`; FR-017: `-hm`, and a committed `deployBranches: []`);

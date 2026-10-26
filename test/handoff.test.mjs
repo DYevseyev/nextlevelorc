@@ -15,7 +15,7 @@ import { writeShims } from '../src/lib/install.mjs';
 import { ownerNeeds } from '../src/lib/overview.mjs';
 import { OUTPUT_BUDGET, sizeOf } from '../src/lib/reports.mjs';
 import { decodeText, readTextFile } from '../src/lib/textin.mjs';
-import { BIN, REPO, makeProject, withEnv } from './helpers.mjs';
+import { BIN, REPO, makeProject, testClock, withEnv } from './helpers.mjs';
 import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -209,7 +209,10 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     for (const line of ['Postmark', 'transactional', 'Reply "go"']) assert.ok(!msg.message.includes(line), `the answer isn't on the phone: ${msg.message}`);
     assert.equal(msg.priority, 4);
 
-    // What needs you: the card, until the owner replies or marks it done
+    // What needs you: the card, until the owner replies or marks it done (Done is final 10 seconds after the click,
+    // by the test's clock: undo Done)
+    const clock = testClock(p, Date.now());
+    Object.assign(p.env, clock.env);
     ui = await startUi(p);
     const api = client(ui);
     let state = (await api.get('/api/state')).json;
@@ -223,9 +226,13 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1').map((n) => n.kind), ['handoff'], 'replied: an open card like any other');
     assert.equal((await api.post('/api/handoff', { action: 'done', id: 'H1' })).status, 200);
     state = (await api.get('/api/state')).json;
+    assert.deepEqual(state.needs.filter((n) => n.id === 'H1').map((n) => [n.kind, n.action.label]), [['pending', 'Undo']], 'marked done: Undo for 10 seconds');
+    clock.addSeconds(11);
+    state = (await api.get('/api/state')).json;
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1'), []);
 
     // An answer on a card that is done already: it waits for the owner again, and Done marks it read without waking the team
+    clock.addSeconds(5); // (the test's clock stands still: the answer comes after the Done)
     p.hub(['handoff', 'seen', 'H1']);
     write(p.repo, '.nextlevel/answer.md', 'Set up and tested: a sign-up mail arrived in the test inbox.\n');
     assert.equal(p.hub(['handoff', 'answer', 'H1', '--file', '.nextlevel/answer.md']).code, 0);
@@ -236,7 +243,8 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     assert.deepEqual([cards.handoff.open.length, cards.handoff.answered.map((x) => x.id)], [0, ['H1']]);
     const read1 = await api.post('/api/handoff', { action: 'done', id: 'H1' });
     assert.equal(read1.status, 200, read1.text);
-    assert.equal(read1.json.message, 'Marked read.');
+    assert.equal(read1.json.message, 'Marked read: Undo for 10 seconds.');
+    clock.addSeconds(11);
     state = (await api.get('/api/state')).json;
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1'), []);
     assert.deepEqual(store.news().handoff, [], 'reading an answer wakes no orchestrator');
@@ -326,11 +334,24 @@ test('an answer with HTML in it shows as text on the card, never as HTML (src/ui
     assert.deepEqual(texts, ['<script>document.title = "asked"</script>', 'Go <script>document.title = "replied"</script>', answer], 'each text whole, as written, line breaks included');
     const items = els.filter((e) => e.tagName === 'LI');
     assert.deepEqual(items.map((e) => e.className), ['msg by-owner', 'msg by-team unread'], 'in time order; the new answer marked');
+    // The cards redesign: earlier messages fold into one line; the team's newest answer, waiting for the owner, never does
+    const long = { id: 'H2', unread: true, thread: ['owner', 'team', 'owner', 'team', 'owner', 'team'].map((by, i) => ({ by, text: `${by} ${i} <b>x</b>`, at })) };
+    const folded = allElements(threadView(long, { fold: 2 }));
+    const summary = folded.find((e) => e.tagName === 'SUMMARY');
+    assert.equal(summary.textContent, '4 earlier messages');
+    assert.deepEqual(folded.filter((e) => e.tagName === 'DETAILS').map((e) => e.attributes.open), [undefined], 'folded unless the owner opened it');
+    assert.equal(allElements(threadView(long, { fold: 2, open: true })).find((e) => e.tagName === 'DETAILS').attributes.open, '');
+    const lists = folded.filter((e) => e.tagName === 'OL');
+    assert.deepEqual(lists.map((l) => l.childNodes.length), [4, 2], 'four folded, the last two shown');
+    assert.equal(lists[1].childNodes[1].className, 'msg by-team unread');
+    const one = allElements(threadView(long, { fold: 1 })).filter((e) => e.tagName === 'OL');
+    assert.deepEqual([one[0].childNodes.length, one[1].childNodes[0].className], [5, 'msg by-team unread'], "the team's newest answer stays out of the fold");
+    assert.equal(allElements(threadView({ ...long, thread: long.thread.slice(0, 3) }, { fold: 2 })).filter((e) => e.tagName === 'DETAILS').length, 0, 'one earlier message is never folded');
     // The page builds its handoff cards with dom.js, and nothing in it parses HTML
     const app = read(REPO, 'src/ui/app.js');
     const dom = read(REPO, 'src/ui/dom.js');
     assert.match(app, /import \{ h, requestParts, textBlock, threadView \} from '\.\/dom\.js';/);
-    assert.match(app, /threadView\(x, \{ when: ago2 \}\)/);
+    assert.match(app, /threadView\(x, \{ when: ago2\b/);
     assert.doesNotMatch(`${app}\n${dom}`, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser|createContextualFragment/);
   } finally {
     delete globalThis.Node;

@@ -179,8 +179,8 @@ export const COMMANDS = {
   handoff: {
     group: 'owner',
     lines: [
-      ['nextlevel handoff done <id> [--reply "..."] | reply <id> "..."', 'a step the team asked you for is done; or answer it'],
-      ['nextlevel handoff list [--all] | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | cancel <id> --reply "why"', 'what the team asks the owner for, and its answers on the cards', 'orchestrator'],
+      ['nextlevel handoff done <id> [--reply "..."] | reply <id> "..." | reopen <id>', 'a step the team asked you for is done; answer it; or open a closed card again'],
+      ['nextlevel handoff list [--all] | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | close <id> --file <path> | cancel <id> --reply "why"', 'what the team asks the owner for, and its answers on the cards', 'orchestrator'],
     ],
     text: 'Free text comes from a file with --file <path> (on Windows a line break ends a command\'s argument). docs/HANDOFF.md is written from the cards: never edit it by hand. A card that holds a change for your approval is decided on the dashboard only.',
     options: {
@@ -201,7 +201,9 @@ export const COMMANDS = {
       answer: { options: ['file', 'json'], args: [1, 1], hint: 'answer <id> --file <path>   (write the answer to a file first, for example .nextlevel/answer.md; --file - reads it from stdin. Never the text in the command: on Windows it would end at its first line break.)' },
       seen: { options: ['json'], args: [1, ANY] },
       cancel: { options: ['reply', 'file', 'json'], args: [1, 1] },
+      close: { options: ['file', 'json'], args: [1, 1], hint: 'close <id> --file <path>   (what resolved it, in a file: the owner did it or answered, and nothing is left. A card no longer needed before the owner acted: cancel.)' },
       done: { options: ['reply', 'file', 'json'], args: [1, 1] },
+      reopen: { options: ['json'], args: [1, 1] },
       reply: { options: ['reply', 'file', 'json'], args: [1, ANY] },
     },
   },

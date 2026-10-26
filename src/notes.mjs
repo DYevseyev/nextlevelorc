@@ -11,14 +11,15 @@
 //                               (or: add "what to do" --where "which window, panel or file" --why "why")
 //                 nextlevel handoff answer <id> --file <path>             an answer on the card (--file -: from stdin)
 //                 nextlevel handoff seen <id>...
+//                 nextlevel handoff close <id> --file <path>              resolved: the owner did it or answered (FR-018)
 //                 nextlevel handoff cancel <id> --reply "why it is no longer needed" | --file <path>
 //   Owner         nextlevel note add "text" [--rule] | edit <id> "text" | withdraw <id> | off <id> | on <id> | remove <id>
-//                 nextlevel handoff done <id> [--reply "..."] | reply <id> "..."
+//                 nextlevel handoff done <id> [--reply "..."] | reply <id> "..." | reopen <id>
 // Free text can always come from a file instead (--file <path>, a file in the project folder; --file - reads stdin), and
 // an answer only does (FR-014): on Windows the orchestrator runs nextlevel through nextlevel.cmd, where an argument ends
 // at its first line break and % ^ & ! and quotes may change. An answer is redacted like a report before it is kept
 // (`redact`, from the hub): the owner reads it on the dashboard, and the cards' Markdown goes into Git.
-import { firstLine, noteGroups, when } from './lib/cards.mjs';
+import { conversation, eventWords, eventsOf, firstLine, noteGroups, when } from './lib/cards.mjs';
 import { commandArgs } from './lib/commands.mjs';
 import { OUTPUT_BUDGET, cutSaid, head, sizeOf, sizeText } from './lib/reports.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
@@ -185,6 +186,8 @@ const who = (e) => (e.by === 'team' ? 'the team answered' : 'the owner replied')
 const quoted = (text, pad = '') => String(text).split('\n').map((l) => `${pad}> ${l}`.trimEnd());
 const plural = (n, word) => `${count(n)} ${word}${n === 1 ? '' : 's'}`;
 const linesIn = (s) => String(s).split('\n').length;
+// A card's state as the team reads it (FR-018): a done card the team closed as resolved is "closed"
+const stateOf = (x) => (x.status === 'done' && x.closedBy === 'team' ? 'closed' : x.status);
 
 // One card in `handoff list`. The owner's words new to the team whole, with their line breaks, unless `short` (the
 // output wouldn't fit: then shortened, saying so, with the command that shows them whole); what the team has seen, a
@@ -194,7 +197,7 @@ function cardLines(x, { handled = false, short = false } = {}) {
   const said = (text, n) => cutSaid(quote(text), n, show, String(text).length);
   const [first, ...more] = String(x.what).split('\n');
   const extra = more.filter((l) => l.trim()).length;
-  const out = [`  ${x.id.padEnd(5)} ${x.status.padEnd(9)} ${said(first, handled ? 110 : 300)}${extra && !handled ? ` [the request goes on for ${plural(extra, 'more line')}: ${show}]` : ''}`];
+  const out = [`  ${x.id.padEnd(5)} ${stateOf(x).padEnd(9)} ${said(first, handled ? 110 : 300)}${extra && !handled ? ` [the request goes on for ${plural(extra, 'more line')}: ${show}]` : ''}`];
   if (!handled && (x.where || x.why)) out.push(`${PAD}${[x.where && `where: ${said(x.where, 300)}`, x.why && `why: ${said(x.why, 300)}`].filter(Boolean).join(' · ')}`);
   for (const e of handled ? x.thread.slice(-1) : x.thread) {
     const top = `${PAD}${who(e)} (${when(e.at)})`;
@@ -203,7 +206,20 @@ function cardLines(x, { handled = false, short = false } = {}) {
     else out.push(`${top}: "${said(e.text, handled || !isNew(x, e) ? 200 : 600)}"`);
   }
   if (x.status === 'cancelled' && x.note) out.push(`${PAD}cancelled: ${said(x.note, 120)}`);
+  if (x.status === 'done' && x.closedBy === 'team' && x.note) out.push(`${PAD}closed by the team: ${said(x.note, 120)}`);
+  const again = reopened(x);
+  if (again && !handled) out.push(`${PAD}${again}`);
   return out;
+}
+// An open card the owner reopened (undo Done, FR-018): what it was before, and what that means for the team's work
+function reopened(x) {
+  if (x.status !== 'open' || !x.reopenedAt) return '';
+  const events = eventsOf(x);
+  const at = events.map((e) => e.kind).lastIndexOf('reopened');
+  const before = events.slice(0, at < 0 ? events.length : at).filter((e) => e.kind !== 'reopened').at(-1);
+  const was = !before ? 'closed' : before.kind === 'done' ? 'done by the owner' : before.kind === 'closed' ? 'closed by the team' : 'cancelled by the team';
+  const how = x.reopenedHow === 'reply' ? ' by a reply' : x.reopenedHow === 'terminal' ? ' from the terminal' : '';
+  return `reopened by the owner${how} ${when(x.reopenedAt)}, after it was ${was}${before?.at ? ` ${when(before.at)}` : ''}: anything the team did since that relied on it being closed may need another look`;
 }
 const FOOTER = [
   'To answer the owner on a card: write the answer to a file (for example .nextlevel/answer.md, which git ignores), then',
@@ -212,6 +228,7 @@ const FOOTER = [
   'To ask the owner something new: write the request to a file, with a line "Where: ..." (which window, panel or file) and a line "Why: ...", then',
   '  nextlevel handoff add --file <path> [--task <task-id>]   and tell the owner: nextlevel notify "Needs you: <id>" --file <the same path> high',
   'A card whole, with all its replies and answers: nextlevel handoff show <id>',
+  'When it is resolved (the owner did it or answered, and nothing is left): write what resolved it to a file, then nextlevel handoff close <id> --file <path>. Cancel (nextlevel handoff cancel <id> --reply "why") only a card no longer needed before the owner acted.',
 ];
 function listHandoff(store, a, print) {
   const items = store.handoff.list();
@@ -252,12 +269,16 @@ function listHandoff(store, a, print) {
 // `handoff show <id> [--from <line>]`: one card, whole, with its replies and answers in time order; in parts that fit
 // the budget, each saying where the next starts.
 function cardText(x) {
-  const out = [`${x.id} · ${x.status} · asked ${when(x.createdAt)}${x.task ? ` · task ${x.task}` : ''}`, '', 'The request:', ...quoted(x.what)];
+  const out = [`${x.id} · ${stateOf(x)} · asked ${when(x.createdAt)}${x.task ? ` · task ${x.task}` : ''}`, '', 'The request:', ...quoted(x.what)];
   if (x.where) out.push(`where: ${x.where}`);
   if (x.why) out.push(`why: ${x.why}`);
-  for (const e of x.thread) out.push('', `${who(e)} (${when(e.at)})${isNew(x, e) ? ', new to you' : ''}, ${plural(e.text.length, 'character')}:`, ...quoted(e.text));
-  if (x.status === 'done') out.push('', `Done by the owner ${when(x.doneAt)}.`);
-  if (x.status === 'cancelled') out.push('', `Cancelled ${when(x.doneAt)}: ${x.note || 'no longer needed'}`);
+  // (the replies and answers, and the card's closings and reopenings, in time order)
+  for (const e of conversation(x)) {
+    if (e.text === undefined) out.push('', `${eventWords(e)}.`);
+    else out.push('', `${who(e)} (${when(e.at)})${isNew(x, e) ? ', new to you' : ''}, ${plural(e.text.length, 'character')}:`, ...quoted(e.text));
+  }
+  const again = reopened(x);
+  if (again) out.push('', `Now open again: ${again}.`);
   return out.join('\n');
 }
 function showCard(store, a, id, print) {
@@ -289,7 +310,7 @@ export async function cmdHandoff(argv, ctx) {
   const need = (cond, usage) => {
     if (!cond) throw new Error(`usage: nextlevel handoff ${usage}`);
   };
-  if (['done', 'reply'].includes(sub)) {
+  if (['done', 'reply', 'reopen'].includes(sub)) {
     ownerSide(`nextlevel handoff ${sub}`, "The owner replies or marks a card done on the dashboard's Notes page, or with this command in their own window. The team answers on a card with nextlevel handoff answer <id> --file <path>.");
   }
   switch (sub) {
@@ -339,8 +360,20 @@ export async function cmdHandoff(argv, ctx) {
     case 'reply': {
       const text = freeText(a, flag(a, 'reply') || rest.slice(1).join(' '), c, 'the reply');
       need(rest[0] && text.trim(), 'reply <id> "your answer"   (or: reply <id> --file <path>)');
+      const was = store.handoff.list().find((i) => i.id.toLowerCase() === rest[0].trim().toLowerCase())?.status;
       const x = store.handoff.reply(rest[0], text);
-      print({ ok: true, item: x }, `Replied to ${x.id}.`);
+      print({ ok: true, item: x }, was && was !== 'open' ? `Replied to ${x.id}, which is open again: the team sees it at its next start or round.` : `Replied to ${x.id}.`);
+      return 0;
+    }
+    case 'reopen': {
+      const x = store.handoff.reopen(rest[0], { how: 'terminal' });
+      print({ ok: true, item: x }, `${x.id} is open again, with its whole conversation. The team sees it at its next start or round; what it did since isn't undone.`);
+      return 0;
+    }
+    case 'close': {
+      need(rest.length === 1 && a.file !== undefined, 'close <id> --file <path>   (what resolved it, in a file)');
+      const x = store.handoff.close(rest[0], { note: clean(readTextFile(a.file === true ? '' : a.file, { root: c.root })) });
+      print({ ok: true, item: x }, `${x.id} is closed as resolved: "${x.note}". The owner sees "Closed by the team", and can reopen it.`);
       return 0;
     }
     case 'seen': {
@@ -352,11 +385,15 @@ export async function cmdHandoff(argv, ctx) {
     case 'cancel': {
       const reply = freeText(a, flag(a, 'reply'), c, 'why');
       need(rest[0] && reply.trim(), 'cancel <id> --reply "why it is no longer needed"   (or --file <path>)');
-      const x = store.handoff.cancel(rest[0], { reply });
-      print({ ok: true, item: x }, `${x.id} is cancelled: "${x.note}".`);
+      // (redacted like an answer: on a card the owner replied to it is kept whole in the thread, and HANDOFF.md goes into Git)
+      const x = store.handoff.cancel(rest[0], { reply: clean(reply) });
+      const said = x.closedInstead
+        ? `${x.id}: the owner replied on it, so it is closed as resolved, not cancelled: "${x.note}". Next time use nextlevel handoff close ${x.id} --file <path> for a card the owner acted on.`
+        : `${x.id} is cancelled: "${x.note}".`;
+      print({ ok: true, item: x }, said);
       return 0;
     }
     default:
-      throw new Error('usage: nextlevel handoff [list [--all]] | show <id> | add --file <path> [--task <id>] | answer <id> --file <path> | seen <id>... | cancel <id> --reply "..." | done <id> [--reply "..."] | reply <id> "..."   (--file <path>: the text from a file)');
+      throw new Error('usage: nextlevel handoff [list [--all]] | show <id> | add --file <path> [--task <id>] | answer <id> --file <path> | seen <id>... | close <id> --file <path> | cancel <id> --reply "..." | done <id> [--reply "..."] | reply <id> "..." | reopen <id>   (--file <path>: the text from a file)');
   }
 }

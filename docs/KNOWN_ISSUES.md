@@ -922,7 +922,7 @@ command**. A determined agent, running as the owner, can still:
   user's files: an agent can write them. The doctor's "nextlevel updates" row shows changed files in the tool's folder.
 - **Keep autopilot's rounds going (FR-019).** Only the orchestrator asks for a wake-up (`nextlevel wakeup` refuses for a
   worker, a verify command, the assistant and the owner's window), and the owner's side of the cards (`note add`, `edit`,
-  `withdraw`, `off`, `on`, `remove`, `handoff reply`, `done`) refuses in an agent's session: both read the variables the
+  `withdraw`, `off`, `on`, `remove`, `handoff reply`, `done`, `reopen`) refuses in an agent's session: both read the variables the
   hub puts in an agent's environment, so this is a bar, not a wall, until FR-017 part 2B. An agent that clears them, or
   writes `.nextlevel/` directly (the cards' stores with their count of the owner's actions, `round-now.json`,
   `wakeup.json`, `rounds.json` with the brake and the fuse), passes for the owner and starts rounds; on Codex its sandbox
@@ -971,3 +971,11 @@ command**. A determined agent, running as the owner, can still:
   compare merges with a record the hub keeps).
 Fix later (part 2 and after): the workers can't reach the hub at all; then a separate Windows user for agents, with its
 own home folder and no access to the owner's sign-ins, `.env` or nextlevel's files.
+
+## Handoff cards after a Go back (undo Done, FR-018)
+- A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the
+  older version shows the card open and never makes it final. Click Done again. Coming forward again, a pending Done is
+  made final only on a card still as it was clicked.
+- An older version shows a card the team closed as resolved as done ("Done ... by the owner" in docs/HANDOFF.md, which
+  it writes again at its next change), and a reopened card as open with no word of its reopening. Its `events` and
+  `closedBy` stay in `.nextlevel/handoff.json`, and the newer version reads them again.
