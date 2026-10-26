@@ -56,6 +56,7 @@ export const OLD_TEMPLATES = {
     'c7a340293bdfc33d61b4f31b10f811bbc69a81acc60829f0e70f6900e4b3ca73', // the push guard, #37 (no second worker, no Needs: lines)
     '14d6eb904a5685f77c6ac6b311ee8c4049dedb619b9f1494bd9a8ff96889de0a', // Codex workers' part B (the first public version reworded one example)
     '34846aac319924a1dc8809377c681b7ef56491c2967c4f637de7dc04ff90dde7', // the public versions to v0.2.0 (only cancel, no reopened cards)
+    '956e92c57485776bf476b13a5a7b93a168f841f079a02e81808e1b268df585f1', // the handoff cards (AGENTS.override.md and SECURITY.md not protected)
   ],
   'docs/agents/WORKER.md': [
     '76eb1176642564d6e2612d232aacc0433041ad191327f2b69809251e29923d21', // M1
@@ -65,6 +66,7 @@ export const OLD_TEMPLATES = {
     '8cf935558e2c0ec5d2a96dd583702b15e1555699dfaf3b3c8af19f97367155a3', // the guard, part 1 (nothing on git's own settings)
     'a4def5a456bf1e0ef1f227b6792b8cda30412aa8ee98c80f0ba5da32de1a5102', // the guard, part 2 (the result in the report, remote scans)
     '3aa6e303e12a4afb01f923d38832b3f30bb6a4f9d79e61a81cb438b044bdff99', // FR-012 (commands tried to learn what they do)
+    '374366b1fdab5b5ccfb22f8596ba9a93223d1ecd8fedea2d2c099857e925f97e', // before the security engineer (AGENTS.override.md and SECURITY.md not protected)
   ],
   'docs/agents/GUIDE.md': [
     '76afcf14de37fff5be0cd96c6014dee1438e2d41218b3ef228238bd0ada893e1', // M1

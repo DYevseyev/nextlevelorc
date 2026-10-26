@@ -258,9 +258,9 @@ Reopening undoes nothing you did; tell the owner on the card what you change, or
 
 ## Protected files
 Some files steer the agents and the owner's tools outside any sandbox: `.claude/`, `.codex/`, `.gemini/`, `.agents/`,
-`.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` (these in any
-folder), `docs/agents/`, `nextlevel.json` and `START.cmd`, plus what the owner adds under `"protected"` in
-`nextlevel.json`. They change only with the owner's approval, which the owner gives on the dashboard, looking at the
+`.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `GEMINI.md`
+and `SECURITY.md` (these in any folder), `docs/agents/`, `nextlevel.json` and `START.cmd`, plus what the owner adds
+under `"protected"` in `nextlevel.json`. They change only with the owner's approval, which the owner gives on the dashboard, looking at the
 exact change:
 - Never put one in a task's "Files owned": `nextlevel dispatch` refuses such a spec. List the files the task
   changes, not a folder that holds protected ones (such as `docs/`).

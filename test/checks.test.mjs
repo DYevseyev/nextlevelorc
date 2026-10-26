@@ -1480,9 +1480,9 @@ test('guard.held: the changes to protected files that wait for the owner, and th
   const none = await check('guard.held');
   assert.equal(none.status, 'ok');
   assert.equal(none.quiet, true);
-  assert.match(none.detail, /none waiting for you; 15 protected paths/);
+  assert.match(none.detail, /none waiting for you; 17 protected paths/);
   const own = await check('guard.held', { config: { protected: { add: ['.cursor/'], remove: ['.vscode/'] } } });
-  assert.match(own.detail, /15 protected paths \(nextlevel\.json adds \.cursor\/; removes \.vscode\/\)/);
+  assert.match(own.detail, /17 protected paths \(nextlevel\.json adds \.cursor\/; removes \.vscode\/\)/);
   const waiting = await check('guard.held', {
     files: held([
       { id: 'G1', kind: 'merge', task: 'M1-01-hook', status: 'held', files: [{ path: '.claude/settings.json' }] },
