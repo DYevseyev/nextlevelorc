@@ -10,6 +10,10 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
   your own user today, so an engine without its own permission checks can read and write anything you can
   (`docs/KNOWN_ISSUES.md`, "What an agent running as the owner can still do"). This turns what stays open into walls.
 
+- **Codex's reads behind a wall too** (FR-023). On Windows its sandbox stops writes and the network, not reads, so the
+  orchestrator and Codex workers can read your other files (a `.env`, Codex's own sign-in). Next: deny the folders a
+  role has no business reading with Codex's permission profiles, then another user or a container (above).
+
 ## The team
 - **A stuck task gets help** (the stuck ladder): when attempts keep failing, the hub says so and offers the next step
   instead of only counting attempts (FR-020 records how each attempt ended).

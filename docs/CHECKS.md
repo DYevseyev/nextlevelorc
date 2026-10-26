@@ -573,7 +573,7 @@ projects with the same block (a hand-edited file): **warn**, else **info**.
 ### guard.held
 Changes to **protected files** that wait for the owner. Protected files steer the agents and the owner's tools
 outside any sandbox: `.claude/`, `.codex/`, `.gemini/`, `.agents/`, `.vscode/`, `.github/`, `.husky/`, `.mcp.json`,
-`.npmrc`, `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` (these in any folder), `docs/agents/`, `nextlevel.json` and
+`.npmrc`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `GEMINI.md` and `SECURITY.md` (these in any folder), `docs/agents/`, `nextlevel.json` and
 `START.cmd`; `"protected": { "add": [...], "remove": [...] }` in `nextlevel.json` changes the list. The hub holds a
 merge or a commit that changes one, and sets back a change made on disk while the orchestrator works, until the owner
 approves or rejects exactly that change on the dashboard (Notes and handoffs: the card has what it does in plain

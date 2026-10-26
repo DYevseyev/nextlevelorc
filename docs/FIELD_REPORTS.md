@@ -883,3 +883,25 @@ Tools: Antigravity CLI 1.3.4 (it updated itself from 1.3.2), workers pinned to g
    models`, and 1.3.4's Claude models with a level in their name (`claude-opus-5-5-medium`). The Team page reads their
    levels from the names; a real task ran on `gemini-4-argon-high` on a test project. Argon in the other roles is a later
    pull request.
+
+## FR-023 — Owner's PC, 2026-10-26: Codex's Windows sandbox reads outside the workspace
+Tools: Codex CLI 0.164.0 (the Codex app's `codex.exe`, ChatGPT sign-in), Windows 11. Found while measuring what the
+security engineer's scan would run with, in a throwaway clone of a test project. High severity for what it means, not
+for anything that happened: nothing was read but two harmless files planted for the test.
+
+1. **A `codex exec --sandbox workspace-write` run read two planted files outside its workspace,** a canary word in a
+   folder beside it and a `.env` holding a harmless value, with the owner's config (`windows.sandbox = "elevated"`) and
+   again with `-c windows.sandbox=elevated` on the command line: both `type` commands exited 0, no sandbox denial. The
+   same runs were refused a write outside the workspace ("Access to the path ... is denied") and allowed one inside it.
+   So on Windows the sandbox is a wall for writes (and seemingly the network: curl failed with a TLS error), not for
+   reads: **the orchestrator and Codex workers in their sandbox can read what the owner's Windows user can read**, the
+   main checkout's `.env` and `~\.codex\auth.json` included (a worker out of the sandbox, the Team page's switch, could
+   already). Codex Security's own documentation says the same of its scans ("The scan profile allows reads across the
+   local filesystem").
+   *Recorded:* KNOWN_ISSUES ("Codex CLI"), and the roadmap's "Safety: from bars to walls"; the security engineer's scan
+   (coming) will run in OpenAI's scanner container instead, whose only host paths are its mounts.
+2. **Not every add-on can be switched off per run:** `-c mcp_servers.<name>.enabled=false` for two of the Codex app's
+   own MCP servers failed the whole run at config load ("invalid transport in `mcp_servers.<name>`"), and Codex has no
+   command that lists skills. *Recorded:* KNOWN_ISSUES.
+3. **`AGENTS.override.md` wasn't protected** (Codex reads it ahead of `AGENTS.md`), nor `SECURITY.md` (a scanner reads
+   it as policy). *Fixed:* both are in the guard's built-in list, at any depth.

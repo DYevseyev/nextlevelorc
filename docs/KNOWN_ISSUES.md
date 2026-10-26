@@ -227,6 +227,21 @@ against 0.157.1 (FR-011, FR-013).
   `cached_input_tokens`, `output_tokens`: the session's running total) or `turn.failed`. With `--json` it
   doesn't print "tokens used", so nextlevel counts the last `turn.completed` (input without the cached part,
   plus output, like "tokens used"). Older versions' JSON (`{"msg":{"type":"exec_command_begin",...}}`) is read too.
+- **Its Windows sandbox blocks writes outside the workspace, not reads (FR-023).** Measured on 0.164.0, Windows 11
+  (26 October), in a throwaway workspace: with `--sandbox workspace-write`, the owner's `windows.sandbox = "elevated"`
+  and again with `-c windows.sandbox=elevated`, `type` of a file beside the workspace and of a `.env` there exited 0 and
+  the model got their contents; a write beside it was refused, a write inside allowed, and curl failed with a TLS error
+  (`SEC_E_NO_CREDENTIALS`), which suggests the network is off but doesn't prove it.
+  So the orchestrator and Codex workers can read what the owner's user can read (another project's `.env`,
+  `~\.codex\auth.json`). Codex has permission profiles (`default_permissions`, `permissions.<name>.filesystem` with
+  `{ "." = "deny" }` for a path: Codex Security's own scan uses them, `":root" = "read"` on Windows since the elevated
+  sandbox needs it), which nextlevel doesn't use yet; whether a deny works on Windows isn't measured (0.164.0 documents
+  no spelling for it). A wall needs another user or a container (ROADMAP, "Safety: from bars to walls").
+- **Not every add-on switches off per run (FR-023).** On 0.164.0 `-c mcp_servers.<name>.enabled=false` for the Codex
+  app's own `codex_app` and `cua_repl` fails the run at config load (`Error loading config.toml: invalid transport in
+  mcp_servers.codex_app`), so nextlevel can't keep them from a run; `codex debug models` prints JSON already (its
+  `--json` exits 2), each model listing `available_access_programs` (`{"cyber":["standard","daybreak_blue"]}`); there is
+  no command that lists skills; and `exec` has `--cyber-access-program` (standard, daybreak_blue, daybreak_red).
 - **A worker on Windows, in Codex's sandbox, can't use Docker or install packages, network or not (FR-009).**
   Measured on Codex 0.160.0, Windows 11 22H2, through a test project's hub (15 October): its sandbox is the "elevated"
   one (`[windows] sandbox = "elevated"`; `~/.codex/.sandbox/setup_marker.json` names the accounts), and a worker's

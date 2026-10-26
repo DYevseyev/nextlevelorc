@@ -10,7 +10,7 @@ import { hooksFromJson, hooksFromToml } from '../checks/codex-hooks.mjs';
 // The built-in list. A name ending in "/" is a folder (everything in it); a name without a "/" inside matches at any
 // depth (a CLAUDE.md or .claude/ in a subfolder is loaded too); one with a "/" inside is from the project's top. The
 // owner adds or removes entries in nextlevel.json: "protected": { "add": [...], "remove": [...] }.
-export const BUILT_IN = ['.claude/', '.codex/', '.gemini/', '.agents/', '.vscode/', '.github/', '.husky/', '.mcp.json', '.npmrc', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'docs/agents/', 'nextlevel.json', 'START.cmd'];
+export const BUILT_IN = ['.claude/', '.codex/', '.gemini/', '.agents/', '.vscode/', '.github/', '.husky/', '.mcp.json', '.npmrc', 'AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md', 'GEMINI.md', 'SECURITY.md', 'docs/agents/', 'nextlevel.json', 'START.cmd'];
 
 // A path as the entries are written: forward slashes, no "./", no doubled slashes; a leading "/" means the top
 const clean = (p) => String(p ?? '').trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/^(\.\/)+/, '');

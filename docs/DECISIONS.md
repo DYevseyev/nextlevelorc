@@ -1992,3 +1992,11 @@ One entry each: date, decision, why, alternatives.
   `done` with `closedBy: 'team'`, and a cancel on a card the owner replied to becomes that close, so an orchestrator on
   an older role doc doesn't repeat H18. The cards redesign and undo Done went in one pull request: both rewrite the
   same card, and one Windows run is about 20 paid minutes.
+- 2026-10-26 — **AGENTS.override.md and SECURITY.md are protected, as names at any depth.** Codex reads
+  `AGENTS.override.md` in each folder ahead of `AGENTS.md`, so a branch that added one steered every Codex role while the
+  guard held only `AGENTS.md`: a safety fix. `SECURITY.md` is the policy OpenAI's Codex Security reads (every one from
+  the top to the folder scanned, the nearest winning), including what not to report, so a file nobody approved could
+  hide a finding from the coming security engineer (`docs/design/security-engineer.md`). Names match as Windows reads
+  them, in lowercase, so `docs/security.md` is protected too: a project that keeps its security notes under that name
+  gets a card for each change to them, which is the price of one rule for every engine. A project can take either out
+  with `"protected": { "remove": [...] }`.

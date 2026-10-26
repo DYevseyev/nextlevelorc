@@ -284,7 +284,7 @@ changes a role for you, after checking it.
 
 ### Protected files
 Some files steer the agents and your own tools outside any sandbox: `.claude/`, `.codex/`, `.gemini/`, `.agents/`,
-`.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `CLAUDE.md` and `GEMINI.md` (in any folder),
+`.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `GEMINI.md` and `SECURITY.md` (in any folder),
 `docs/agents/`, `nextlevel.json` and `START.cmd`. A hook or an MCP server added there runs the next time a tool
 opens the project. So they change only with your approval: the hub holds a task's merge or an orchestrator commit
 that changes one, and sets back a change made on disk while the orchestrator works. You get a card on the dashboard

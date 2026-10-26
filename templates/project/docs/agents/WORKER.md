@@ -73,10 +73,11 @@ report is shortened when the orchestrator reads it.
 - Never change git's settings or hooks (`git config`, `.git/hooks`, this slot's settings): the hub records them,
   and a change it didn't make stops all git work until the owner decides.
 - **Protected files:** don't create, change or delete `.claude/`, `.codex/`, `.gemini/`, `.agents/`,
-  `.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `CLAUDE.md` or `GEMINI.md` (in any
-  folder), `docs/agents/`, `nextlevel.json` or `START.cmd`. The agents and the owner's tools load them outside
-  any sandbox, so a change to one holds up your task's merge until the owner approves it. If your task truly
-  needs one changed, don't: say what and why in your report and finish with `Status: PARTIAL`.
+  `.vscode/`, `.github/`, `.husky/`, `.mcp.json`, `.npmrc`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`,
+  `GEMINI.md` or `SECURITY.md` (in any folder), `docs/agents/`, `nextlevel.json` or `START.cmd`. The agents and
+  the owner's tools load them outside any sandbox, so a change to one holds up your task's merge until the owner
+  approves it. If your task truly needs one changed, don't: say what and why in your report and finish with
+  `Status: PARTIAL`.
 - No destructive commands: no recursive deletes, no `git reset --hard`, `git clean`, `git push`, `gh`,
   `ssh`, `scp`, registry or disk tools. Some are blocked; don't try to work around a block — report it.
 - Never run a command that could have side effects just to learn what it does, with any tool. Read this doc and the

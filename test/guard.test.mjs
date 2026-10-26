@@ -14,7 +14,7 @@ import { REPO, fileExists, hubRounds, isAlive, makeProject, sleep } from './help
 import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 
 test('protected paths: the built-in list, at any depth or from the top, as Windows reads a name; look-alikes are not', () => {
-  assert.deepEqual(BUILT_IN, ['.claude/', '.codex/', '.gemini/', '.agents/', '.vscode/', '.github/', '.husky/', '.mcp.json', '.npmrc', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'docs/agents/', 'nextlevel.json', 'START.cmd']);
+  assert.deepEqual(BUILT_IN, ['.claude/', '.codex/', '.gemini/', '.agents/', '.vscode/', '.github/', '.husky/', '.mcp.json', '.npmrc', 'AGENTS.md', 'AGENTS.override.md', 'CLAUDE.md', 'GEMINI.md', 'SECURITY.md', 'docs/agents/', 'nextlevel.json', 'START.cmd']);
   for (const p of [
     '.claude/settings.json',
     '.claude/settings.local.json',
@@ -29,11 +29,15 @@ test('protected paths: the built-in list, at any depth or from the top, as Windo
     'AGENTS.md',
     'CLAUDE.md',
     'GEMINI.md',
+    'AGENTS.override.md',
+    'SECURITY.md',
     'docs/agents/WORKER.md',
     'nextlevel.json',
     'START.cmd',
     // a name without a "/" inside counts at any depth: nested instruction files and settings are loaded too
     'packages/api/CLAUDE.md',
+    'packages/api/AGENTS.override.md',
+    'docs/security.md',
     'packages/api/.claude/settings.json',
     'web/.npmrc',
     // the same file, as Windows reads the name: case, trailing dots and spaces, a stream, a short name
