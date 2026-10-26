@@ -29,13 +29,18 @@ export const requestParts = (what) => {
 
 // The replies and answers after a card's request, in time order: whose, when, and the text whole. The team's newest
 // answer is marked while it waits for the owner (`x.unread`). `when(iso)`: the time as the page says it. `fold` (the
-// cards redesign): all but the last `fold` messages fold into one "N earlier messages" line, open when `open` says so
+// cards redesign): all but the last `fold` entries fold into one "N earlier messages" line, open when `open` says so
 // (`onToggle(open)` keeps it across redraws); the team's newest answer never folds while it waits for the owner.
-export function threadView(x, { when = (iso) => String(iso || ''), fold = 0, open = false, onToggle } = {}) {
+// `events` (undo Done, FR-018): the card's closings and reopenings, each a line in time order, in `eventLabel(e)`'s words.
+export function threadView(x, { when = (iso) => String(iso || ''), fold = 0, open = false, onToggle, events = [], eventLabel = (e) => e.kind } = {}) {
   const thread = Array.isArray(x.thread) ? x.thread : [];
-  if (!thread.length) return null;
   const lastTeam = thread.map((e) => e.by).lastIndexOf('team');
-  const item = (e, i) => {
+  const ms = (iso) => Date.parse(iso || '') || 0;
+  const all = [...thread.map((e, i) => ({ e, i, k: 0 })), ...(Array.isArray(events) ? events : []).map((e, i) => ({ e, i, k: 1 }))]
+    .sort((a, b) => ms(a.e.at) - ms(b.e.at) || a.k - b.k || a.i - b.i);
+  if (!all.length) return null;
+  const item = ({ e, i, k }) => {
+    if (k === 1) return h('li.event', {}, h('span', {}, eventLabel(e)), e.at ? h('span.msg-when', {}, ` ${when(e.at)}`) : null);
     const team = e.by === 'team';
     const fresh = team && i === lastTeam && !!x.unread;
     return h(
@@ -46,11 +51,12 @@ export function threadView(x, { when = (iso) => String(iso || ''), fold = 0, ope
     );
   };
   const label = { 'aria-label': `${x.id}: replies and answers, oldest first` };
-  let cut = fold > 0 ? Math.max(0, thread.length - fold) : 0;
-  if (x.unread && lastTeam >= 0) cut = Math.min(cut, lastTeam);
-  if (cut < 2) return h('ol.thread', label, thread.map(item));
+  let cut = fold > 0 ? Math.max(0, all.length - fold) : 0;
+  const fresh = all.findIndex((a) => a.k === 0 && a.i === lastTeam);
+  if (x.unread && fresh >= 0) cut = Math.min(cut, fresh);
+  if (cut < 2) return h('ol.thread', label, all.map(item));
   const earlier = h('details.earlier', { open, ontoggle: onToggle ? (ev) => onToggle(ev.currentTarget.open) : undefined },
     h('summary', {}, `${cut} earlier messages`),
-    h('ol.thread', {}, thread.slice(0, cut).map(item)));
-  return h('div.thread-wrap', {}, earlier, h('ol.thread', label, thread.slice(cut).map((e, i) => item(e, i + cut))));
+    h('ol.thread', {}, all.slice(0, cut).map(item)));
+  return h('div.thread-wrap', {}, earlier, h('ol.thread', label, all.slice(cut).map(item)));
 }

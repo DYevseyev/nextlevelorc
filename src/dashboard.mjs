@@ -30,7 +30,8 @@
 //             held because a stopped worker's processes may still run there (FR-013) is a card whose Check again
 //             (POST /api/slot) has the hub list the processes once more.
 //   Notes     the owner's notes to the orchestrator and the team's handoff items, as cards (lib/cards.mjs): add,
-//             edit, withdraw a note, switch a standing rule off; mark a handoff item done or reply to it. The
+//             edit, withdraw a note, switch a standing rule off; mark a handoff item done (Undo for 10 seconds), reply
+//             to it, reopen a closed one (a reply on a closed one reopens it too). The
 //             orchestrator answers with nextlevel note / handoff; docs/OWNER_NOTES.md and HANDOFF.md are written
 //             from the cards. Home lists the open handoff items with a Done button, and the cards the team answered
 //             (FR-014: each card is one conversation, every text in it shown as plain text, src/ui/dom.js).
@@ -528,7 +529,12 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
   const HANDOFF_TEAM = ['what', 'where', 'why', 'note', 'task'];
   const noteView = (n) => team(n, NOTE_TEAM);
   // (a card's thread, FR-014: the team's answers redacted, the owner's replies as they are)
-  const handoffView = (x) => ({ ...team(x, HANDOFF_TEAM), thread: (x.thread || []).map((e) => (e.by === 'team' ? { ...e, text: clean(e.text ?? '') } : e)) });
+  const handoffView = (x) => ({
+    ...team(x, HANDOFF_TEAM),
+    thread: (x.thread || []).map((e) => (e.by === 'team' ? { ...e, text: clean(e.text ?? '') } : e)),
+    // (its closings and reopenings: the team's notes redacted, undo Done and FR-018)
+    events: (x.events || []).map((e) => (e.by === 'team' ? { ...e, note: clean(e.note ?? '') } : e)),
+  });
   function cardsView() {
     const v = api.cards.view();
     const notes = Object.fromEntries(Object.entries(v.notes).map(([k, list]) => [k, list.map(noteView)]));

@@ -15,7 +15,7 @@ import { writeShims } from '../src/lib/install.mjs';
 import { ownerNeeds } from '../src/lib/overview.mjs';
 import { OUTPUT_BUDGET, sizeOf } from '../src/lib/reports.mjs';
 import { decodeText, readTextFile } from '../src/lib/textin.mjs';
-import { BIN, REPO, makeProject, withEnv } from './helpers.mjs';
+import { BIN, REPO, makeProject, testClock, withEnv } from './helpers.mjs';
 import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -209,7 +209,10 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     for (const line of ['Postmark', 'transactional', 'Reply "go"']) assert.ok(!msg.message.includes(line), `the answer isn't on the phone: ${msg.message}`);
     assert.equal(msg.priority, 4);
 
-    // What needs you: the card, until the owner replies or marks it done
+    // What needs you: the card, until the owner replies or marks it done (Done is final 10 seconds after the click,
+    // by the test's clock: undo Done)
+    const clock = testClock(p, Date.now());
+    Object.assign(p.env, clock.env);
     ui = await startUi(p);
     const api = client(ui);
     let state = (await api.get('/api/state')).json;
@@ -223,9 +226,13 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1').map((n) => n.kind), ['handoff'], 'replied: an open card like any other');
     assert.equal((await api.post('/api/handoff', { action: 'done', id: 'H1' })).status, 200);
     state = (await api.get('/api/state')).json;
+    assert.deepEqual(state.needs.filter((n) => n.id === 'H1').map((n) => [n.kind, n.action.label]), [['pending', 'Undo']], 'marked done: Undo for 10 seconds');
+    clock.addSeconds(11);
+    state = (await api.get('/api/state')).json;
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1'), []);
 
     // An answer on a card that is done already: it waits for the owner again, and Done marks it read without waking the team
+    clock.addSeconds(5); // (the test's clock stands still: the answer comes after the Done)
     p.hub(['handoff', 'seen', 'H1']);
     write(p.repo, '.nextlevel/answer.md', 'Set up and tested: a sign-up mail arrived in the test inbox.\n');
     assert.equal(p.hub(['handoff', 'answer', 'H1', '--file', '.nextlevel/answer.md']).code, 0);
@@ -236,7 +243,8 @@ test("the orchestrator answers on the card through nextlevel.cmd, the text in a 
     assert.deepEqual([cards.handoff.open.length, cards.handoff.answered.map((x) => x.id)], [0, ['H1']]);
     const read1 = await api.post('/api/handoff', { action: 'done', id: 'H1' });
     assert.equal(read1.status, 200, read1.text);
-    assert.equal(read1.json.message, 'Marked read.');
+    assert.equal(read1.json.message, 'Marked read: Undo for 10 seconds.');
+    clock.addSeconds(11);
     state = (await api.get('/api/state')).json;
     assert.deepEqual(state.needs.filter((n) => n.id === 'H1'), []);
     assert.deepEqual(store.news().handoff, [], 'reading an answer wakes no orchestrator');

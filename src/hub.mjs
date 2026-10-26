@@ -50,11 +50,12 @@
 //                                                  [--all-projects] [--json]   (the usage ledger, lib/usage.mjs; --all-projects
 //                                                  is the owner's)
 //               nextlevel note list | seen <id>... | done <id> --reply "..." [--commit S] [--task T] | decline <id> --reply "..."
-//               nextlevel handoff list | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | cancel <id> --reply "..."
+//               nextlevel handoff list | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | close <id> --file <path>
+//                                                  | cancel <id> --reply "..."
 //                                                  the owner's notes and the handoff items, as cards (src/notes.mjs, lib/cards.mjs);
 //                                                  docs/OWNER_NOTES.md and docs/HANDOFF.md are written from them. Free text comes
 //                                                  from a file (--file), since nextlevel.cmd ends an argument at a line break (FR-014)
-// Owner, too     nextlevel note add "text" [--rule] | edit | withdraw | off | on | remove;  nextlevel handoff done <id> [--reply "..."] | reply
+// Owner, too     nextlevel note add "text" [--rule] | edit | withdraw | off | on | remove;  nextlevel handoff done <id> [--reply "..."] | reply | reopen
 // Every command's usage, options and arguments are in lib/commands.mjs, and its code reads them from there (FR-015).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -109,7 +110,7 @@ import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
-import { awaitsOwner, cardStore, noteGroups, unreadAnswer } from './lib/cards.mjs';
+import { UNDO_MS, awaitsOwner, cardStore, eventsOf, noteGroups, unreadAnswer } from './lib/cards.mjs';
 import { readTextFile } from './lib/textin.mjs';
 import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from './lib/team.mjs';
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
@@ -5206,6 +5207,8 @@ function observe() {
   const settings = getSettings();
   let acts = null;
   try {
+    // (a Done on the dashboard past its Undo becomes final here too, with no page open and after a restart: undo Done)
+    cards().handoff.settle();
     acts = cards().ownerActs();
   } catch (err) {
     log(`autopilot: couldn't read the cards: ${err.message}`);
@@ -7393,9 +7396,15 @@ function dashboardState() {
 // The owner's own words (a note's text, a reply to a handoff item) come back as they are, since the page edits
 // them; what the team wrote (its replies, the handoff items) is redacted by the dashboard like everything else.
 // A handoff card as the page gets it: with its thread (FR-014) and whether the team's last answer waits for the owner
-const cardView = (x) => ({ ...x, unread: unreadAnswer(x) });
+// (with its closings and reopenings, undo Done and FR-018; a pending Done says when it becomes final)
+const cardView = (x) => ({ ...x, unread: unreadAnswer(x), events: eventsOf(x) });
 function cardsView() {
   const store = cards();
+  try {
+    store.handoff.settle();
+  } catch (err) {
+    log(`cards: a Done past its Undo couldn't be made final now (the next look tries again): ${err.message}`);
+  }
   const notes = noteGroups(store.notes.list());
   const items = store.handoff.list().map(cardView);
   const news = store.news();
@@ -7408,6 +7417,8 @@ function cardsView() {
     // (answered: done cards the team answered since, which wait for the owner again until a reply or Done)
     handoff: { open: items.filter((x) => x.status === 'open'), answered: closed.filter(awaitsOwner), history: closed.filter((x) => !awaitsOwner(x)).sort((a, b) => String(b.doneAt || b.updatedAt).localeCompare(String(a.doneAt || a.updatedAt))) },
     news,
+    now: new Date(clockNow()).toISOString(), // (the page counts an Undo's seconds from this, not from its own clock)
+    undoMs: UNDO_MS,
   };
 }
 // For the build data (every tick): the counts, a stamp that changes with the cards, and the handoff items that wait for
@@ -7416,10 +7427,14 @@ function cardsSummary() {
   try {
     const store = cards();
     const g = noteGroups(store.notes.list());
-    const all = store.handoff.list().map(cardView);
+    // (a Done past its Undo becomes final here too: the dashboard runs without a hub as well)
+    store.handoff.settle();
+    // (a pending Done: only when it becomes final, never its reply; the server's time only while one is pending, so a
+    // quiet tick leaves the build data as it was and pushes nothing)
+    const all = store.handoff.list().map((x) => ({ ...cardView(x), pending: x.pending ? { finalAt: x.pending.finalAt } : undefined }));
     const items = all.filter(awaitsOwner);
     // (closed: the handled items' ids, so Home's Blockers doesn't count a "Needs you" the owner has done)
-    return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id) };
+    return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id), now: all.some((x) => x.pending) ? new Date(clockNow()).toISOString() : undefined };
   } catch (err) {
     return { stamp: '', error: err.message, items: [] };
   }
@@ -7529,13 +7544,20 @@ function noteAction(b) {
 function handoffAction(b) {
   const h = cards().handoff;
   const id = String(b.id || '');
+  const was = h.list().find((x) => x.id.toLowerCase() === id.trim().toLowerCase())?.status;
   if (b.action === 'done') {
-    const was = h.list().find((x) => x.id.toLowerCase() === id.trim().toLowerCase())?.status;
-    const item = h.done(id, { reply: String(b.reply ?? '') });
-    // (Done on a done card the team answered since: the answer is read, FR-014)
-    return { item: cardView(item), message: was === 'done' ? `Marked read.${b.reply ? ' The team reads your reply at its next start or round.' : ''}` : 'Marked done. The team picks it up at its next start or round.' };
+    // (undo Done: it becomes final after UNDO_MS, unless the owner clicks Undo first; Done on a done card the team
+    // answered since marks the answer read, FR-014)
+    const item = h.done(id, { reply: String(b.reply ?? ''), delay: UNDO_MS });
+    const secs = Math.round(UNDO_MS / 1000);
+    return { item: cardView(item), message: was === 'done' ? `Marked read: Undo for ${secs} seconds.` : `Marked done: Undo for ${secs} seconds, then the team picks it up at its next start or round.` };
   }
-  if (b.action === 'reply') return { item: cardView(h.reply(id, String(b.reply ?? ''))), message: 'Sent: the team reads it at its next start or round.' };
+  if (b.action === 'undo') return { item: cardView(h.undo(id)), message: `Undone: ${id} is as it was, and the team never saw it.` };
+  if (b.action === 'reopen') return { item: cardView(h.reopen(id, { how: 'dashboard' })), message: `${id} is open again. The team sees it at its next start or round; what it did since isn't undone.` };
+  if (b.action === 'reply') {
+    const item = h.reply(id, String(b.reply ?? ''));
+    return { item: cardView(item), message: was && was !== 'open' ? `Sent, and ${item.id} is open again: the team reads it at its next start or round.` : 'Sent: the team reads it at its next start or round.' };
+  }
   throw new Error('unknown action');
 }
 

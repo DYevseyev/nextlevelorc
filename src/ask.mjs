@@ -31,7 +31,7 @@ import { jsonLine } from './engines/util.mjs';
 import { LIGHT_MODELS, notReadOnly, roleProfile } from './lib/config.mjs';
 import { chatStore, CHAT_ID_RE, LIMITS, titleOf } from './lib/chats.mjs';
 import { commandArgs } from './lib/commands.mjs';
-import { noteGroups } from './lib/cards.mjs';
+import { conversation, eventWords, noteGroups } from './lib/cards.mjs';
 import { resolveBin, runQuiet, spawnBin } from './lib/proc.mjs';
 import { redactReport } from './report.mjs';
 import { agyFailure, agyResult } from './engines/agy.mjs';
@@ -179,7 +179,8 @@ export function briefing(ctx, { thread, question, mode = 'advise', card = null, 
 // A team's handoff card as the advisor reads it: the request, where, why, its task, and every message of its thread
 export function cardText(c) {
   const head = [`${c.id} (${c.status}${c.task ? `, task ${c.task}` : ''}): ${c.what}`, c.where ? `Where: ${c.where}` : '', c.why ? `Why: ${c.why}` : ''].filter(Boolean);
-  const thread = (Array.isArray(c.thread) ? c.thread : []).map((e) => `${e.by === 'owner' ? 'The owner' : 'The team'}${e.at ? ` (${e.at})` : ''}:\n${e.text}`);
+  // (and its closings and reopenings, in time order: undo Done, FR-018)
+  const thread = conversation(c).map((e) => (e.text === undefined ? `${eventWords(e, (iso) => iso || '')}.` : `${e.by === 'owner' ? 'The owner' : 'The team'}${e.at ? ` (${e.at})` : ''}:\n${e.text}`));
   return [...head, ...thread].join('\n\n');
 }
 // The card a question is about (Explain, or a reply to it): a team's card, never a held change's or a push's, which is

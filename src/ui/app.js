@@ -709,12 +709,12 @@ function renderHome() {
     tile('Autopilot', AUTOPILOT_KIND[b.autopilot.state] || 'good', b.autopilot.on ? (b.autopilot.paused ? 'Paused' : 'On') : 'Off', b.autopilot.text, null, h('span.row', {}, autopilotButton(b), runNowButton(b))),
     tile('Orchestrator', ot.kind, b.orchestrator ? (b.orchestrator.mode === 'autopilot' ? 'Round' : 'Open') : 'Closed', ot.text, ot.sub, ot.button));
   const nextCard = next
-    ? h(`div.nextup.k-${next.level}`, {}, h('div.nextup-label', {}, 'Next'), h('div.nextup-body', {}, h('div', {}, h('p.nextup-text', {}, next.text), next.why ? h('p.muted.small.why', {}, `Why: ${next.why}`) : null), h('div.row', {}, needButton(next, true), needMore(next))))
+    ? h(`div.nextup.k-${next.level}`, {}, h('div.nextup-label', {}, 'Next'), h('div.nextup-body', {}, h('div', {}, h('p.nextup-text', {}, next.text, next.pending ? [' · final in ', countdown(next.pending)] : null), next.why ? h('p.muted.small.why', {}, `Why: ${next.why}`) : null), h('div.row', {}, needButton(next, true), needMore(next))))
     : h('div.nextup.k-ok', {}, h('div.nextup-label', {}, 'Next'), h('div.nextup-body', {}, h('p.nextup-text', {}, 'Nothing needs you right now.')));
 
   const needsCard = h('div.card', {}, h('h2', {}, 'Needs you ', h('span.muted', {}, needs.length ? String(needs.length) : '')));
   if (!rest.length) needsCard.append(h('p.muted', {}, next ? 'Only the one above.' : 'Nothing. Your phone gets a message when something comes up.'));
-  else needsCard.append(h('ul.needs', {}, rest.map((n) => h(`li.${n.level}`, {}, h('span', {}, n.text, n.why ? h('span.muted.small.why', {}, ` Why: ${n.why}`) : null), h('span.row', {}, needButton(n), needMore(n))))));
+  else needsCard.append(h('ul.needs', {}, rest.map((n) => h(`li.${n.level}`, {}, h('span', {}, n.text, n.pending ? [' · final in ', countdown(n.pending)] : null, n.why ? h('span.muted.small.why', {}, ` Why: ${n.why}`) : null), h('span.row', {}, needButton(n), needMore(n))))));
 
   const nowCard = h('div.card', {}, h('h2', {}, 'Happening now'));
   const lines = [];
@@ -1810,7 +1810,10 @@ function renderAll() {
   if (!b) return;
   if (b.ok) renderFixes(b.fixes);
   const tab = currentTab();
-  if (tab === 'home') renderHome();
+  if (tab === 'home') {
+    renderHome();
+    startTicker(); // (an Undo on Home counts its seconds)
+  }
   if (tab === 'project' && proj.stale) renderProject();
   if (tab === 'build') renderBuild();
   if (tab === 'team') renderTeam();
@@ -1860,6 +1863,7 @@ async function loadCards() {
   cards.loading = false;
   if (!res.ok) return toast(res.message || "The notes couldn't be read.", 'error');
   cards.data = res;
+  if (res.now) skew = Date.parse(res.now) - Date.now();
   renderCards();
   if (ask.open) renderAsk(); // (the advisor's reply drafts look the cards up)
 }
@@ -1908,9 +1912,9 @@ function cardTop(id) {
   const el = document.getElementById(`card-${id}`);
   if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - ($('header.top')?.offsetHeight || 0) - 8 });
 }
-function cardLine(id, title, badge, at, cls = '') {
+function cardLine(id, title, badge, at, cls = '', extra = null) {
   return h(`button.card-line${cls}`, { type: 'button', id: `card-${id}`, 'aria-expanded': 'false', title: `Open ${id}`, onclick: () => openCard(id) },
-    h('span.cid', {}, id), h('span.what', {}, title), h(`span.badge.${badge[0]}`, {}, badge[1]), at ? h('span.muted.small.when', {}, ago2(at)) : null);
+    h('span.cid', {}, id), h('span.what', {}, title), h(`span.badge.${badge[0]}`, {}, badge[1], extra ? [' · ', extra] : null), at ? h('span.muted.small.when', {}, ago2(at)) : null);
 }
 // The open card's bar: its line again (a click closes it), and a button to its reply box or its decision
 function cardBar(id, title, badge, jump, jumpLabel) {
@@ -1936,7 +1940,50 @@ function requestBlock(id, rest) {
   return h('div.request-wrap', {}, textBlock(rest, '.request.folded'),
     h('button.linkish.small', { type: 'button', onclick: () => { cards.shownAll.add(id); renderCards(); } }, `Show all (${plural(n, 'line')})`));
 }
-const handoffBadge = (x) => (x.unread ? ['warn', 'The team answered'] : x.status === 'open' ? ['warn', 'Needs you'] : x.status === 'done' ? ['good', `Done ${ago2(x.doneAt)}`] : ['idle', `Cancelled ${ago2(x.doneAt)}`]);
+// Who closed a card, and how (FR-018): the owner's Done, the team's close or withdrawal, a held change's decision
+function closedWords(x) {
+  if (x.status === 'cancelled') return 'Cancelled by the team';
+  if (x.closedBy === 'team') return 'Closed by the team';
+  if (x.closedBy === 'hub') return 'Closed by nextlevel';
+  if (x.guard || x.from === 'guard') {
+    const last = String((Array.isArray(x.thread) ? x.thread : []).filter((e) => e.by === 'owner').at(-1)?.text || '');
+    return /^approved/i.test(last) ? 'Approved by you' : /^rejected/i.test(last) ? 'Rejected by you' : 'Decided by you';
+  }
+  return 'Done by you';
+}
+const handoffBadge = (x) =>
+  x.pending ? ['info', x.pending.was === 'done' ? 'Marked read' : 'Marked done']
+  : x.unread ? ['warn', 'The team answered']
+  : x.status === 'open' ? ['warn', x.reopenedAt ? 'Reopened' : 'Needs you']
+  : [x.status === 'cancelled' ? 'idle' : 'good', `${closedWords(x)} ${ago2(x.doneAt)}`];
+// An Undo's seconds, counted from the server's time (GET /api/cards and the build data say it), never this PC's clock
+let skew = 0;
+const serverNow = () => Date.now() + skew;
+const secondsLeft = (finalAt) => Math.max(0, Math.ceil((Date.parse(finalAt) - serverNow()) / 1000));
+const countdown = (finalAt) => h('span.countdown', { dataset: { final: finalAt } }, `${secondsLeft(finalAt)} s`);
+// One timer while an Undo shows anywhere: only its seconds change (no redraw, so Home's open pickers stay as they are)
+let ticker = null;
+function tickUndo() {
+  const left = [...document.querySelectorAll('span.countdown')];
+  for (const el of left) el.textContent = `${secondsLeft(el.dataset.final)} s`;
+  if (left.some((el) => secondsLeft(el.dataset.final) === 0)) {
+    loadCards();
+    for (const el of left) el.classList.add('ending');
+  }
+  if (!left.length || left.every((el) => el.classList.contains('ending'))) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+}
+const startTicker = () => {
+  if (!ticker && document.querySelector('span.countdown:not(.ending)')) ticker = setInterval(tickUndo, 1000);
+};
+// The card's events (FR-018) as the page says them
+const eventLabel = (e) =>
+  e.kind === 'reopened' ? (e.how === 'reply' ? 'Reopened by your reply' : e.how === 'terminal' ? 'Reopened from the terminal' : 'Reopened by you')
+  : e.kind === 'done' ? (e.by === 'hub' ? 'Closed by nextlevel' : 'Done by you')
+  : e.kind === 'closed' ? 'Closed by the team'
+  : `Cancelled by the team${e.note ? `: ${e.note}` : ''}`;
 
 // A handoff card: one conversation (FR-014). The request (its first line is the title), where, why and when, then the
 // owner's replies and the team's answers in time order, each whole with its line breaks, as plain text. A card waits for
@@ -1947,14 +1994,37 @@ function handoffCard(x) {
   const key = `h:${x.id}`;
   const req = requestParts(x.what);
   const badge = handoffBadge(x);
-  if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits ? '.waits' : '');
+  if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits ? '.waits' : '', x.pending ? countdown(x.pending.finalAt) : null);
   const card = h(`div.cardx.handoff.s-${waits ? 'open' : x.status}${x.unread ? '.answered' : ''}.is-open`, { id: `card-${x.id}` },
     cardBar(x.id, req.title, badge, waits ? jumpTo(x.id) : null, 'Reply'),
     requestBlock(x.id, req.rest),
     h('dl.facts', {}, x.where ? [h('dt', {}, 'Where'), h('dd', {}, x.where)] : null, x.why ? [h('dt', {}, 'Why'), h('dd', {}, x.why)] : null,
       h('dt', {}, 'Asked'), h('dd', {}, ago2(x.createdAt), x.task ? [' · ', taskLink(x.task)] : null)),
-    threadView(x, { when: ago2, fold: 2, open: cards.unfolded.has(x.id), onToggle: (on) => (on ? cards.unfolded.add(x.id) : cards.unfolded.delete(x.id)) }),
-    x.status === 'cancelled' && x.note ? h('p.reply', {}, h('span.muted', {}, 'The team: '), x.note) : null);
+    threadView(x, { when: ago2, fold: 2, open: cards.unfolded.has(x.id), onToggle: (on) => (on ? cards.unfolded.add(x.id) : cards.unfolded.delete(x.id)), events: x.guard ? [] : x.events, eventLabel }),
+    x.reopenedAt && open ? h('p.small.muted', {}, "Reopening doesn't undo what the team already did: it sees the card open again at its next start or round.") : null);
+  // A Done that can still be undone (undo Done): nothing reached the team yet
+  if (x.pending) {
+    const busy = cards.busy.has(key);
+    card.append(h('div.row.undo', {}, h('span', {}, x.pending.was === 'done' ? `${x.id}'s answer marked read` : `${x.id} marked done`, ' · final in ', countdown(x.pending.finalAt)),
+      h('button.btn.primary', { type: 'button', disabled: busy, onclick: () => cardPost('/api/handoff', { action: 'undo', id: x.id }, key) }, busy ? '…' : 'Undo')));
+    return card;
+  }
+  // A closed card (FR-018): Reopen, and a reply box whose reply reopens it
+  if (!waits && !x.guard && x.from !== 'guard') {
+    const busy = cards.busy.has(key);
+    const label = `Your reply to ${x.id} (it reopens the card)`;
+    const area = h('textarea.reply-box', { rows: 2, placeholder: label, 'aria-label': label, dataset: { key: `${key}:reply` }, oninput: (e) => cards.replies.set(x.id, e.target.value) });
+    area.value = cards.replies.get(x.id) || '';
+    card.append(area, h('div.row', {},
+      h('button.btn', { type: 'button', disabled: busy, onclick: async () => {
+        const text = (cards.replies.get(x.id) || '').trim();
+        if (!text) return toast('Type the reply first.', 'error');
+        const res = await cardPost('/api/handoff', { action: 'reply', id: x.id, reply: text }, key);
+        if (res?.ok) cards.replies.delete(x.id);
+      } }, `Reopen ${x.id} and send`),
+      h('button.btn', { type: 'button', disabled: busy, onclick: () => cardPost('/api/handoff', { action: 'reopen', id: x.id }, key) }, busy ? '…' : `Reopen ${x.id}`)));
+    return card;
+  }
   if (waits) {
     const label = `Your reply to ${x.id}`;
     const area = h('textarea.reply-box', { rows: 2, placeholder: x.unread ? `${label} (optional)` : `${label} (optional): what you did, or a question`, 'aria-label': label, dataset: { key: `${key}:reply` }, oninput: (e) => cards.replies.set(x.id, e.target.value) });
@@ -2140,6 +2210,7 @@ function renderCards() {
         h('div.card', {}, h('h2', {}, 'History ', h('span.muted', {}, history.length ? String(history.length) : '')),
           h('input.search', { type: 'search', placeholder: 'Search the history', 'aria-label': 'Search the history', value: cards.search, dataset: { key: 'search' }, oninput: (e) => { cards.search = e.target.value; renderCards(); } }),
           found.length ? h('div.cards', {}, found.map(noteCard)) : h('p.muted', {}, q ? 'Nothing matches.' : 'Handled notes and removed rules show up here.'))))));
+  startTicker();
   if (before !== null && before !== undefined) {
     const after = document.getElementById(`card-${cards.openId}`)?.getBoundingClientRect().top;
     if (after !== undefined && after !== before) window.scrollBy(0, after - before);
@@ -2343,12 +2414,14 @@ function askDraftBox(m, i, d, j) {
     if (!cards.data) loadCards();
     const c = askCardOf(d.card);
     const why = !cards.data ? '' : !c ? `${d.card} is gone` : c.guard || c.from === 'guard' ? `${d.card} is decided on its own card` : '';
-    return box(`A reply to ${d.card}`, why || !cards.data ? '' : `Send reply to ${d.card}`, () => send(async () => {
+    // (a reply on a closed card reopens it, FR-018: said before the click)
+    const closed = !why && c && c.status !== 'open';
+    return box(`A reply to ${d.card}`, why || !cards.data ? '' : closed ? `Reopen ${d.card} and send` : `Send reply to ${d.card}`, () => send(async () => {
       const r = await api('/api/handoff', { action: 'reply', id: d.card, reply: now() });
       toast(r.message || (r.ok ? 'Sent.' : 'Not sent.'), r.ok ? 'good' : 'error');
       if (r.ok) loadCards();
       return r.ok;
-    }, `Sent to ${d.card}`), { editable: !why, note: why || (c ? `${d.card}: ${String(c.what || '').split('\n')[0]}` : '') });
+    }, `Sent to ${d.card}`), { editable: !why, note: why || (c ? `${closed ? `${d.card} is closed: sending reopens it. ` : ''}${d.card}: ${String(c.what || '').split('\n')[0]}` : '') });
   }
   if (d.kind === 'remember') {
     const full = (ask.memory?.items?.length || 0) >= 30 && !d.replaces;
@@ -2501,6 +2574,8 @@ function connect() {
     },
     build: (data) => {
       build = JSON.parse(data);
+      // (the server's time as this build data left it: an Undo's seconds count from it)
+      if (build?.cards?.now) skew = Date.parse(build.cards.now) - Date.now();
       renderAll();
       askWho();
     },
