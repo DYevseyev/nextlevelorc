@@ -28,23 +28,29 @@ export const requestParts = (what) => {
 };
 
 // The replies and answers after a card's request, in time order: whose, when, and the text whole. The team's newest
-// answer is marked while it waits for the owner (`x.unread`). `when(iso)`: the time as the page says it.
-export function threadView(x, { when = (iso) => String(iso || '') } = {}) {
+// answer is marked while it waits for the owner (`x.unread`). `when(iso)`: the time as the page says it. `fold` (the
+// cards redesign): all but the last `fold` messages fold into one "N earlier messages" line, open when `open` says so
+// (`onToggle(open)` keeps it across redraws); the team's newest answer never folds while it waits for the owner.
+export function threadView(x, { when = (iso) => String(iso || ''), fold = 0, open = false, onToggle } = {}) {
   const thread = Array.isArray(x.thread) ? x.thread : [];
   if (!thread.length) return null;
   const lastTeam = thread.map((e) => e.by).lastIndexOf('team');
-  return h(
-    'ol.thread',
-    { 'aria-label': `${x.id}: replies and answers, oldest first` },
-    thread.map((e, i) => {
-      const team = e.by === 'team';
-      const fresh = team && i === lastTeam && !!x.unread;
-      return h(
-        `li.msg.${team ? 'by-team' : 'by-owner'}${fresh ? '.unread' : ''}`,
-        {},
-        h('div.msg-head', {}, h('span.msg-who', {}, team ? 'The team answered' : 'You replied'), e.at ? h('span.msg-when', {}, when(e.at)) : null, fresh ? h('span.badge.warn', {}, 'New') : null),
-        textBlock(e.text),
-      );
-    }),
-  );
+  const item = (e, i) => {
+    const team = e.by === 'team';
+    const fresh = team && i === lastTeam && !!x.unread;
+    return h(
+      `li.msg.${team ? 'by-team' : 'by-owner'}${fresh ? '.unread' : ''}`,
+      {},
+      h('div.msg-head', {}, h('span.msg-who', {}, team ? 'The team answered' : 'You replied'), e.at ? h('span.msg-when', {}, when(e.at)) : null, fresh ? h('span.badge.warn', {}, 'New') : null),
+      textBlock(e.text),
+    );
+  };
+  const label = { 'aria-label': `${x.id}: replies and answers, oldest first` };
+  let cut = fold > 0 ? Math.max(0, thread.length - fold) : 0;
+  if (x.unread && lastTeam >= 0) cut = Math.min(cut, lastTeam);
+  if (cut < 2) return h('ol.thread', label, thread.map(item));
+  const earlier = h('details.earlier', { open, ontoggle: onToggle ? (ev) => onToggle(ev.currentTarget.open) : undefined },
+    h('summary', {}, `${cut} earlier messages`),
+    h('ol.thread', {}, thread.slice(0, cut).map(item)));
+  return h('div.thread-wrap', {}, earlier, h('ol.thread', label, thread.slice(cut).map((e, i) => item(e, i + cut))));
 }

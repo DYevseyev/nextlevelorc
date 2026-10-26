@@ -326,11 +326,24 @@ test('an answer with HTML in it shows as text on the card, never as HTML (src/ui
     assert.deepEqual(texts, ['<script>document.title = "asked"</script>', 'Go <script>document.title = "replied"</script>', answer], 'each text whole, as written, line breaks included');
     const items = els.filter((e) => e.tagName === 'LI');
     assert.deepEqual(items.map((e) => e.className), ['msg by-owner', 'msg by-team unread'], 'in time order; the new answer marked');
+    // The cards redesign: earlier messages fold into one line; the team's newest answer, waiting for the owner, never does
+    const long = { id: 'H2', unread: true, thread: ['owner', 'team', 'owner', 'team', 'owner', 'team'].map((by, i) => ({ by, text: `${by} ${i} <b>x</b>`, at })) };
+    const folded = allElements(threadView(long, { fold: 2 }));
+    const summary = folded.find((e) => e.tagName === 'SUMMARY');
+    assert.equal(summary.textContent, '4 earlier messages');
+    assert.deepEqual(folded.filter((e) => e.tagName === 'DETAILS').map((e) => e.attributes.open), [undefined], 'folded unless the owner opened it');
+    assert.equal(allElements(threadView(long, { fold: 2, open: true })).find((e) => e.tagName === 'DETAILS').attributes.open, '');
+    const lists = folded.filter((e) => e.tagName === 'OL');
+    assert.deepEqual(lists.map((l) => l.childNodes.length), [4, 2], 'four folded, the last two shown');
+    assert.equal(lists[1].childNodes[1].className, 'msg by-team unread');
+    const one = allElements(threadView(long, { fold: 1 })).filter((e) => e.tagName === 'OL');
+    assert.deepEqual([one[0].childNodes.length, one[1].childNodes[0].className], [5, 'msg by-team unread'], "the team's newest answer stays out of the fold");
+    assert.equal(allElements(threadView({ ...long, thread: long.thread.slice(0, 3) }, { fold: 2 })).filter((e) => e.tagName === 'DETAILS').length, 0, 'one earlier message is never folded');
     // The page builds its handoff cards with dom.js, and nothing in it parses HTML
     const app = read(REPO, 'src/ui/app.js');
     const dom = read(REPO, 'src/ui/dom.js');
     assert.match(app, /import \{ h, requestParts, textBlock, threadView \} from '\.\/dom\.js';/);
-    assert.match(app, /threadView\(x, \{ when: ago2 \}\)/);
+    assert.match(app, /threadView\(x, \{ when: ago2\b/);
     assert.doesNotMatch(`${app}\n${dom}`, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|DOMParser|createContextualFragment/);
   } finally {
     delete globalThis.Node;

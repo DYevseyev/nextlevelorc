@@ -241,15 +241,23 @@ function md(text, cls = 'md') {
 
 // ---------- tabs ----------
 const TABS = ['home', 'project', 'setup', 'build', 'team', 'tools', 'notes'];
-const currentTab = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home');
+// A card's own address (the cards redesign): #H29 is the Notes page with that card open
+const CARD_HASH = /^#(H[1-9]\d{0,6})$/;
+const hashCard = () => (CARD_HASH.exec(location.hash) || [])[1] || null;
+const currentTab = () => (hashCard() ? 'notes' : TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home');
 function showTab() {
   const tab = currentTab();
+  const card = hashCard();
+  if (card) {
+    cards.openId = card;
+    cards.focus = card;
+  }
   for (const t of TABS) {
     $(`#tab-${t}`).hidden = t !== tab;
     document.querySelector(`[data-tab="${t}"]`).classList.toggle('active', t === tab);
     document.querySelector(`[data-tab="${t}"]`).setAttribute('aria-current', t === tab ? 'page' : 'false');
   }
-  if (tab === 'notes' && !cards.data) loadCards();
+  if (tab === 'notes') cards.data ? renderCards() : loadCards();
   if (tab === 'project') proj.data ? renderProject() : loadProject();
   renderAll();
 }
@@ -258,6 +266,14 @@ const goTo = (tab) => {
   location.hash = `#${tab}`;
   window.scrollTo(0, 0);
 };
+// A card, open, from anywhere on the page (Home's Needs you, Blockers, a held task): its own address
+function goToCard(id) {
+  if (!id) return goTo('notes');
+  cards.openId = id;
+  cards.focus = id;
+  if (location.hash === `#${id}`) showTab();
+  else location.hash = `#${id}`;
+}
 
 // ---------- Setup ----------
 let checks = null;
@@ -515,7 +531,7 @@ const actionButton = (key, text, path, body, primary = false) =>
 function needButton(n, primary = false) {
   const a = n.action;
   if (!a) return null;
-  if (a.page) return h(`button.btn${primary ? '.primary' : ''}`, { type: 'button', onclick: () => { if (a.focus) cards.focus = a.focus; goTo(a.page); if (a.focus && cards.data) renderCards(); } }, a.label);
+  if (a.page) return h(`button.btn${primary ? '.primary' : ''}`, { type: 'button', onclick: () => (a.focus ? goToCard(a.focus) : goTo(a.page)) }, a.label);
   if (a.fix) {
     const r = checks?.results?.find((x) => x.id === a.fix);
     return h(`button.btn${primary ? '.primary' : ''}`, { type: 'button', disabled: !!(checks?.running || checks?.fixing), onclick: () => r && runFix(r) }, checks?.fixing === a.fix ? 'Fixing…' : a.label);
@@ -526,7 +542,7 @@ function needButton(n, primary = false) {
 // A need's second way (a handoff item's card, to reply to it)
 function needMore(n) {
   if (!n.more) return null;
-  return h('button.btn', { type: 'button', onclick: () => { cards.focus = n.id; goTo(n.more.page); if (cards.data) renderCards(); } }, n.more.label);
+  return h('button.btn', { type: 'button', onclick: () => (n.id ? goToCard(n.id) : goTo(n.more.page)) }, n.more.label);
 }
 
 // "Codex · gpt-6 · high": what a job or session runs on
@@ -620,7 +636,7 @@ function drawActivity(a) {
   // why the task waits: the guard holds its merge until the owner decides (lib/guard.mjs)
   const held = d.held
     ? h('p.act-held.small', {}, h('strong', {}, 'Blocked by the tool. '), d.held.text, ' ',
-      h('button.linkish', { type: 'button', onclick: () => { cards.focus = d.held.card || null; goTo('notes'); if (cards.data) renderCards(); } }, 'Review the change'))
+      h('button.linkish', { type: 'button', onclick: () => goToCard(d.held.card || null) }, 'Review the change'))
     : null;
   a.body.replaceChildren(...[held, launch, notes, feed].filter(Boolean));
   const list = a.body.querySelector('.feed');
@@ -826,7 +842,7 @@ function blockersCard(b) {
         // (a held change's line names files from a task's branch: plain text, never Markdown that could make a link)
         x.guard ? h('p', {}, x.text) : md(x.text),
         x.handled ? h('p.muted.small', {}, 'Done on your side: the orchestrator takes it off this list at its next round.') : null,
-        x.kind === 'needs' && !x.handled && x.ids?.length ? h('button.linkish.small', { type: 'button', onclick: () => { cards.focus = x.ids[0]; goTo('notes'); if (cards.data) renderCards(); } }, `${x.ids[0]} on the Notes page`) : null)))));
+        x.kind === 'needs' && !x.handled && x.ids?.length ? h('button.linkish.small', { type: 'button', onclick: () => goToCard(x.ids[0]) }, `${x.ids[0]} on the Notes page`) : null)))));
   }
   if (v.history.length) {
     card.append(h('details.learn.blocker-history', { open: blockersHistoryOpen, ontoggle: (e) => (blockersHistoryOpen = e.currentTarget.open) },
@@ -1834,7 +1850,9 @@ function renderAll() {
 // The team's handoff items (what, where, why; Done and a reply) and the owner's notes to the orchestrator (one-time
 // instructions and standing rules, with their state and the orchestrator's answer). From GET /api/cards, read
 // again whenever the build data says the cards changed; what the owner types is kept while the page redraws.
-const cards = { data: null, stamp: null, loading: false, draft: '', type: 'once', search: '', edits: new Map(), replies: new Map(), busy: new Set(), focus: null };
+// The cards redesign: one card open at a time (`openId`, also the page's address #H29), a long request shown whole
+// (`shownAll`) and earlier messages unfolded (`unfolded`) as the owner chose, across redraws.
+const cards = { data: null, stamp: null, loading: false, draft: '', type: 'once', search: '', edits: new Map(), replies: new Map(), busy: new Set(), focus: null, openId: null, shownAll: new Set(), unfolded: new Set() };
 async function loadCards() {
   if (cards.loading) return;
   cards.loading = true;
@@ -1874,6 +1892,52 @@ function commitLink(sha) {
 }
 const taskLink = (id) => h('button.linkish', { type: 'button', title: 'Open it on the Build page', onclick: () => { openJobs.add(id); goTo('build'); } }, `task ${id}`);
 
+// ---- one card open at a time (the cards redesign) ----
+// A card waiting for the owner is one line (its id, the request's first line, its state, when it last moved); a click
+// opens it, and the line becomes the open card's bar, pinned under the page's header while its text scrolls by.
+const lastAt = (x) => (Array.isArray(x.thread) ? x.thread : []).reduce((m, e) => (String(e.at || '') > m ? String(e.at) : m), String(x.createdAt || ''));
+function openCard(id, { scroll = true } = {}) {
+  cards.openId = id;
+  cards.chose = true; // (the owner opened or closed one: no card opens by itself after that)
+  history.replaceState(null, '', id ? `#${id}` : '#notes');
+  renderCards();
+  if (id && scroll) cardTop(id);
+}
+// The card's top just under the page's header
+function cardTop(id) {
+  const el = document.getElementById(`card-${id}`);
+  if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - ($('header.top')?.offsetHeight || 0) - 8 });
+}
+function cardLine(id, title, badge, at, cls = '') {
+  return h(`button.card-line${cls}`, { type: 'button', id: `card-${id}`, 'aria-expanded': 'false', title: `Open ${id}`, onclick: () => openCard(id) },
+    h('span.cid', {}, id), h('span.what', {}, title), h(`span.badge.${badge[0]}`, {}, badge[1]), at ? h('span.muted.small.when', {}, ago2(at)) : null);
+}
+// The open card's bar: its line again (a click closes it), and a button to its reply box or its decision
+function cardBar(id, title, badge, jump, jumpLabel) {
+  return h('div.card-bar', {},
+    h('button.card-line.open', { type: 'button', 'aria-expanded': 'true', title: `Close ${id}`, onclick: () => openCard(null, { scroll: false }) },
+      h('span.cid', {}, id), h('span.what', {}, title), h(`span.badge.${badge[0]}`, {}, badge[1])),
+    jump ? h('button.btn.small', { type: 'button', onclick: jump }, jumpLabel) : null);
+}
+// Its reply box (or reason box), in view and ready to type in
+const jumpTo = (id) => () => {
+  const area = document.querySelector(`#card-${CSS.escape(id)} textarea`);
+  if (!area) return;
+  area.scrollIntoView({ block: 'center' });
+  area.focus({ preventScroll: true });
+};
+// A request's other lines: a long one shows its first lines, "Show all" the rest (all of it is on the page)
+const FOLD_LINES = 6;
+const FOLD_CHARS = 600;
+function requestBlock(id, rest) {
+  if (!rest) return null;
+  const n = rest.split('\n').length;
+  if ((n <= FOLD_LINES && rest.length <= FOLD_CHARS) || cards.shownAll.has(id)) return textBlock(rest, '.request');
+  return h('div.request-wrap', {}, textBlock(rest, '.request.folded'),
+    h('button.linkish.small', { type: 'button', onclick: () => { cards.shownAll.add(id); renderCards(); } }, `Show all (${plural(n, 'line')})`));
+}
+const handoffBadge = (x) => (x.unread ? ['warn', 'The team answered'] : x.status === 'open' ? ['warn', 'Needs you'] : x.status === 'done' ? ['good', `Done ${ago2(x.doneAt)}`] : ['idle', `Cancelled ${ago2(x.doneAt)}`]);
+
 // A handoff card: one conversation (FR-014). The request (its first line is the title), where, why and when, then the
 // owner's replies and the team's answers in time order, each whole with its line breaks, as plain text. A card waits for
 // the owner while it is open, or when the team answered since the owner last replied or marked it done.
@@ -1882,29 +1946,31 @@ function handoffCard(x) {
   const waits = open || !!x.unread;
   const key = `h:${x.id}`;
   const req = requestParts(x.what);
-  const badge = x.unread ? ['warn', 'The team answered'] : open ? ['warn', 'Needs you'] : x.status === 'done' ? ['good', `Done ${ago2(x.doneAt)}`] : ['idle', `Cancelled ${ago2(x.doneAt)}`];
-  const card = h(`div.cardx.handoff.s-${waits ? 'open' : x.status}${x.unread ? '.answered' : ''}`, { id: `card-${x.id}` },
-    h('div.cardx-head', {}, h('span.cid', {}, x.id), h('strong.what', {}, req.title), h(`span.badge.${badge[0]}`, {}, badge[1])),
-    req.rest ? textBlock(req.rest, '.request') : null,
+  const badge = handoffBadge(x);
+  if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits ? '.waits' : '');
+  const card = h(`div.cardx.handoff.s-${waits ? 'open' : x.status}${x.unread ? '.answered' : ''}.is-open`, { id: `card-${x.id}` },
+    cardBar(x.id, req.title, badge, waits ? jumpTo(x.id) : null, 'Reply'),
+    requestBlock(x.id, req.rest),
     h('dl.facts', {}, x.where ? [h('dt', {}, 'Where'), h('dd', {}, x.where)] : null, x.why ? [h('dt', {}, 'Why'), h('dd', {}, x.why)] : null,
       h('dt', {}, 'Asked'), h('dd', {}, ago2(x.createdAt), x.task ? [' · ', taskLink(x.task)] : null)),
-    threadView(x, { when: ago2 }),
+    threadView(x, { when: ago2, fold: 2, open: cards.unfolded.has(x.id), onToggle: (on) => (on ? cards.unfolded.add(x.id) : cards.unfolded.delete(x.id)) }),
     x.status === 'cancelled' && x.note ? h('p.reply', {}, h('span.muted', {}, 'The team: '), x.note) : null);
   if (waits) {
-    const area = h('textarea.reply-box', { rows: 2, placeholder: x.unread ? 'Your reply to the answer (optional)' : 'A reply for the team (optional): what you did, or a question', 'aria-label': `Reply to ${x.id}`, dataset: { key: `${key}:reply` }, oninput: (e) => cards.replies.set(x.id, e.target.value) });
+    const label = `Your reply to ${x.id}`;
+    const area = h('textarea.reply-box', { rows: 2, placeholder: x.unread ? `${label} (optional)` : `${label} (optional): what you did, or a question`, 'aria-label': label, dataset: { key: `${key}:reply` }, oninput: (e) => cards.replies.set(x.id, e.target.value) });
     area.value = cards.replies.get(x.id) || '';
     const busy = cards.busy.has(key);
     card.append(area, h('div.row', {},
       h('button.btn.primary', { type: 'button', disabled: busy, title: open ? null : "The answer is read: the card goes back to what's done", onclick: async () => {
         const res = await cardPost('/api/handoff', { action: 'done', id: x.id, reply: cards.replies.get(x.id) || '' }, key);
         if (res?.ok) cards.replies.delete(x.id);
-      } }, busy ? '…' : 'Done'),
+      } }, busy ? '…' : open ? `Mark ${x.id} done` : `Mark ${x.id}'s answer read`),
       h('button.btn', { type: 'button', disabled: busy, onclick: async () => {
         const text = (cards.replies.get(x.id) || '').trim();
         if (!text) return toast('Type the reply first.', 'error');
         const res = await cardPost('/api/handoff', { action: 'reply', id: x.id, reply: text }, key);
         if (res?.ok) cards.replies.delete(x.id);
-      } }, 'Send reply'),
+      } }, `Send reply to ${x.id}`),
       // (the team's cards only: a held change's or a push's is decided on its own card)
       x.guard || x.from === 'guard' ? null : h('button.btn', { type: 'button', title: 'The advisor turns this card into micro-steps and drafts your reply (read-only; only your click sends it)', onclick: () => askExplain(x.id) }, 'Explain')));
   }
@@ -1928,8 +1994,11 @@ function guardCard(g) {
   const busy = cards.busy.has(key);
   const held = g.status === 'held';
   const state = held ? ['bad', 'Needs your decision'] : g.status === 'approved' ? ['good', 'Approved: the hub puts it in'] : ['idle', g.status];
-  const card = h(`div.cardx.handoff.guard.s-${held ? 'open' : g.status}`, { id: `card-${g.card || g.id}` },
-    h('div.cardx-head', {}, h('span.cid', {}, g.card || g.id), h('strong.what', {}, g.what || `${GUARD_WHO(g)} changes ${g.files.join(', ')}`), h(`span.badge.${state[0]}`, {}, state[1])),
+  const id = g.card || g.id;
+  const title = g.what || `${GUARD_WHO(g)} changes ${g.files.join(', ')}`;
+  if (cards.openId !== id) return cardLine(id, title, state, g.createdAt, `.guard${held ? '.waits' : ''}`);
+  const card = h(`div.cardx.handoff.guard.s-${held ? 'open' : g.status}.is-open`, { id: `card-${id}` },
+    cardBar(id, title, state, held ? jumpTo(id) : null, 'Decide'),
     h('p.muted.small', {}, `${g.id}, ${g.kind === 'push' ? 'asked' : 'held'} ${ago2(g.createdAt)}. ${{
       git: "Git's own hooks and settings make git run programs or send a push somewhere else, outside any sandbox; nextlevel didn't make this change, so all git work waits until you decide.",
       secret: g.env ? 'A .env file holds your secrets: nextlevel never commits one.' : 'A value from your .env is a secret: nextlevel commits it only if you say it may be. The value itself is never shown here.',
@@ -2043,32 +2112,54 @@ function renderCards() {
   // (done cards the team answered since: they wait for the owner again, FR-014)
   const answered = d.handoff.answered || [];
   const waiting = guarded.length + plain.length + answered.length;
-  keepFocus(root, () => root.replaceChildren(h('div.grid', {},
-    h('div.col', {},
-      h('div.card', {}, h('h2', {}, 'The team needs from you ', h('span.muted', {}, waiting ? String(waiting) : '')),
-        waiting ? h('div.cards', {}, guarded.map(guardCard), plain.map(handoffCard), answered.map(handoffCard)) : h('p.muted', {}, 'Nothing right now. When the team needs something only you can do, it shows up here with what, where and why, and on your phone.'),
-        d.handoff.history.length ? h('details.learn', {}, h('summary', {}, `Done and cancelled (${d.handoff.history.length})`), h('div.cards', {}, d.handoff.history.map(handoffCard))) : null)),
-    h('div.col', {},
-      addNoteBox(),
-      h('div.card', {}, h('h2', {}, 'Standing rules ', h('span.muted', {}, rules.length ? String(rules.length) : '')),
-        rules.length ? h('div.cards', {}, rules.map(noteCard)) : h('p.muted', {}, 'None. A standing rule stays listed, and followed, until you remove it.')),
-      h('div.card', {}, h('h2', {}, 'To do ', h('span.muted', {}, open.length ? String(open.length) : '')),
-        open.length ? h('div.cards', {}, open.map(noteCard)) : h('p.muted', {}, 'No one-time instructions waiting.')),
-      h('div.card', {}, h('h2', {}, 'History ', h('span.muted', {}, history.length ? String(history.length) : '')),
-        h('input.search', { type: 'search', placeholder: 'Search the history', 'aria-label': 'Search the history', value: cards.search, dataset: { key: 'search' }, oninput: (e) => { cards.search = e.target.value; renderCards(); } }),
-        found.length ? h('div.cards', {}, found.map(noteCard)) : h('p.muted', {}, q ? 'Nothing matches.' : 'Handled notes and removed rules show up here.'))))));
-  // From Home's "Reply" or "Read the answer": that card, with its reply box ready; a new answer from its start, below
-  // the page's header (FR-014: on a phone the reply box sits under a long answer)
+  // Which card is open: the address's (#H29), else the one the owner opened; when only one waits, that one
+  const ids = new Set([...guarded.map((g) => g.card || g.id), ...[...plain, ...answered, ...d.handoff.history].map((x) => x.id)]);
+  const asked = hashCard();
+  if (asked && !ids.has(asked)) {
+    toast(`${asked} isn't there any more.`, 'error');
+    if (cards.openId === asked) cards.openId = null;
+    history.replaceState(null, '', '#notes');
+  }
+  if (cards.openId && !ids.has(cards.openId)) cards.openId = null;
+  if (!cards.openId && waiting === 1 && !asked && !cards.chose) cards.openId = guarded[0] ? guarded[0].card || guarded[0].id : (plain[0] || answered[0]).id;
+  // (a redraw while the owner reads, an answer arriving: the open card stays where it was on the screen)
+  const before = cards.openId && !cards.focus ? document.getElementById(`card-${cards.openId}`)?.getBoundingClientRect().top : null;
+  const historyOpen = d.handoff.history.some((x) => x.id === cards.openId) || !!root.querySelector('details.done-cards[open]');
+  keepFocus(root, () => root.replaceChildren(
+    h('div.card.needs-you', {}, h('h2', {}, 'The team needs from you ', h('span.muted', {}, waiting ? String(waiting) : '')),
+      waiting ? h('div.cards.card-list', {}, guarded.map(guardCard), plain.map(handoffCard), answered.map(handoffCard)) : h('p.muted', {}, 'Nothing right now. When the team needs something only you can do, it shows up here with what, where and why, and on your phone.'),
+      d.handoff.history.length ? h('details.learn.done-cards', { open: historyOpen }, h('summary', {}, `Done and cancelled (${d.handoff.history.length})`), h('div.cards.card-list', {}, d.handoff.history.map(handoffCard))) : null),
+    h('div.grid', {},
+      h('div.col', {},
+        addNoteBox(),
+        h('div.card', {}, h('h2', {}, 'Standing rules ', h('span.muted', {}, rules.length ? String(rules.length) : '')),
+          rules.length ? h('div.cards', {}, rules.map(noteCard)) : h('p.muted', {}, 'None. A standing rule stays listed, and followed, until you remove it.'))),
+      h('div.col', {},
+        h('div.card', {}, h('h2', {}, 'To do ', h('span.muted', {}, open.length ? String(open.length) : '')),
+          open.length ? h('div.cards', {}, open.map(noteCard)) : h('p.muted', {}, 'No one-time instructions waiting.')),
+        h('div.card', {}, h('h2', {}, 'History ', h('span.muted', {}, history.length ? String(history.length) : '')),
+          h('input.search', { type: 'search', placeholder: 'Search the history', 'aria-label': 'Search the history', value: cards.search, dataset: { key: 'search' }, oninput: (e) => { cards.search = e.target.value; renderCards(); } }),
+          found.length ? h('div.cards', {}, found.map(noteCard)) : h('p.muted', {}, q ? 'Nothing matches.' : 'Handled notes and removed rules show up here.'))))));
+  if (before !== null && before !== undefined) {
+    const after = document.getElementById(`card-${cards.openId}`)?.getBoundingClientRect().top;
+    if (after !== undefined && after !== before) window.scrollBy(0, after - before);
+  }
+  // From Home's "Reply" or "Read the answer", or the card's address: that card, open, with its reply box ready; a new
+  // answer from its start, below the page's header (FR-014: on a phone the reply box sits under a long answer)
   if (cards.focus) {
     const card = document.getElementById(`card-${cards.focus}`);
     cards.focus = null;
     if (card) {
       const fresh = card.querySelector('.msg.unread');
       if (fresh) window.scrollTo({ top: fresh.getBoundingClientRect().top + window.scrollY - ($('header.top')?.offsetHeight || 0) - 12 });
-      else card.scrollIntoView({ block: 'center' });
+      else cardTop(card.id.slice(5));
       card.querySelector('textarea')?.focus({ preventScroll: true });
     }
   }
+}
+// The pinned bar sits under the page's header, whose height changes (its rows wrap on a phone, a banner comes and goes)
+if (typeof ResizeObserver === 'function' && $('header.top')) {
+  new ResizeObserver(() => document.documentElement.style.setProperty('--top', `${$('header.top').offsetHeight}px`)).observe($('header.top'));
 }
 window.addEventListener('beforeunload', (e) => {
   if (cards.draft.trim() || cards.edits.size || [...cards.replies.values()].some((v) => v.trim())) e.preventDefault();
