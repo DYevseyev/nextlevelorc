@@ -196,6 +196,20 @@ it; closing it stops the dashboard. Choosing d again while it runs just shows th
   Threads are kept in `.nextlevel/chats/`: start, rename, search, clear or delete them. In PowerShell:
   `nextlevel ask "Why did M1-02 fail?"`, then `nextlevel ask --thread <id> "a follow-up"`;
   `nextlevel ask threads [--search text]`. Today on Home counts it as its own row, with its tokens and minutes.
+- **The Advisor** is what Ask became (`docs/design/advisor.md`). **Advise** (the default) runs on another engine
+  than the orchestrator's when one is installed (Claude Code on its own default model when the orchestrator is Codex),
+  so it can disagree with it; the Team page and the doctor's `advisor.independent` say whether it does. It reads more of
+  the project (the current milestone's plan, the end of DECISIONS.md, the last rounds, the end of hub.log, the hub's own
+  verify of recent tasks, Today's usage) and checks the team's claims against them. **Quick** is Ask as it was: a light
+  model and the short briefing, for a simple question with fewer tokens (`nextlevel ask --quick`). The composer says
+  about how many tokens of project context a question sends; each answer shows its tokens, mode and model, and each
+  thread its total. Its answers can draft a note, a standing rule, a reply to a team's card or something to remember:
+  each is shown whole, you edit it, and only its own button sends it (**Send as note**, **Send reply to H12**,
+  **Remember this**). It never approves a held change, a push or a deploy: those stay on their own cards. A team's card
+  on the Notes page has **Explain**: the advisor turns it into micro-steps and drafts your reply
+  (`nextlevel ask --card H12`). Its **Memory** (the panel's Memory button, at most 30 short entries of your decisions
+  and preferences, kept in `~/.nextlevel/advisor/`, outside the project) changes only when you add, edit or delete an
+  entry; `nextlevel ask memory [list | add --file <path> | edit M3 --file <path> | remove M3]` in your own window.
 
 Only this PC can reach it (it listens on 127.0.0.1), and its link has a key in it: without the key it
 shows nothing. `.env` values never appear on it (except in a note you wrote yourself).
@@ -247,7 +261,7 @@ Created by `nextlevel init` with these defaults:
 | `roles.worker` | `{ "engine": "agy", "model": "", "fallback": "codex" }` | who builds tasks, the same way |
 | `roles.<role>.effort` | `""` | the reasoning effort (`low`, `medium`, `high`...; `""`: the engine's own). Codex gets it in `codex exec` only (its interactive window keeps Codex's own); Antigravity never (the level is in its model's name) |
 | `roles.guide` | `{ "engine": "" }` | the setup guide: no engine means the orchestrator's; or an engine, model and effort of its own |
-| `roles.assistant` | `{ "engine": "" }` | the assistant (Ask): no engine means automatic, a light model on the first of Claude Code (haiku) or Codex (its smallest listed model, low effort) the roles use, else Codex; or `claude` or `codex` with a model and effort of its own (not `agy`: it can't be run read-only) |
+| `roles.assistant` | `{ "engine": "" }` | the advisor (Ask): no engine means automatic: Advise on the first of Claude Code or Codex that isn't the orchestrator's engine and is installed, on its own default model (else the orchestrator's engine), and Quick on a light model on the first of Claude Code (haiku) or Codex (its smallest listed model, low effort) the roles use; or `claude`, `codex` or, after its lock test, `agy` with a model and effort of its own (Quick then uses that engine's light model) |
 | `roles.<role>.fallback` | `codex` for workers, none for the orchestrator | a profile or engine the role falls back to (below), or `{ "engine", "model", "effort" }` of its own |
 | `roles.worker.second` | none | a second worker in the same slots: `{ "engine", "model", "effort", "takes" }` or `{ "profile", "takes" }`; `takes` is `no-docker`, `any` or `asked` (only when the spec asks). A task reaches it with `--profile second` or a spec's `Profile: second` line. The Team page sets it |
 | `profiles.<name>` | none | `{ "engine": "codex", "account": "work", "model": "", "effort": "" }`: an engine, the account it's signed into, a model and effort |

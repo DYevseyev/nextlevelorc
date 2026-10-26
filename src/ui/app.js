@@ -678,6 +678,11 @@ function renderHome() {
   const b = build;
   const root = $('#home');
   if (!b || selecting(root)) return;
+  if (usagePicking && Date.now() - usagePicking < PICKING_MS) {
+    usageHeld = true;
+    return;
+  }
+  usagePicking = 0;
   if (!b.ok) return root.replaceChildren(h('div.callout.bad', {}, `The dashboard couldn't read the project's state: ${b.error}`));
   const st = teamState(b);
   const ot = orchestratorTile(b);
@@ -726,7 +731,7 @@ function renderHome() {
   }
   progress.append(h('p.muted.small', {}, `Last activity ${b.lastActivity}. `, h('button.linkish', { type: 'button', onclick: () => goTo('project') }, 'The roadmap')));
 
-  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), progress, todayCard(b)))].filter(Boolean));
+  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), progress, usageCard(b)))].filter(Boolean));
 }
 
 // The update in progress, paused or just done (src/updater.mjs): its steps, what it waits for, and the owner's buttons
@@ -842,13 +847,122 @@ function tokensText(r) {
   return r.reported < done ? `${n} (${r.reported} of ${done} reported)` : n;
 }
 const runsText = (count, unit, running) => `${plural(count, unit)}${running ? `, ${running} now` : ''}`;
-// Home's "Today" (FR-008): each role's rounds, sessions or attempts, minutes and tokens, then each engine's
-function todayCard(b) {
+// A number of tokens in a few characters (the chart's scale, a task's tag)
+const compact = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : Number(n).toLocaleString());
+
+// ---------- Home's Usage card (docs/design/token-usage.md) ----------
+// Today per role comes with the live feed (what runs now counted so far); any other range, grouping or all projects is
+// read from the usage ledger (GET /api/usage). The browser remembers the choice (localStorage).
+const USAGE_KEY = 'nextlevel.usage';
+const USAGE_RANGES = [['hour', 'Last hour'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month'], ['all', 'All time']];
+const USAGE_BY = [['role', 'Role'], ['engine', 'Engine'], ['model', 'Model'], ['worker', 'Worker'], ['task', 'Task']];
+const usage = { range: 'today', by: 'role', all: false, data: null, want: '', at: 0, loading: '' };
+try {
+  const v = JSON.parse(localStorage.getItem(USAGE_KEY) || '{}');
+  if (USAGE_RANGES.some(([k]) => k === v.range)) usage.range = v.range;
+  if (USAGE_BY.some(([k]) => k === v.by)) usage.by = v.by;
+  usage.all = v.all === true;
+} catch {
+  // Today, by role
+}
+function saveUsage() {
+  try {
+    localStorage.setItem(USAGE_KEY, JSON.stringify({ range: usage.range, by: usage.by, all: usage.all }));
+  } catch {
+    // kept for this page only
+  }
+}
+const usageWant = () => `range=${usage.range}&by=${usage.by}${usage.all ? '&all=1' : ''}`;
+const usageLive = () => usage.range === 'today' && usage.by === 'role' && !usage.all;
+// Read again when the choice changed, or at most every 30 s while the page updates
+async function loadUsage(force = false) {
+  const want = usageWant();
+  if (usageLive() || usage.loading === want || (!force && usage.want === want && Date.now() - usage.at < 30_000)) return;
+  usage.loading = want;
+  const r = await api(`/api/usage?${want}`);
+  if (usage.loading === want) usage.loading = '';
+  if (want !== usageWant()) return; // the owner chose another meanwhile
+  Object.assign(usage, { data: r, want, at: Date.now() });
+  renderHome();
+}
+// While a picker's list is open, Home isn't drawn again (a live update would close it); a redraw it held comes when it
+// closes. Only an open list holds it, and for 20 s at most (a list closed on the same choice says nothing): a picker
+// that merely has the focus doesn't.
+const PICKING_MS = 20_000;
+let usagePicking = 0; // when a picker's list was opened
+let usageHeld = false;
+function usagePickDone() {
+  if (!usagePicking) return;
+  usagePicking = 0;
+  if (!usageHeld) return;
+  usageHeld = false;
+  // (a blur comes on the pointerdown of what was clicked: draw after its click, or the click lands on a node that's gone)
+  let done = false;
+  const later = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener('pointerup', later, true);
+    setTimeout(renderHome, 0);
+  };
+  document.addEventListener('pointerup', later, true);
+  setTimeout(later, 500);
+}
+function usageControls() {
+  const changed = (e, set) => {
+    set(e.currentTarget);
+    usagePicking = 0;
+    usageHeld = false;
+    saveUsage();
+    loadUsage(true);
+    renderHome();
+  };
+  const opening = () => (usagePicking = Date.now());
+  const pick = (label, list, value, set) => h('label.usage-pick', {}, h('span', {}, label),
+    h('select', {
+      onchange: (e) => changed(e, set),
+      onpointerdown: opening,
+      // (the keys that open a select's list; Escape closes it without a change)
+      onkeydown: (e) => (e.key === 'Escape' || e.key === 'Tab' ? usagePickDone() : (e.altKey || [' ', 'Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) && opening()),
+      onblur: usagePickDone,
+    }, list.map(([k, t]) => h('option', { value: k, selected: k === value }, t))));
+  return h('div.usage-controls', {},
+    pick('Range', USAGE_RANGES, usage.range, (el) => (usage.range = el.value)),
+    pick('Group by', USAGE_BY, usage.by, (el) => (usage.by = el.value)),
+    h('label.usage-all', {}, h('input', { type: 'checkbox', checked: usage.all, onchange: (e) => changed(e, (el) => (usage.all = el.checked)) }), 'All projects'));
+}
+// Home's "Usage": the range and grouping chosen, then its numbers
+function usageCard(b) {
+  const card = h('div.card.usage-card', {}, h('h2', {}, 'Usage'), usageControls());
+  if (usageLive()) card.append(...todayParts(b));
+  else {
+    loadUsage();
+    const d = usage.data;
+    if (!d || usage.want !== usageWant()) card.append(h('p.muted', {}, 'Reading the usage ledger...'));
+    else if (!d.ok) card.append(h('div.callout.bad', {}, d.message || "The usage ledger couldn't be read."));
+    else card.append(...rangeParts(d));
+  }
+  card.append(h('p.muted.small', {}, "Tokens as each engine reports them: Codex's JSON output (codex exec --json) and its session files, Claude Code's and Antigravity's JSON output (cache reads apart); interactive Claude Code and Antigravity windows are counted in minutes only. A run counts when it ends."));
+  return card;
+}
+// FR-019: autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
+function roundsParts(why) {
+  if (!why.length) return [];
+  return [h('h4', {}, 'Autopilot rounds, by what started them'),
+    h('table.usage', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
+      h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
+        h('td', {}, r.title),
+        h('td.num', {}, String(r.count)),
+        h('td.num', {}, String(Math.round(r.minutes))),
+        h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—')))))];
+}
+// Today per role (FR-008): each role's rounds, sessions or attempts, minutes and tokens, then each engine's
+function todayParts(b) {
   const u = b.usage || {};
-  const card = h('div.card', {}, h('h2', {}, 'Today'));
+  const out = [];
   const roles = u.roles || [];
   const row = (cells, cls = '') => h(`tr${cls}`, {}, cells.map((c, i) => h(i === 0 ? 'td' : i === 3 ? 'td.num.wrap' : 'td.num', {}, c)));
-  card.append(
+  out.push(
     h('table.usage', {},
       h('thead', {}, h('tr', {}, h('th', {}, 'Who'), h('th.num', {}, 'Runs'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
       h('tbody', {}, roles.flatMap((r) => [
@@ -856,30 +970,102 @@ function todayCard(b) {
         ...(r.engines.length > 1 || (r.engines.length === 1 && r.count) ? r.engines.map((e) => row([h('span.sub', {}, e.title), runsText(e.count, r.unit, e.running), String(Math.round(e.minutes)), tokensText(e)], '.sub')) : []),
       ]))),
   );
-  // FR-019: the day's autopilot rounds by what started them, with their minutes and tokens (every engine's, where it reported them)
-  const why = u.roundsBy || [];
-  if (why.length) {
-    // (every engine's tokens: a column of Codex's alone showed an Argon round's as "—")
-    card.append(h('h4', {}, 'Autopilot rounds, by what started them'),
-      h('table.usage', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'What started them'), h('th.num', {}, 'Rounds'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'))),
-        h('tbody', {}, why.map((r) => h(`tr${r.key === 'earlier' ? '.sub' : ''}`, {},
-          h('td', {}, r.title),
-          h('td.num', {}, String(r.count)),
-          h('td.num', {}, String(Math.round(r.minutes))),
-          h('td.num.wrap', {}, r.tokens ? Number(r.tokens).toLocaleString() : '—'))))));
-  }
+  out.push(...roundsParts(u.roundsBy || []));
   const engines = u.engines || [];
   if (engines.length) {
-    card.append(h('h4', {}, 'By engine'),
+    out.push(h('h4', {}, 'By engine'),
       h('table.usage', {},
         h('tbody', {}, engines.map((e) => h('tr', {},
           h('td', {}, h('strong', {}, e.title), h('div.muted.small', {}, e.parts.map((p) => plural(p.count, p.unit)).join(', ') || 'nothing yet')),
           h('td.num', {}, `${Math.round(e.minutes)} min`),
           h('td.num', { title: !e.tokensKnown ? e.notReported : '' }, e.reported ? `${Number(e.tokens).toLocaleString()} tokens` : e.tokensKnown ? 'none reported yet' : 'not reported'))))));
   }
-  card.append(h('p.muted.small', {}, "Tokens as each engine reports them: Codex's JSON output (codex exec --json) and its session files, Claude Code's and Antigravity's JSON output (cache reads not counted); interactive Claude Code and Antigravity windows are counted in minutes only."));
-  return card;
+  return out;
+}
+// A group's tokens: how many of its runs reported them, when not all did
+function groupTokens(g) {
+  if (!g.reported) return g.runs ? 'not reported' : '—';
+  const n = Number(g.tokens).toLocaleString();
+  return g.reported < g.runs ? `${n} (${g.reported} of ${g.runs} reported)` : n;
+}
+const USAGE_ROWS = 40;
+// Another range or grouping, from the usage ledger (GET /api/usage)
+function rangeParts(d) {
+  const out = [h('p.muted.small', {}, `${d.title}, ${d.since}: runs that ended in it.${d.running ? ` ${plural(d.running, 'run')} going now ${d.running === 1 ? 'counts' : 'count'} when ${d.running === 1 ? 'it ends' : 'they end'}.` : ''}`)];
+  const t = d.total;
+  if (!t) out.push(h('p.muted', {}, 'Nothing ended in this range.'));
+  else {
+    out.push(h('div.usage-total', {},
+      h('div', {}, h('strong', {}, groupTokens(t)), h('span.muted', {}, ' tokens')),
+      h('div.muted.small', {}, `${plural(t.runs, 'run')}, ${Math.round(t.minutes)} minutes${t.cached ? `, ${Number(t.cached).toLocaleString()} cache reads` : ''}`)));
+    if (d.days?.length > 1) out.push(dayChart(d.days));
+    const label = USAGE_BY.find(([k]) => k === d.by)?.[1] || d.by;
+    const rows = d.rows.slice(0, USAGE_ROWS);
+    out.push(h('table.usage', {},
+      h('thead', {}, h('tr', {}, h('th', {}, label), h('th.num', {}, 'Runs'), h('th.num', {}, 'Minutes'), h('th.num', {}, 'Tokens'), h('th.num.quiet', {}, 'Cache reads'))),
+      h('tbody', {}, rows.map((g) => h('tr', {},
+        h('td', {}, g.key && (d.by === 'task' || d.by === 'model') ? h('code.nowrap', {}, g.title) : g.title),
+        h('td.num', {}, String(g.runs)),
+        h('td.num', {}, String(Math.round(g.minutes))),
+        h('td.num.wrap', {}, groupTokens(g)),
+        h('td.num.quiet', {}, g.cached ? Number(g.cached).toLocaleString() : '—'))))));
+    if (d.rows.length > rows.length) out.push(h('p.muted.small', {}, `${d.rows.length - rows.length} more: nextlevel usage --range ${d.range} --by ${d.by} --json has them all.`));
+  }
+  if (d.projects) {
+    out.push(h('h4', {}, 'By project'),
+      h('table.usage', {}, h('tbody', {}, d.projects.map((p) => h('tr', {},
+        h('td', {}, p.name),
+        h('td.num', {}, !p.found ? 'not found' : p.total ? plural(p.total.runs, 'run') : 'nothing'),
+        h('td.num.wrap', {}, p.total ? groupTokens(p.total) : '—'))))));
+  }
+  out.push(...roundsParts(d.roundsBy || []));
+  for (const x of d.notes || []) out.push(h('p.muted.small', {}, `Note: ${x}`));
+  return out;
+}
+// The per-day chart: tokens a day, stacked by engine (each engine keeps its color whatever else is shown), a bar's numbers
+// in its tooltip. Inline SVG made with the page's DOM calls, never from HTML text.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, String(v));
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const ENGINE_ORDER = ['codex', 'claude', 'agy'];
+const engineClass = (e) => (ENGINE_ORDER.includes(e) ? `eng-${e}` : 'eng-other');
+function dayChart(days) {
+  const max = Math.max(...days.map((x) => x.tokens));
+  if (!max) return h('p.muted.small', {}, 'No engine reported tokens on these days.');
+  const W = 600;
+  const H = 120;
+  const top = 2;
+  const base = H - 1;
+  const step = W / days.length;
+  const bw = Math.max(1, step - Math.min(6, step * 0.25));
+  const order = (list) => [...list].sort((a, b) => (ENGINE_ORDER.indexOf(a.engine) + 1 || 9) - (ENGINE_ORDER.indexOf(b.engine) + 1 || 9));
+  const seen = new Map();
+  const bars = days.map((x, i) => {
+    let y = base;
+    const segs = order(x.engines).filter((e) => e.tokens > 0).map((e) => {
+      seen.set(e.engine, e.title);
+      const hgt = Math.max(1, ((base - top) * e.tokens) / max);
+      y -= hgt;
+      return svg('rect', { class: `seg ${engineClass(e.engine)}`, x: (i * step + (step - bw) / 2).toFixed(1), y: y.toFixed(1), width: bw.toFixed(1), height: hgt.toFixed(1) });
+    });
+    const tip = [`${x.day}: ${x.tokens.toLocaleString()} tokens, ${plural(x.runs, 'run')}`, ...order(x.engines).filter((e) => e.tokens > 0).map((e) => `${e.title}: ${e.tokens.toLocaleString()}`)].join('\n');
+    // (the whole column answers the pointer, not only the bar)
+    return svg('g', { class: 'day' }, svg('title', {}, tip), svg('rect', { class: 'hit', x: (i * step).toFixed(1), y: 0, width: step.toFixed(1), height: base }), ...segs);
+  });
+  const legend = [...seen].sort((a, b) => (ENGINE_ORDER.indexOf(a[0]) + 1 || 9) - (ENGINE_ORDER.indexOf(b[0]) + 1 || 9));
+  // (the scale and the dates are the page's text, so they stay readable at a phone's width)
+  return h('figure.usage-chart', {},
+    h('div.usage-axis', {}, `${compact(max)} tokens`),
+    svg('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': `Tokens a day, ${days[0].day} to ${days.at(-1).day}, by engine; the table below has the numbers` },
+      svg('line', { class: 'grid', x1: 0, x2: W, y1: top, y2: top }),
+      ...bars,
+      svg('line', { class: 'baseline', x1: 0, x2: W, y1: base, y2: base })),
+    h('div.usage-axis.dates', {}, h('span', {}, days[0].day), h('span', {}, days.at(-1).day)),
+    h('figcaption.usage-legend', {}, legend.map(([e, title]) => h('span', {}, h(`i.swatch.${engineClass(e)}`, {}), title))));
 }
 
 // Home's "Fallbacks and engine switches" (FR-008): what ran on another engine than its role's, and why
@@ -1084,6 +1270,8 @@ function jobLine(j) {
   if (j.type === 'task' && j.state !== 'queued' && (j.model || j.modelOwn)) bits.push(h('span.tag', { title: j.modelOwn ? "the engine's own choice" : '' }, j.model || 'own model'));
   if (j.effort) bits.push(h('span.tag', {}, j.effort));
   if (j.attempt > 1) bits.push(h(`span.tag${j.attempt > 3 ? '.alert' : ''}`, {}, `attempt ${j.attempt}`));
+  // what its ended attempts used, from the usage ledger (where their engines reported tokens)
+  if (j.usage?.reported) bits.push(h('span.tag', { title: `${plural(j.usage.attempts, 'attempt')} ended, ${Math.round(j.usage.minutes)} minutes${j.usage.reported < j.usage.attempts ? `; ${j.usage.reported} of them reported tokens` : ''}` }, `${compact(j.usage.tokens)} tokens`));
   // a task closed with nextlevel close (FR-021): closed, with its reason; what its job ended as stays in the tooltip
   if (j.closed) bits.push(h('span.state.s-closed', { title: j.summary }, j.closed.text));
   else bits.push(h(`span.state.s-${j.state}`, {}, j.summary));
@@ -1119,7 +1307,7 @@ function attemptBox(a) {
   if (a.list.length > 1 || a.tally) {
     out.push(h('h4', {}, 'Its attempts'));
     if (a.tally) out.push(h('p.muted.small', {}, a.tally));
-    out.push(h('ol.plain.attempts', {}, a.list.map((x) => h('li', {}, h('strong', {}, `Attempt ${x.attempt}`), x.engine ? ` · ${x.engine}${x.model ? ` (${x.model})` : ''}` : '', ` · ${x.how}`, x.commits ? ` · ${x.commits}` : ''))));
+    out.push(h('ol.plain.attempts', {}, a.list.map((x) => h('li', {}, h('strong', {}, `Attempt ${x.attempt}`), x.engine ? ` · ${x.engine}${x.model ? ` (${x.model})` : ''}` : '', ` · ${x.how}`, x.commits ? ` · ${x.commits}` : '', x.tokens !== null && x.tokens !== undefined ? ` · ${Number(x.tokens).toLocaleString()} tokens` : ''))));
   }
   return out;
 }
@@ -1655,6 +1843,7 @@ async function loadCards() {
   if (!res.ok) return toast(res.message || "The notes couldn't be read.", 'error');
   cards.data = res;
   renderCards();
+  if (ask.open) renderAsk(); // (the advisor's reply drafts look the cards up)
 }
 async function cardPost(path, body, key) {
   if (cards.busy.has(key)) return null;
@@ -1715,7 +1904,9 @@ function handoffCard(x) {
         if (!text) return toast('Type the reply first.', 'error');
         const res = await cardPost('/api/handoff', { action: 'reply', id: x.id, reply: text }, key);
         if (res?.ok) cards.replies.delete(x.id);
-      } }, 'Send reply')));
+      } }, 'Send reply'),
+      // (the team's cards only: a held change's or a push's is decided on its own card)
+      x.guard || x.from === 'guard' ? null : h('button.btn', { type: 'button', title: 'The advisor turns this card into micro-steps and drafts your reply (read-only; only your click sends it)', onclick: () => askExplain(x.id) }, 'Explain')));
   }
   return card;
 }
@@ -1889,10 +2080,10 @@ window.addEventListener('beforeunload', (e) => {
 // through the Notes cards (/api/notes): nothing reaches the orchestrator unless the owner sends it. Texts are shown
 // as text, never as HTML. The browser remembers whether the panel is open and which thread (localStorage).
 const ASK_KEY = 'nextlevel.ask';
-const ask = { open: false, view: 'list', threads: [], q: '', thread: null, busy: false, question: '', draft: null, renaming: false };
+const ask = { open: false, view: 'list', threads: [], q: '', thread: null, busy: false, question: '', draft: null, renaming: false, mode: 'advise', estimate: null, memory: null, memoryEdit: null, memoryText: '', sending: new Set(), drafted: new Map() };
 function askRemember() {
   try {
-    localStorage.setItem(ASK_KEY, JSON.stringify({ open: ask.open, thread: ask.thread?.id || null }));
+    localStorage.setItem(ASK_KEY, JSON.stringify({ open: ask.open, thread: ask.thread?.id || null, mode: ask.mode }));
   } catch {
     // a browser that keeps nothing: the panel starts closed
   }
@@ -1928,23 +2119,59 @@ function askToggle(open = !ask.open) {
     else askThreads();
   }
 }
-async function askSend() {
-  const question = ask.question.trim();
+async function askSend({ card = '' } = {}) {
+  const question = card ? ask.question.trim() || `Explain ${card}: what it asks of me and why, in micro-steps, and what I should reply.` : ask.question.trim();
   if (!question || ask.busy) return;
   ask.busy = true;
-  const shown = ask.thread || { id: null, title: question.slice(0, 60), messages: [] };
+  const shown = (!card && ask.thread) || { id: null, title: card ? `Explain ${card}` : question.slice(0, 60), messages: [] };
   ask.thread = { ...shown, messages: [...shown.messages, { role: 'owner', text: question, at: new Date().toISOString() }] };
   ask.view = 'thread';
   ask.question = '';
   renderAsk();
-  const r = await api('/api/ask', { question, ...(shown.id ? { thread: shown.id } : {}) });
+  // (Explain is always Advise; a question goes as the switch says)
+  const r = await api('/api/ask', { question, ...(shown.id ? { thread: shown.id } : {}), ...(card ? { card } : { mode: ask.mode }) });
   ask.busy = false;
   if (r.thread?.id) await askOpenThread(r.thread.id);
   else {
     ask.question = question;
     renderAsk();
   }
-  if (!r.ok) toast(r.message || 'The assistant gave no answer.', 'error');
+  if (!r.ok) toast(r.message || 'The advisor gave no answer.', 'error');
+  ask.estimate = null; // (the project moved on, and so did the thread)
+}
+// Explain on a team's card: the Advisor panel opens on a thread of its own for it
+function askExplain(id) {
+  if (ask.busy) return toast('The advisor is answering another question: wait for it.', 'error');
+  if (!ask.open) askToggle(true);
+  ask.thread = null;
+  ask.draft = null;
+  askSend({ card: id });
+}
+// What a question will send, before it is sent: the dashboard works out the briefing's size (GET /api/ask/estimate)
+async function askEstimate() {
+  const mode = ask.mode;
+  if (ask.estimate?.mode === mode && Date.now() - ask.estimate.at < 60_000) return;
+  ask.estimate = { mode, at: Date.now(), tokens: null };
+  const r = await api(`/api/ask/estimate?mode=${encodeURIComponent(mode)}`);
+  if (ask.estimate?.mode !== mode) return;
+  ask.estimate = { mode, at: Date.now(), tokens: r.ok ? r.tokens : null };
+  renderAsk();
+}
+// The advisor's memory (GET/POST /api/advisor/memory): only the owner's click changes it
+async function askMemory() {
+  const r = await api('/api/advisor/memory');
+  ask.memory = r.ok ? { items: r.items || [], problem: r.problem || '' } : { items: [], problem: r.message || "The memory couldn't be read." };
+  renderAsk();
+}
+async function askMemoryPost(body, okText) {
+  const r = await api('/api/advisor/memory', body);
+  if (!r.ok) {
+    toast(r.message || 'Not done.', 'error');
+    return false;
+  }
+  toast(okText || r.message || 'Done.', 'good');
+  await askMemory();
+  return true;
 }
 async function askChat(action, extra = {}) {
   const r = await api('/api/chats', { action, id: ask.thread?.id, ...extra });
@@ -1980,13 +2207,81 @@ async function askSendNote() {
   renderAsk();
   toast(r.message || 'Sent to the orchestrator as a note.', 'good');
 }
+// One draft of an answer: a note, a standing rule, a reply to a team's card, or a change to the advisor's memory
+const DRAFT_SEND = { note: 'Send as note', rule: 'Send as standing rule', remember: 'Remember this' };
+function askCardOf(id) {
+  return Object.values(cards.data?.handoff || {}).flat().find((x) => x && x.id === id) || null;
+}
+function askDraftBox(m, i, d, j) {
+  const key = `${ask.thread?.id || ''}:${i}:${j}`;
+  const sent = ask.drafted.get(key) || (m.sent && typeof m.sent === 'object' ? m.sent[j] : '');
+  if (sent) return h('div.ask-draft.sent', {}, h('span.badge.good', {}, String(sent)));
+  const busy = ask.sending.has(key);
+  const text = ask.drafted.get(`${key}:text`) ?? d.text ?? '';
+  const done = (label) => {
+    ask.drafted.set(key, label);
+    renderAsk();
+    // kept on the answer in its thread, so a reload shows it sent too (never a second Send)
+    if (ask.thread?.id) api('/api/chats', { action: 'sent', id: ask.thread.id, index: i, at: m.at, draft: j, label }).catch(() => {});
+  };
+  const send = async (fn, label) => {
+    if (busy) return;
+    ask.sending.add(key);
+    renderAsk();
+    try {
+      if (await fn()) done(label);
+    } finally {
+      ask.sending.delete(key);
+      renderAsk();
+    }
+  };
+  const box = (label, button, onSend, { editable = true, note = '' } = {}) => h('div.ask-draft', {},
+    h('p.small', {}, h('strong', {}, label)),
+    editable ? h('textarea', { rows: Math.min(8, Math.max(2, text.split('\n').length + 1)), 'aria-label': label, oninput: (e) => ask.drafted.set(`${key}:text`, e.target.value) }, text) : h('p.small', {}, text),
+    note ? h('p.muted.small', {}, note) : null,
+    button ? h('div.row', {}, h('button.btn.primary.small', { type: 'button', disabled: busy, onclick: onSend }, busy ? 'Sending…' : button)) : null);
+  const now = () => (ask.drafted.get(`${key}:text`) ?? d.text ?? '').trim();
+  if (d.kind === 'note' || d.kind === 'rule') {
+    return box(d.kind === 'rule' ? 'A standing rule for the orchestrator' : 'A note for the orchestrator', DRAFT_SEND[d.kind], () => send(async () => {
+      const r = await api('/api/notes', { action: 'add', text: now(), type: d.kind === 'rule' ? 'rule' : 'once' });
+      toast(r.message || (r.ok ? 'Sent to the orchestrator.' : 'Not sent.'), r.ok ? 'good' : 'error');
+      return r.ok;
+    }, 'Sent as a note'), { note: 'It becomes a note the orchestrator reads at its next start or round (Notes and handoffs).' });
+  }
+  if (d.kind === 'reply') {
+    if (!cards.data) loadCards();
+    const c = askCardOf(d.card);
+    const why = !cards.data ? '' : !c ? `${d.card} is gone` : c.guard || c.from === 'guard' ? `${d.card} is decided on its own card` : '';
+    return box(`A reply to ${d.card}`, why || !cards.data ? '' : `Send reply to ${d.card}`, () => send(async () => {
+      const r = await api('/api/handoff', { action: 'reply', id: d.card, reply: now() });
+      toast(r.message || (r.ok ? 'Sent.' : 'Not sent.'), r.ok ? 'good' : 'error');
+      if (r.ok) loadCards();
+      return r.ok;
+    }, `Sent to ${d.card}`), { editable: !why, note: why || (c ? `${d.card}: ${String(c.what || '').split('\n')[0]}` : '') });
+  }
+  if (d.kind === 'remember') {
+    const full = (ask.memory?.items?.length || 0) >= 30 && !d.replaces;
+    return box(d.replaces ? `Replace ${d.replaces} in the advisor's memory` : "Remember, in the advisor's memory", full ? '' : d.replaces ? `Replace ${d.replaces}` : DRAFT_SEND.remember, () => send(() => askMemoryPost(d.replaces ? { action: 'edit', id: d.replaces, text: now() } : { action: 'add', text: now(), kind: 'decision', from: ask.thread?.id || '' }, d.replaces ? `${d.replaces} changed.` : 'Remembered.'), d.replaces ? `Replaced ${d.replaces}` : 'Remembered'), { note: full ? 'Memory is full (30): forget one first (Memory, above).' : 'Only you change it. The next answers read it.' });
+  }
+  if (d.kind === 'forget') {
+    const entry = ask.memory?.items?.find((x) => x.id === d.id);
+    return box(`Forget ${d.id}`, entry ? `Forget ${d.id}` : '', () => send(() => askMemoryPost({ action: 'remove', id: d.id }, `Forgot ${d.id}.`), `Forgot ${d.id}`), { editable: false, note: entry ? entry.text : `${d.id} isn't in the memory.` });
+  }
+  return null;
+}
 function askMessage(m, i) {
   const owner = m.role === 'owner';
-  const meta = owner ? '' : [m.engine && (build?.teamChoices?.engines.find((e) => e.name === m.engine)?.title || m.engine), m.model, m.tokens?.tokens ? `${Number(m.tokens.tokens).toLocaleString()} tokens` : '', Number.isFinite(m.copySeconds) ? `in a copy made in ${m.copySeconds} s` : '', m.at ? time(m.at) : ''].filter(Boolean).join(' · ');
+  const MODE = { quick: 'Quick', advise: 'Advise', explain: 'Explain' };
+  const meta = owner ? '' : [MODE[m.mode] || '', m.engine && (build?.teamChoices?.engines.find((e) => e.name === m.engine)?.title || m.engine), m.model || m.reportedModel, m.tokens?.tokens ? `${Number(m.tokens.tokens).toLocaleString()} tokens` : '', m.briefing?.tokens ? `~${Number(m.briefing.tokens).toLocaleString()} of them project context` : '', Number.isFinite(m.copySeconds) ? `in a copy made in ${m.copySeconds} s` : '', m.at ? time(m.at) : ''].filter(Boolean).join(' · ');
   const box = h(`div.ask-msg.${owner ? 'owner' : 'assistant'}${m.error ? '.error' : ''}`, {},
-    h('div.ask-who', {}, owner ? 'You' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
+    h('div.ask-who', {}, owner ? 'You' : m.mode && m.mode !== 'quick' ? 'Advisor' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
     h('div.ask-text', {}, m.text));
   if (!owner && m.sources?.length) box.append(h('div.ask-sources', {}, h('span.muted', {}, 'Used: '), m.sources.join(', ')));
+  // The advisor's drafts: each whole, editable, sent only by its own button
+  if (!owner && !m.error && m.drafts?.length) {
+    box.append(h('div.ask-drafts', {}, h('p.muted.small', {}, 'Drafts for you to edit and send. Nothing goes to the team until you click. The advisor reads what the team wrote: check before you send.'), m.drafts.map((d, j) => askDraftBox(m, i, d, j))));
+    return box;
+  }
   if (!owner && !m.error) {
     if (ask.draft?.at === i) {
       const d = ask.draft;
@@ -2007,7 +2302,9 @@ function askMessage(m, i) {
 // Who answers (the Team page's assistant row): kept up to date by the live data without drawing the panel again
 function askWho() {
   const who = build?.team?.find((r) => r.key === 'assistant');
-  if (who && !who.none && $('#ask-who')) $('#ask-who').textContent = `Read-only: ${who.engineTitle}, ${who.model.text}. It answers from the project and never talks to the orchestrator.`;
+  const today = build?.usage?.roles?.find((r) => r.key === 'assistant');
+  const used = today?.count ? ` Today: ${today.count} answer(s)${today.tokens ? `, ${Number(today.tokens).toLocaleString()} tokens` : ''}.` : '';
+  if (who && !who.none && $('#ask-who')) $('#ask-who').textContent = `Read-only: ${who.engineTitle}, ${who.model.text}.${who.independent && !who.independent.ok ? ' Same engine as the orchestrator.' : ''} It never talks to the orchestrator: only your click sends its drafts.${used}`;
 }
 function renderAsk() {
   const body = $('#ask-body');
@@ -2018,7 +2315,39 @@ function renderAsk() {
     h('textarea', { id: 'ask-question', rows: 3, placeholder: ask.thread?.id ? 'A follow-up…' : 'Ask about the project: what is blocked, why a task failed, what the plan is…', disabled: ask.busy,
       oninput: (e) => (ask.question = e.target.value),
       onkeydown: (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) askSend(); } }, ask.question),
-    h('div.row', {}, h('button.btn.primary', { type: 'button', disabled: ask.busy, onclick: askSend }, ask.busy ? 'Thinking…' : 'Ask'), h('span.muted.small', {}, 'Ctrl+Enter')));
+    h('div.row.ask-mode', { role: 'radiogroup', 'aria-label': 'How it answers' },
+      ['advise', 'quick'].map((mode) => h('label.choice-inline', { title: mode === 'advise' ? 'The advisor: its own engine and model, its memory and more of the project' : 'A light model and a short briefing: fewer tokens, for a simple question' },
+        h('input', { type: 'radio', name: 'ask-mode', checked: ask.mode === mode, disabled: ask.busy, onchange: () => ((ask.mode = mode), askRemember(), askEstimate(), renderAsk()) }), mode === 'advise' ? ' Advise' : ' Quick')),
+      h('span.muted.small', {}, ask.estimate?.mode === ask.mode && Number.isFinite(ask.estimate.tokens) ? `about ${ask.estimate.tokens.toLocaleString()} tokens of project context` : '')),
+    h('div.row', {}, h('button.btn.primary', { type: 'button', disabled: ask.busy, onclick: () => askSend() }, ask.busy ? 'Thinking…' : 'Ask'), h('span.muted.small', {}, 'Ctrl+Enter')));
+  if (ask.estimate?.mode !== ask.mode) askEstimate();
+  if (ask.view === 'memory') {
+    if (!ask.memory) askMemory();
+    const items = ask.memory?.items || [];
+    const edit = (x) => h('div.ask-mem-edit', {},
+      h('textarea', { rows: 2, maxlength: 200, 'aria-label': `Edit ${x.id}`, oninput: (e) => (ask.memoryText = e.target.value) }, ask.memoryText),
+      h('div.row', {},
+        h('button.btn.primary.small', { type: 'button', onclick: async () => (await askMemoryPost({ action: 'edit', id: x.id, text: ask.memoryText }, `${x.id} changed.`)) && ((ask.memoryEdit = null), renderAsk()) }, 'Save'),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.memoryEdit = null), renderAsk()) }, 'Cancel')));
+    body.replaceChildren(...[
+      h('div.ask-thread-head', {}, h('button.btn.small', { type: 'button', onclick: () => ((ask.view = 'list'), askThreads()) }, '← Threads'), h('strong.ask-title', {}, `Memory (${items.length} of 30)`)),
+      h('p.muted.small', {}, "What the advisor keeps about your decisions and preferences, for this project. Only you add, change or delete an entry: from an answer's \"Remember this\", or here. Check where each came from: one you didn't add is worth a look."),
+      ask.memory?.problem ? h('p.small.bad', {}, ask.memory.problem) : null,
+      items.length
+        ? h('ul.ask-memory', {}, items.map((x) => h('li', {},
+          ask.memoryEdit === x.id ? edit(x) : [h('span.cid', {}, x.id), ' ', h('span', {}, x.text),
+            h('span.muted.small.block', {}, `${x.kind} · ${x.from === 'by hand' ? 'added by hand' : 'from a thread'} · ${ago2(x.at)}`),
+            h('span.ask-actions', {},
+              h('button.btn.small', { type: 'button', onclick: () => ((ask.memoryEdit = x.id), (ask.memoryText = x.text), renderAsk()) }, 'Edit'),
+              h('button.btn.small', { type: 'button', onclick: () => confirm(`Forget ${x.id}?`) && askMemoryPost({ action: 'remove', id: x.id }, `Forgot ${x.id}.`) }, 'Delete'))])))
+        : h('p.muted', {}, 'Nothing yet.'),
+      h('div.ask-mem-edit', {},
+        h('label.sr-only', { for: 'ask-mem-new' }, 'A new entry'),
+        h('textarea', { id: 'ask-mem-new', rows: 2, maxlength: 200, placeholder: 'Something the advisor should remember (at most 200 characters)', oninput: (e) => (ask.memoryNew = e.target.value) }, ask.memoryNew || ''),
+        h('div.row', {}, h('button.btn.small', { type: 'button', disabled: items.length >= 30, onclick: async () => (await askMemoryPost({ action: 'add', text: ask.memoryNew || '', kind: 'decision' }, 'Remembered.')) && ((ask.memoryNew = ''), renderAsk()) }, items.length >= 30 ? 'Memory is full (30): forget one first' : 'Add'))),
+    ].filter(Boolean));
+    return;
+  }
   if (ask.view === 'list') {
     body.replaceChildren(
       h('div.row.ask-tools', {},
@@ -2027,7 +2356,8 @@ function renderAsk() {
           clearTimeout(askThreads.timer);
           askThreads.timer = setTimeout(askThreads, 250);
         } }),
-        h('button.btn.small', { type: 'button', onclick: () => ((ask.thread = null), (ask.view = 'thread'), (ask.draft = null), askRemember(), renderAsk()) }, 'New thread')),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.thread = null), (ask.view = 'thread'), (ask.draft = null), askRemember(), renderAsk()) }, 'New thread'),
+        h('button.btn.small', { type: 'button', onclick: () => ((ask.view = 'memory'), askMemory()) }, 'Memory')),
       ask.threads.length
         ? h('ul.ask-threads', {}, ask.threads.map((t) => h('li', {}, h('button.linkish', { type: 'button', onclick: () => askOpenThread(t.id) }, h('strong', {}, t.title), h('span.muted.small.block', {}, `${t.count} message(s) · ${time(t.updatedAt)}`), t.match ? h('span.small.block', {}, t.match) : null))))
         : h('p.muted', {}, ask.q ? 'No thread has that.' : 'No threads yet: ask something below.'),
@@ -2044,7 +2374,10 @@ function renderAsk() {
         h('button.btn.small', { type: 'button', onclick: () => confirm('Clear this thread? Its messages go; the thread stays.') && askChat('clear') }, 'Clear'),
         h('button.btn.small', { type: 'button', onclick: () => confirm('Delete this thread?') && askChat('delete') }, 'Delete')) : null);
     const msgs = h('div.ask-messages', {}, (t?.messages || []).map(askMessage), ask.busy ? h('p.muted.small', {}, h('span.spinner'), ' A fresh read-only session is reading the project and your question (a minute or two)…') : null);
-    body.replaceChildren(head, msgs, composer);
+    if (t?.messages?.some((m) => m.drafts?.some((d) => d.kind === 'remember' || d.kind === 'forget')) && !ask.memory) askMemory();
+    // (what the thread's answers used, in all)
+    const total = (t?.messages || []).reduce((n, m) => n + (Number(m.tokens?.tokens) || 0), 0);
+    body.replaceChildren(...[head, total ? h('p.muted.small.ask-total', {}, `This thread: ${total.toLocaleString()} tokens in all`) : null, msgs, composer].filter(Boolean));
     msgs.scrollTop = msgs.scrollHeight;
   }
 }
@@ -2053,6 +2386,7 @@ $('#ask-close')?.addEventListener('click', () => askToggle(false));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && ask.open && !ask.draft && $('#report')?.hidden !== false && askToggle(false));
 try {
   const saved = JSON.parse(localStorage.getItem(ASK_KEY) || '{}');
+  if (saved.mode === 'quick') ask.mode = 'quick';
   if (saved.thread) {
     ask.thread = { id: saved.thread, title: '', messages: [] };
     ask.view = 'thread';

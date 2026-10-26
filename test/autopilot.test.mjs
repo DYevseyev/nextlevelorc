@@ -754,6 +754,8 @@ test('rounds whose engine never starts: what started them waits, the hour counts
     bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status', NEXTLEVEL_TEST_ROUND_EXIT: '42', NTFY_TOPIC: 'nextlevel-test-topic' }));
     p.hub(['note', 'add', 'Plan M2']);
     await until(p, 'autopilot to turn itself off', () => JSON.parse(fs.readFileSync(p.state('settings.json'), 'utf8')).autopilot === false);
+    // (the setting is written before the hub logs why: wait for the line too)
+    await until(p, 'the hub to say why autopilot turned itself off', () => /autopilot: rounds that never started:/.test(hubLog(p)));
     const log = hubLog(p);
     assert.equal((log.match(/autopilot: the round didn't start, so the next one may start at once \(what started it waits again\): its process ended with exit 42 before it started Codex/g) || []).length, 2, log);
     assert.match(log, /autopilot: rounds that never started: Two autopilot rounds in a row didn't start: the orchestrator's engine was never started, the last time because its process ended with exit 42 before it started Codex\. Nothing ran, so nothing is lost/);

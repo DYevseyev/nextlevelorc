@@ -7,14 +7,16 @@
 //             sign-ins stay steps to copy. The page checks again when the owner comes back to it.
 //   Home      (M9) at a glance: whether the team runs, one sentence per running task, what needs the owner
 //             with the one next action as a button (ownerNeeds, lib/overview.mjs), milestone progress and
-//             the day's numbers (autopilot rounds, worker minutes, Codex tokens from the logs). Its Blockers (M11): a
-//             headline colored by meaning, then the status file's labeled items (blockersView, lib/overview.mjs).
+//             its Usage card: from the usage ledger, today per role and engine with what runs now in the live feed;
+//             another range (the last hour, this week, this month, all time), grouping (engine, model, worker, task)
+//             or all projects from GET /api/usage (usageView in hub.mjs), with a per-day chart by engine. Its Blockers
+//             (M11): a headline colored by meaning, then the status file's labeled items (blockersView, lib/overview.mjs).
 //   Project   (M11) what the project is (docs/PROJECT.md), the roadmap as milestone cards (the status table, the
 //             plans' Outcome, Acceptance and Try it, their tasks from the hub's jobs, the brief's goals; FR-016: each plan
 //             found by its Milestone line or its name, and a warning where one is missing, incomplete or doubled), the pace
 //             with a rough estimate, and docs/DECISIONS.md as cards: GET /api/project (projectView in hub.mjs,
 //             lib/roadmap.mjs), which the page asks for again when the build data's projectStamp changes.
-//   Build     milestones, jobs with the engine and model each ran on, running workers with the end of their
+//   Build     milestones, jobs with the engine and model each ran on (and the tokens their attempts used), running workers with the end of their
 //             log and what they changed so far, what waits for review, the hub's log.
 //   Team      (M9) each role's engine, model and effort in use; a change runs `nextlevel team set <role> ...
 //             --json`, which checks it with the doctor's checks before it saves nextlevel.json. The models a
@@ -67,6 +69,7 @@ import { blockersView, ownerNeeds } from './lib/overview.mjs';
 import { openUrl, refreshPath } from './lib/proc.mjs';
 import { SECOND_TAKES, WINDOW_MODES } from './lib/config.mjs';
 import { TEAM_ROWS } from './lib/team.mjs';
+import { BY_KEYS, RANGE_KEYS } from './lib/usage.mjs';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'ui');
 const ASSETS = {
@@ -409,13 +412,17 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
   // ---- Ask: one question at a time, answered by `nextlevel ask --json` (its own process: the page stays live) ----
   let asking = false;
   async function ask(b) {
-    const question = typeof b.question === 'string' ? b.question.trim() : '';
+    const question = (typeof b.question === 'string' ? b.question.trim() : '') || (b.card ? `Explain ${String(b.card)}: what it asks of me and why, in micro-steps, and what I should reply.` : '');
     if (!question || question.length > 4000) return [400, { ok: false, message: 'A question has 1 to 4000 characters.' }];
     if (b.thread !== undefined && b.thread !== null && !/^[a-z0-9]{8,32}$/.test(String(b.thread))) return [400, { ok: false, message: 'which thread?' }];
-    if (asking) return [409, { ok: false, message: 'The assistant is answering another question: wait for it.' }];
+    // (Advise by default, Quick, or Explain of a team's card: always Advise)
+    if (b.mode !== undefined && !['advise', 'quick'].includes(b.mode)) return [400, { ok: false, message: 'mode must be advise or quick' }];
+    if (b.card !== undefined && b.card !== null && b.card !== '' && !/^H[1-9]\d{0,6}$/.test(String(b.card))) return [400, { ok: false, message: 'which card?' }];
+    // (one question at a time: Explain too, never a second paid run queued behind it)
+    if (asking) return [409, { ok: false, message: 'The advisor is answering another question: wait for it.' }];
     asking = true;
     try {
-      const r = await runTool(['ask', '--json', ...(b.thread ? ['--thread', String(b.thread)] : []), '--', question], 12 * 60_000, { json: true });
+      const r = await runTool(['ask', '--json', ...(b.thread ? ['--thread', String(b.thread)] : []), ...(b.card ? ['--card', String(b.card)] : b.mode === 'quick' ? ['--quick'] : []), '--', question], 12 * 60_000, { json: true });
       if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'nothing came back'}` }];
       return [r.json.ok ? 200 : 409, r.json];
     } finally {
@@ -430,7 +437,11 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
       if (b.action === 'rename') return [200, { ok: true, thread: api.chats.rename(id, String(b.title || '').slice(0, 120)) }];
       if (b.action === 'clear') return [200, { ok: true, thread: api.chats.clear(id) }];
       if (b.action === 'delete') return [200, { ok: true, deleted: api.chats.remove(id) ?? id }];
-      return [400, { ok: false, message: 'action must be new, rename, clear or delete' }];
+      if (b.action === 'sent') {
+        if (!Number.isInteger(b.index) || !Number.isInteger(b.draft) || typeof b.at !== 'string') return [400, { ok: false, message: 'which answer and draft?' }];
+        return [200, { ok: true, thread: api.chats.markSent(id, b.index, b.at, b.draft, String(b.label || '')) }];
+      }
+      return [400, { ok: false, message: 'action must be new, rename, clear, delete or sent' }];
     } catch (err) {
       return [409, { ok: false, message: err.message }];
     }
@@ -637,6 +648,13 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         const activity = api.activity(url.searchParams.get('id'));
         return reply(res, activity ? [200, { ok: true, ...activity }] : [404, { ok: false, message: 'no such task' }]);
       }
+      case 'GET /api/usage': {
+        // Home's Usage card (docs/design/token-usage.md): a range, a field to group by, and all projects or this one
+        const range = String(url.searchParams.get('range') || 'today');
+        const by = String(url.searchParams.get('by') || 'role');
+        if (!RANGE_KEYS.includes(range) || !BY_KEYS.includes(by)) return reply(res, [400, { ok: false, message: `range is one of ${RANGE_KEYS.join(', ')}; by is one of ${BY_KEYS.join(', ')}` }]);
+        return reply(res, [200, api.usage({ range, by, all: url.searchParams.get('all') === '1' })]);
+      }
       case 'GET /api/cards':
         return reply(res, [200, cardsView()], { raw: true }); // redacted where the team wrote it (cardsView)
       case 'POST /api/notes':
@@ -696,6 +714,28 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         return reply(res, chatAction(b));
       case 'POST /api/ask':
         return reply(res, await ask(b));
+      // ---- the advisor (docs/design/advisor.md): what a question sends, and its memory (the owner's alone to change) ----
+      case 'GET /api/ask/estimate': {
+        const mode = String(url.searchParams.get('mode') || 'advise');
+        const card = String(url.searchParams.get('card') || '');
+        if (!['advise', 'quick'].includes(mode) || (card && !/^H[1-9]\d{0,6}$/.test(card))) return reply(res, [400, { ok: false, message: 'mode must be advise or quick, and a card an id like H12' }]);
+        try {
+          return reply(res, [200, { ok: true, ...api.askEstimate({ mode, card }) }]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        }
+      }
+      case 'GET /api/advisor/memory':
+        return reply(res, [200, { ok: true, ...api.advisorMemory({ action: 'list' }) }]);
+      case 'POST /api/advisor/memory': {
+        if (!['add', 'edit', 'remove'].includes(b.action)) return reply(res, [400, { ok: false, message: 'action must be add, edit or remove' }]);
+        if ((b.text !== undefined && typeof b.text !== 'string') || (b.id !== undefined && !/^M[1-9]\d{0,5}$/.test(String(b.id))) || (b.kind !== undefined && !['decision', 'preference'].includes(b.kind))) return reply(res, [400, { ok: false, message: 'an entry is a text, an id like M3 and a kind (decision or preference)' }]);
+        try {
+          return reply(res, [200, { ok: true, ...api.advisorMemory({ action: b.action, id: b.id, text: b.text, kind: b.kind, from: typeof b.from === 'string' ? b.from : '' }) }]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        }
+      }
       case 'POST /api/report':
         return reply(res, await buildReport(b));
       case 'POST /api/report/send': {

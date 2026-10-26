@@ -87,7 +87,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
   today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
   counted in `usage.json` (`dayLines`). The hub's side is "the day's numbers" in `hub.mjs` (addUsage, which also keeps
-  `usage.json` and its `ledgered`; importOlderUsage at the hub's start; cmdUsage, `nextlevel usage`).
+  `usage.json` and its `ledgered`; importOlderUsage at the hub's start; cmdUsage, `nextlevel usage`; usageToday and usageView, Home's Usage card and
+  `GET /api/usage`, from each project's lines kept in memory while its month files don't change: ledgerRecords).
 - `src/lib/closures.mjs` — closed tasks (FR-021): `.nextlevel/closed.json` read through a shape check, the reason's
   rules, how a closure reads. The hub's side is "closing a task" in `hub.mjs` (cmdClose, closeProblem, GIT_OPS.close,
   recordClosure, reopenClosed); the roadmap counts it (`buildRoadmap`'s `closed`).
@@ -100,8 +101,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
 - `src/lib/reports.mjs` — what the orchestrator gets of a report, a log or the owner's words (FR-012): the output
   budget, the parts that fit it, cuts that say so, and a task's kind and result file (pure). The hub's side:
   `cmdResult` and `resultPart`, `keepReport` (each attempt's report, whole), `checkResultFile` in a task's verify.
-- `src/ask.mjs` — `nextlevel ask`: the assistant's briefing, one read-only session per question (the engine's
-  `readOnly` arguments, the question on stdin), its answer, sources and suggested note. `src/lib/chats.mjs` — its
+- `src/ask.mjs` — `nextlevel ask`: the advisor (the assistant role, `docs/design/advisor.md`): its briefing for Advise,
+  Quick or Explain of a card, one read-only session per question (the engine's `readOnly` arguments, the question on
+  stdin), its answer, sources and drafts, and `ask memory`. `src/lib/advisor.mjs` — the drafts read from an answer (a
+  note, a rule, a reply to a card, a memory change; none can approve or deploy) and the owner's memory store
+  (`~/.nextlevel/advisor/<project key>/`, its shape check). `src/lib/chats.mjs` — its
   threads (`.nextlevel/chats/`). `src/lib/readonly.mjs` — what nextlevel runs under `NEXTLEVEL_READ_ONLY=1` (the
   assistant's engine gets it): only commands that look. `src/lib/github.mjs` — GitHub reads for verify commands
   (FR-017): the read-only token's name, the git credential helper that gives it to github.com only, its expiry from
@@ -171,7 +175,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   covers M11's parsing (the project page, plan headers, decisions, the roadmap and pace, Home's Blockers) and FR-016
   (plans shaped like a real project's, `test/fixtures/fr016`: found by their Milestone line or name, the warnings, the doctor's
   `project.plans` on a real folder and git); `test/ask.test.mjs`
-  covers Ask (threads, the briefing and its redaction, read-only engines and commands, the automatic choice, usage); `test/gitlock.test.mjs`
+  covers Ask and the advisor (threads, the briefing and its redaction, read-only engines and commands, the automatic
+  choices, usage; Advise's sections, drafts, Explain, the memory and who may change it); `test/gitlock.test.mjs`
   reproduces the index.lock race between the dashboard's reads and the hub's commits (a stub holds the lock);
   `test/guard.test.mjs` covers the guard (matching, summaries, the watch, a worker's hook held, approved and rejected on
   the dashboard, an orchestrator's START.cmd edit set back); `test/guard-git-secrets.test.mjs` its second part (a changed
@@ -215,7 +220,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   dashboard's card, a task branch moving a job onto the PC held on a card), its checks in `test/checks.test.mjs`;
   `test/usage.test.mjs` covers the usage ledger (each engine's token parts, a cut line, planted lines, the ranges across a
   clock change, the import once and after a Go back, a worker's line end to end, `nextlevel usage` and `--all-projects`
-  refused in agents' sessions; the rounds' lines in `test/autopilot.test.mjs`);
+  refused in agents' sessions, the dashboard's Usage card's data: Today from the ledger, `/api/usage` by range, field and
+  project, a task's tokens on the Build page; the rounds' lines in `test/autopilot.test.mjs`);
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),

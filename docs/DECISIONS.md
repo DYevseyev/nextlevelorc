@@ -1954,3 +1954,29 @@ One entry each: date, decision, why, alternatives.
   refused in an agent's or the assistant's session, so one project's agent never learns another project's tasks.
   A hub that stops between `usage.json`'s change (which raises `ledgered`) and the line's append loses that one run from
   the ledger for good; the order is kept so that nothing is ever counted twice, and the loss is one run at most.
+- 2026-10-25 — **The advisor keeps the assistant's key, and takes the orchestrator's other engine by default.** Ask
+  grows into an advisor (`docs/design/advisor.md`). The role stays `assistant` in nextlevel.json, `nextlevel team`, the
+  lock test, `.nextlevel/chats/` and usage.json: a rename would need an alias, a `format.json` note and a new lock-test
+  key for a word the owner never types, so only the words on screen change. Advise's automatic choice is the first
+  read-only engine that isn't the orchestrator's and whose CLI is installed, on that engine's own default model (a
+  pinned name would go stale), so it can disagree with the orchestrator; `advisorAuto` stays pure and takes "installed"
+  as a predicate from its callers, since the hub's loop reads the role every tick. Quick is today's Ask unchanged (its
+  light model and briefing), so a simple question costs what it did. The memory lives outside the project and only the
+  owner's window or the dashboard changes it (not a wall: KNOWN_ISSUES); a memory change starts no round, since it
+  gives the team nothing to do. Drafts are read from the answer's own lines by code and sent only through the Notes
+  page's existing routes; there is no draft for an Approve, a push, a deploy or a card's Done. The briefing's estimate
+  is worked out in the dashboard's own process, not by a second `nextlevel ask`. The mode goes to the usage ledger as
+  its reason (quick, advise, explain), which the token-usage work owns.
+- 2026-10-25 — **Home's Usage card reads the usage ledger for every range; Today by role comes with the live feed, the
+  rest from `GET /api/usage`.** Today per role and engine is what Home always showed, so it stays in the build data the
+  page gets on every change, with what runs now counted so far. Any other range, grouping or All projects is read when
+  the owner picks it and again at most every 30 seconds while the page updates, so the live feed stays small. The hub
+  keeps each month file's lines in memory until that file changes size or time, so the feed's looks read no line and a
+  run's end reads its own month again, not all time. Outside Today, a run counts when it ends: the card says how many run now, rather than adding minutes
+  that the next look would count again. Each engine keeps its own color in the per-day chart (Codex, Claude Code,
+  Antigravity, others gray), whatever else the range holds; a bar's numbers are in its tooltip and the table under the
+  chart, and the scale and dates are the page's own text, so they stay readable at a phone's width. Home isn't drawn
+  again while a picker's list is open (for 20 seconds at most), so a live update never closes it; a picker that only has
+  the focus holds nothing. A project whose hub hasn't started on this version yet (its dashboard only) hasn't brought
+  in what `usage.json` counted before, so its numbers start at the ledger's first line until its hub starts; the update
+  restarts the hubs, so this lasts only where a hub wasn't running.

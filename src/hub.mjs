@@ -103,7 +103,8 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
-import { cmdAsk } from './ask.mjs';
+import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
+import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
@@ -127,7 +128,7 @@ import { pushBlockEnv } from './lib/pushblock.mjs';
 import { PER_HOUR, REASONS, REASON_ORDER, ROUND_LIMIT_MIN, addTrigger, autopilotOn, decide, freshState, isReason, ms as isoMs, noteReal, oneLine, roundEnded, roundStarted, roundsProblem, takeWake, waitView, wakeId, wakeKey } from './lib/rounds.mjs';
 import { clockIso, clockNow } from './lib/clock.mjs';
 import { readJsonFile, updateJsonFile } from './lib/filelock.mjs';
-import { appendLedger, dayLines, ledgerDir, oldestDay, ranges, readLedger, runRecord, sumUsage, taskTokensText, tokensOf, tokensWords, usageLines } from './lib/usage.mjs';
+import { appendLedger, dayLines, ledgerDir, oldestDay, perDay, ranges, readLedger, runRecord, sumUsage, taskTokensText, tokensOf, tokensWords, usageLines, within } from './lib/usage.mjs';
 import { NEEDS, lacks, needsText, needsWords, specNeeds, workersThatCan } from './lib/needs.mjs';
 import { KEY_LIMIT, KEY_PROMPT, NO_GH_CONFIG, NO_PUSH, SLOT_PUSH_BLOCK, runKey, workerEnv as sharedWorkerEnv, workerRun } from './lib/workerspec.mjs';
 
@@ -1020,6 +1021,7 @@ function attemptView(id, s) {
       attempt: a.attempt,
       engine: a.engine ? engineTitle(a.engine) : '',
       model: a.model || '',
+      tokens: Number.isFinite(a.tokens?.total) ? a.tokens.total : null,
       how: [a.notCounted ? `${a.notCounted} (not counted)` : a.state, a.mark ? `finished without a report, ${a.mark}` : '', a.verify && a.verify !== 'skipped' ? `verify ${a.verify}` : '', a.missing ? `no report: ${a.missing}` : a.claimed ? `worker says ${a.claimed}` : ''].filter(Boolean).join(' · '),
       commits: a.ownCommits === null || a.ownCommits === undefined ? (a.commits === null || a.commits === undefined ? '' : `${a.commits} in all`) : `${a.ownCommits} of its own`,
       at: a.finishedAt || null,
@@ -1379,25 +1381,15 @@ function cmdUsage(argv) {
   }
   const range = ranges(clockNow()).find((r) => r.key === (a.range || 'today'));
   const by = a.by || 'role';
-  const roots = [ROOT];
-  if (a['all-projects']) {
-    const known = (userState().get('projects') || []).filter((r) => typeof r === 'string');
-    for (const r of known) if (!roots.some((x) => samePath(x, r))) roots.push(r);
-  }
-  const projects = roots.map((root) => {
-    const stateDir = path.join(root, '.nextlevel');
-    if (!fs.existsSync(stateDir)) return { root, name: path.basename(root), found: false, records: [], notes: [] };
-    const got = readLedger(stateDir, { from: range.from, to: range.to });
-    return { root, name: path.basename(root), found: true, ...got };
-  });
+  const projects = usageProjects(range, a['all-projects']);
   const records = projects.flatMap((p) => p.records);
   const rows = sumUsage(records, { by });
-  const [total] = sumUsage(records.map((r) => ({ ...r, all: 'all' })), { by: 'all' });
+  const total = totalOf(records);
   const notes = projects.flatMap((p) => p.notes.map((x) => (projects.length > 1 ? `${p.name}: ${x}` : x)));
   const oldest = oldestDay(projects[0].records);
   const since = range.key === 'all' && oldest ? `from ${oldest}, the oldest day counted on this PC` : range.since;
   if (a.json) {
-    console.log(JSON.stringify({ range: range.key, title: range.title, since, by, rows, total: total || null, notes, ...(a['all-projects'] ? { projects: projects.map((p) => ({ name: p.name, root: p.root, found: p.found, total: sumUsage(p.records.map((r) => ({ ...r, all: 'all' })), { by: 'all' })[0] || null })) } : {}) }, null, 2));
+    console.log(JSON.stringify({ range: range.key, title: range.title, since, by, rows, total: total || null, notes, ...(a['all-projects'] ? { projects: projects.map((p) => ({ name: p.name, root: p.root, found: p.found, total: totalOf(p.records) })) } : {}) }, null, 2));
     return;
   }
   const out = [`Usage: ${range.title}, ${since} (runs that ended in it; what runs now counts when it ends)${a['all-projects'] ? `, ${projects.length} project(s)` : ''}`];
@@ -1405,7 +1397,7 @@ function cmdUsage(argv) {
   if (a['all-projects']) {
     out.push('', 'By project:');
     for (const p of projects) {
-      const [t] = sumUsage(p.records.map((r) => ({ ...r, all: 'all' })), { by: 'all' });
+      const t = totalOf(p.records);
       out.push(`  ${p.name}: ${!p.found ? 'not found' : t ? `${t.runs} run(s), ${t.minutes} minutes, tokens: ${tokensWords(t)}` : 'nothing in this range'}`);
     }
   }
@@ -5764,24 +5756,70 @@ const USAGE_ROLES = [
   { key: 'orchestrator', title: 'Orchestrator window', unit: 'session', kind: 'interactive' },
   { key: 'worker', title: 'Workers', unit: 'attempt', kind: 'headless' },
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
-  { key: 'assistant', title: 'Assistant (Ask)', unit: 'question', kind: 'headless' },
+  { key: 'assistant', title: 'Advisor', unit: 'question', kind: 'headless' },
 ];
-// Today's numbers, with what runs now counted so far (its minutes; an open window as a session).
+// The usage ledger as the dashboard reads it: each month file's lines, read again only when that file changed (its
+// size or time), so the live feed's every look costs a stat per month and a run's end re-reads one month
+// (docs/design/token-usage.md)
+const ledgerCache = new Map(); // month file -> { sig, records, notes }
+function ledgerRecords(stateDir) {
+  const dir = ledgerDir(stateDir);
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}\.jsonl$/.test(f)).sort();
+  } catch {
+    // no ledger yet
+  }
+  const records = [];
+  const notes = [];
+  for (const f of names) {
+    const file = path.join(dir, f);
+    let sig;
+    try {
+      const st = fs.statSync(file);
+      sig = `${st.size}:${st.mtimeMs}`;
+    } catch {
+      continue;
+    }
+    let kept = ledgerCache.get(file);
+    if (!kept || kept.sig !== sig) {
+      // (a line lives in the file of its own month, so one month's range reads only that file)
+      const [y, m] = f.slice(0, 7).split('-').map(Number);
+      kept = { sig, ...readLedger(stateDir, { from: new Date(y, m - 1, 1).getTime(), to: new Date(y, m, 1).getTime() }) };
+      ledgerCache.set(file, kept);
+    }
+    for (const r of kept.records) records.push(r); // (never a spread: a big month would pass too many arguments)
+    for (const x of kept.notes) notes.push(x);
+  }
+  return { records, notes };
+}
+// A ledger line's runs and whether its engine reported tokens, as sumUsage counts them
+const lineRunsOf = (r) => r.runs ?? (r.kind === 'day' ? 0 : 1);
+const lineReported = (r) => (!r.tokens ? 0 : r.kind === 'day' ? r.reported ?? lineRunsOf(r) : 1);
+// A role nextlevel doesn't list (a newer version's, or one an agent wrote) still gets a row, titled by its key
+const usageRole = (key) => USAGE_ROLES.find((d) => d.key === key) || { key, title: key, unit: 'run', kind: 'headless' };
+
+// Today's numbers from the usage ledger, with what runs now counted so far (its minutes; an open window as a session)
 function usageToday(jobs) {
-  const u = (readJson(usageFile(), {}) || {})[dayOf()] || {};
+  const today = ranges(clockNow()).find((r) => r.key === 'today');
+  const recs = within(ledgerRecords(DIR).records, today);
   const midnight = new Date().setHours(0, 0, 0, 0);
   const since = (iso) => (iso ? Math.max(0, Date.now() - Math.max(Date.parse(iso), midnight)) / 60000 : 0);
   const r1 = (x) => Math.round(x * 10) / 10;
   const rows = new Map(); // "role:engine" -> row
   const row = (role, eng) => {
     const key = `${role}:${eng}`;
-    if (!rows.has(key)) {
-      const saved = u.by?.[key] || {};
-      rows.set(key, { role, engine: eng, runs: saved.runs || 0, running: 0, minutes: saved.minutes || 0, tokens: saved.tokens || 0, cached: saved.cached || 0, reported: saved.reported || 0 });
-    }
+    if (!rows.has(key)) rows.set(key, { role, engine: eng, runs: 0, running: 0, minutes: 0, tokens: 0, cached: 0, reported: 0 });
     return rows.get(key);
   };
-  for (const key of Object.keys(u.by || {})) row(...key.split(':'));
+  for (const x of recs) {
+    const r = row(x.role, x.engine);
+    r.runs += lineRunsOf(x);
+    r.minutes += x.minutes || 0;
+    r.tokens += x.tokens?.total || 0;
+    r.cached += x.tokens?.cached || 0;
+    r.reported += lineReported(x);
+  }
   for (const j of jobs.filter((x) => x.type === 'task' && (x.state === 'running' || x.state === 'verifying') && x.engine)) {
     const r = row('worker', j.engine);
     r.running += 1;
@@ -5805,11 +5843,12 @@ function usageToday(jobs) {
     ...r,
     title: engineTitle(r.engine),
     minutes: r1(r.minutes),
-    // runs that ended (and, for rounds, that started) plus the ones open now; the tokens of those that reported
-    count: r.role === 'autopilot' ? r.runs : r.runs + r.running,
+    // runs that ended plus the ones open now; the tokens of those that reported
+    count: r.runs + r.running,
     tokensFrom: from(r.engine, kind),
   });
-  const roles = USAGE_ROLES.map((def) => {
+  const keys = [...USAGE_ROLES.map((d) => d.key), ...new Set([...rows.values()].map((r) => r.role).filter((k) => !USAGE_ROLES.some((d) => d.key === k)))];
+  const roles = keys.map(usageRole).map((def) => {
     const list = [...rows.values()].filter((r) => r.role === def.key).map((r) => shape(r, def.kind)).sort((a, b) => b.minutes - a.minutes);
     const total = list.reduce((t, r) => ({ count: t.count + r.count, minutes: t.minutes + r.minutes, tokens: t.tokens + r.tokens, reported: t.reported + r.reported, running: t.running + r.running }), { count: 0, minutes: 0, tokens: 0, reported: 0, running: 0 });
     return { ...def, ...total, minutes: r1(total.minutes), engines: list, tokensKnown: list.some((r) => r.tokensFrom) };
@@ -5828,36 +5867,108 @@ function usageToday(jobs) {
       notReported: ADAPTER_USAGE(eng).why || '',
     };
   }).sort((a, b) => b.minutes - a.minutes);
+  const ofRole = (role) => recs.filter((x) => x.role === role);
+  const sum = (list, f) => list.reduce((t, x) => t + f(x), 0);
   const running = jobs.filter((j) => j.type === 'task' && (j.state === 'running' || j.state === 'verifying')).reduce((m, j) => m + since(j.startedAt), 0);
   const round = o?.mode === 'autopilot' && alive(o.pid) ? since(o.startedAt) : 0;
   return {
     day: dayOf(),
     roles,
     engines,
-    // the day's autopilot rounds by what started them (FR-019), with their minutes and tokens (Codex's apart); rounds an
-    // older nextlevel ran today have no reason: they are one row of their own
-    roundsBy: roundsByReason(u, r1),
-    // the totals Home showed before (and older dashboards read)
-    rounds: u.rounds || 0,
-    roundMinutes: r1((u.roundMinutes || 0) + round),
-    attempts: u.attempts || 0,
-    workerMinutes: r1((u.workerMinutes || 0) + running),
-    codexTokens: u.codexTokens || 0,
+    // the day's autopilot rounds by what started them (FR-019), with their minutes and tokens
+    roundsBy: roundsByReason(ofRole('autopilot')),
+    // the totals Home showed before
+    rounds: sum(ofRole('autopilot'), lineRunsOf),
+    roundMinutes: r1(sum(ofRole('autopilot'), (x) => x.minutes || 0) + round),
+    attempts: sum(ofRole('worker'), lineRunsOf),
+    workerMinutes: r1(sum(ofRole('worker'), (x) => x.minutes || 0) + running),
+    codexTokens: sum(recs.filter((x) => x.engine === 'codex'), (x) => x.tokens?.total || 0),
     codexUsed: profilesInUse(CFG.config).some((p) => p.engine === 'codex') || jobs.some((j) => j.engine === 'codex'),
   };
 }
-function roundsByReason(u, r1) {
-  const by = u.roundsBy || {};
-  const list = REASON_ORDER.filter((k) => by[k]?.runs).map((k) => ({ key: k, title: REASONS[k].title, count: by[k].runs || 0, minutes: r1(by[k].minutes || 0), tokens: by[k].tokens || 0, codexTokens: by[k].codexTokens || 0, reported: by[k].reported || 0 }));
-  const sum = (f) => list.reduce((t, r) => t + (r[f] || 0), 0);
-  const all = Object.entries(u.by || {}).filter(([k]) => k.startsWith('autopilot:'));
-  const total = (f) => all.reduce((t, [, r]) => t + (r[f] || 0), 0);
-  const earlier = (u.rounds || 0) - sum('count');
-  if (earlier > 0) {
-    const codex = u.by?.['autopilot:codex'] || {};
-    list.push({ key: 'earlier', title: 'Before this version: a round whenever no worker ran', count: earlier, minutes: r1(Math.max(0, (u.roundMinutes || 0) - sum('minutes'))), tokens: Math.max(0, total('tokens') - sum('tokens')), codexTokens: Math.max(0, (codex.tokens || 0) - sum('codexTokens')), reported: Math.max(0, total('reported') - sum('reported')) });
+// Autopilot rounds by what started them (FR-019), from the ledger's lines of a range; a round with no reason was counted
+// before the ledger (a day's line from usage.json) or by an older version
+function roundsByReason(recs) {
+  const r1 = (x) => Math.round(x * 10) / 10;
+  const groups = new Map();
+  for (const x of recs) {
+    const key = REASON_ORDER.includes(x.reason) ? x.reason : 'earlier';
+    const g = groups.get(key) || { key, title: key === 'earlier' ? 'Counted before this version, or with no reason recorded' : REASONS[key].title, count: 0, minutes: 0, tokens: 0, codexTokens: 0, reported: 0 };
+    g.count += lineRunsOf(x);
+    g.minutes += x.minutes || 0;
+    g.tokens += x.tokens?.total || 0;
+    if (x.engine === 'codex') g.codexTokens += x.tokens?.total || 0;
+    g.reported += lineReported(x);
+    groups.set(key, g);
   }
-  return list;
+  return [...REASON_ORDER, 'earlier'].filter((k) => groups.get(k)?.count).map((k) => ({ ...groups.get(k), minutes: r1(groups.get(k).minutes) }));
+}
+
+// The projects a usage view sums: this one, and with all, the others this PC's owner commands recorded (state.json),
+// each read where it is; one whose folder is gone is "not found"
+function usageProjects(range, all) {
+  const roots = [ROOT];
+  if (all) {
+    const known = (userState().get('projects') || []).filter((r) => typeof r === 'string');
+    for (const r of known) if (!roots.some((x) => samePath(x, r))) roots.push(r);
+  }
+  return roots.map((root, i) => {
+    const stateDir = i === 0 ? DIR : path.join(root, '.nextlevel');
+    if (i > 0 && !fs.existsSync(stateDir)) return { root, name: path.basename(root), found: false, records: [], notes: [] };
+    const got = ledgerRecords(stateDir);
+    return { root, name: path.basename(root), found: true, records: within(got.records, range), notes: got.notes };
+  });
+}
+const totalOf = (records) => sumUsage(records.map((r) => ({ ...r, all: 'all' })), { by: 'all' })[0] || null;
+// What a group's key reads as on the page
+function usageKeyTitle(by, key) {
+  if (key === '' || key === undefined) return by === 'model' ? 'model not recorded' : by === 'worker' ? 'not a worker' : by === 'task' ? 'not a task' : 'not recorded';
+  if (by === 'engine') return engineTitle(key);
+  if (by === 'role') return usageRole(key).title;
+  if (by === 'reason') return REASONS[key]?.title || key;
+  if (by === 'worker') return { workers: 'Workers', second: 'Second worker', fallback: 'Fallback', asked: 'Asked for (--engine, --profile)' }[key] || key;
+  return String(key);
+}
+// The dashboard's Usage card for a range, grouped by one field (GET /api/usage): its rows, the total, the days for the
+// chart (per engine), the rounds by what started them, and with all, a row per project. The owner's (the page's key).
+function usageView({ range = 'today', by = 'role', all = false } = {}) {
+  const now = clockNow();
+  const rg = ranges(now).find((r) => r.key === range) || ranges(now)[1];
+  const projects = usageProjects(rg, all);
+  const records = projects.flatMap((p) => p.records);
+  const rows = sumUsage(records, { by }).map((g) => ({ ...g, title: usageKeyTitle(by, g.key) }));
+  const oldest = oldestDay(projects.flatMap((p) => p.records).sort((a, b) => (a.kind === 'day' ? a.day : a.at).localeCompare(b.kind === 'day' ? b.day : b.at)));
+  const days = rg.key === 'hour' || rg.key === 'today' ? [] : perDay(records, { from: Number.isFinite(rg.from) ? rg.from : -Infinity, now });
+  const jobs = allJobs();
+  const running = jobs.filter((j) => j.type === 'task' && (j.state === 'running' || j.state === 'verifying')).length + (hubAlive() && alive(readJson(path.join(DIR, 'orchestrator.json'))?.pid) ? 1 : 0);
+  return {
+    ok: true,
+    range: rg.key,
+    title: rg.title,
+    since: rg.key === 'all' && oldest ? `from ${oldest}, the oldest day counted` : rg.since,
+    by,
+    rows,
+    total: totalOf(records),
+    days: days.map((d) => ({ day: d.day, runs: d.runs, tokens: d.tokens, engines: Object.entries(d.engines).map(([engine, tokens]) => ({ engine, title: engineTitle(engine), tokens })) })),
+    roundsBy: roundsByReason(records.filter((r) => r.role === 'autopilot')),
+    running,
+    projects: all ? projects.map((p) => ({ name: p.name, found: p.found, total: totalOf(p.records) })) : null,
+    notes: projects.flatMap((p) => p.notes.map((x) => (projects.length > 1 ? `${p.name}: ${x}` : x))),
+  };
+}
+// Each task's tokens and attempts from the ledger, for the Build page
+function taskUsage() {
+  const out = new Map();
+  for (const r of ledgerRecords(DIR).records) {
+    if (r.role !== 'worker' || r.kind === 'day' || !r.task) continue;
+    const t = out.get(r.task) || { attempts: 0, tokens: 0, reported: 0, minutes: 0 };
+    t.attempts += lineRunsOf(r);
+    t.tokens += r.tokens?.total || 0;
+    t.reported += lineReported(r);
+    t.minutes += r.minutes || 0;
+    out.set(r.task, t);
+  }
+  return out;
 }
 
 // An engine's adapter, or null for a name nextlevel doesn't know (a job record from elsewhere)
@@ -7131,6 +7242,16 @@ function toolDetails() {
   toolInfo = { at: Date.now(), value };
   return value;
 }
+// Whether an engine's CLI is installed (the advisor's automatic choice on the Team page), kept a minute: the dashboard
+// builds its state every 1.5 s, and looking for a CLI that isn't there starts `where` (or sh) each time
+const installedSeen = new Map();
+function installedEngine(name) {
+  const seen = installedSeen.get(name);
+  if (seen && Date.now() - seen.at < 60_000) return seen.ok;
+  const ok = !!resolveBin(engine(name).command);
+  installedSeen.set(name, { at: Date.now(), ok });
+  return ok;
+}
 function dashboardState() {
   refreshConfig();
   const jobs = allJobs();
@@ -7141,6 +7262,7 @@ function dashboardState() {
   const lines = (out) => out.split(/\r?\n/).filter(Boolean);
   const home = os.homedir();
   const closed = closures();
+  const used = taskUsage(); // each task's tokens and attempts, from the usage ledger
   const pick = (j) => {
     const task = j.type === 'task';
     // A queued task on the worker role takes the role as it is when it starts
@@ -7173,6 +7295,8 @@ function dashboardState() {
       held: task && j.held ? { id: j.held.id, card: j.held.card || '', files: j.held.files || [], text: j.held.text || '' } : null,
       // a task closed with nextlevel close (FR-021): the Build page says so, with its reason
       closed: task && closed.has(j.id) && !ACTIVE.has(j.state) ? closedView(j.id, closed.get(j.id)) : null,
+      // what its ended attempts used (the usage ledger): tokens where its engines reported them
+      usage: task && used.has(j.id) ? used.get(j.id) : null,
     };
   };
   const active = jobs.filter((j) => j.state === 'running' || j.state === 'verifying').map((j) => {
@@ -7217,7 +7341,7 @@ function dashboardState() {
       ? { mode: orch.mode, since: orch.startedAt, engine: engineTitle(orch.engine || CFG.orchestrator.engine), model: orch.model || '', effort: orch.effort || '', log: orch.log ? tailLines(path.join(ROOT, orch.log), 20, { engineName: orch.engine }) : [] }
       : null,
     // who fills each role, with the model and effort in use (the Team page), and the engines the guide is offered on
-    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }) }),
+    team: teamView(CFG.config, { home, access: accessFacts(checkContext(), { version: () => agyVersionNow() }), available: installedEngine }),
     workerWindow: windowView(CFG.config), // how a worker's process shows (workers.window, FR-010)
     codexWorkers: { ...codexWorkersView(CFG.config), windows: IS_WIN }, // Codex workers' sandbox (engines.codex.workerArgs)
     githubChecks: githubChecksView(), // the project's GitHub checks on this PC (the self-hosted runner's part A)
@@ -7539,6 +7663,7 @@ function dashboardApi() {
     project: projectView,
     job: dashboardJob,
     activity: dashboardActivity,
+    usage: usageView, // Home's Usage card for a range, by a field, this project or all (the owner's: the page's key)
     startHub,
     stopHub,
     setAutopilot,
@@ -7550,6 +7675,8 @@ function dashboardApi() {
     checkLockAgain, // Check again on the card of the orchestrator held by its lock test: the hub runs it again
     blockAlertSeen, // Seen, on the card of a round on Antigravity that ran commands clearing the push block
     slotEscapeSeen, // Seen, on the card of a worker that did something outside its slot
+    askEstimate, // the Advisor panel's estimate of what a question sends
+    advisorMemory, // the Advisor panel's Memory: list, and the owner's add, edit and remove
     askTripwireSeen: (say = (m) => console.log(m)) => {
       setSetting('askTripwire', null);
       say('Marked as seen.');
@@ -7741,6 +7868,13 @@ function askContext() {
     secrets: () => activitySecrets(),
     env: () => readEnv({ ...workerEnv(childEnv()), NEXTLEVEL_READ_ONLY: '1' }),
     addUsage: (engineName, u) => addUsage('assistant', engineName, u),
+    // the advisor's wider briefing (docs/design/advisor.md section 3): what the hub reads itself
+    plan: () => advisorPlan(),
+    decisions: () => readText(path.join(ROOT, CFG.config.paths.decisions || 'docs/DECISIONS.md')),
+    rounds: () => advisorRounds(),
+    hubLog: () => tailBytes(path.join(LOGS, 'hub.log'), 3000),
+    verifies: () => advisorVerifies(allJobs()),
+    usage: () => advisorUsage(allJobs()),
     // the assistant on Antigravity (src/ask.mjs askAgy): its lock test, the protected files the tripwire looks at, agy's
     // version, a console with no window for agy, and what the tripwire found (a Home card)
     lockProblem: (role, profile) => lockProblem(role, profile),
@@ -7753,6 +7887,90 @@ function askContext() {
       setSetting('askTripwire', { at: now(), changes: changes.slice(0, 10) });
     },
   };
+}
+
+// ---------- what the advisor reads (docs/design/advisor.md section 3) ----------
+// The end of a file, cut by bytes, so one very long line can't take what is read of it
+function tailBytes(file, n) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const start = Math.max(0, size - n * 2);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString('utf8').replace(ANSI_RE, '');
+    return (start ? text.slice(text.indexOf('\n') + 1) : text).slice(-n);
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+// The current milestone (the Project page's) and its plan file
+function advisorPlan() {
+  const m = projectView().roadmap.find((x) => x.current);
+  if (!m) return '';
+  const tasks = m.tasks.map((t) => `- ${t.id}: ${t.state}${t.attempts > 1 ? ` (attempt ${t.attempts})` : ''}`).join('\n');
+  const text = m.plan?.file ? readText(path.join(ROOT, m.plan.file)) : '(no plan found for it)';
+  return { milestone: `${m.key} ${m.name} (${m.state}; ${m.counts.merged} of ${m.counts.total} task(s) merged)`, file: m.plan?.file || '', text: `${text.trim()}${tasks ? `\n\nIts tasks (the hub's):\n${tasks}` : ''}` };
+}
+// The hub's reading of rounds.json, through its shape check: never a file the hub wouldn't read
+function advisorRounds() {
+  if (!fs.existsSync(ROUNDSFILE)) return 'No autopilot round yet.';
+  const saved = readJson(ROUNDSFILE);
+  if (saved === null || roundsProblem(saved && typeof saved === 'object' && !Array.isArray(saved) ? { ...freshState(), ...saved } : saved)) return 'rounds: not readable';
+  const s = { ...freshState(), ...saved };
+  const last = s.last ? `The last round: started ${s.last.startedAt}${s.last.endedAt ? `, ended ${s.last.endedAt}` : ''}${s.last.type ? `, started by ${s.last.type}` : ''}${s.last.what ? ` (${s.last.what})` : ''}${s.last.how ? `, ${s.last.how}` : ''}${s.last.real ? ', with something real after it' : ''}.` : 'No round has ended yet.';
+  return [
+    `Autopilot is ${getSettings().autopilot ? 'on' : 'off'}.`,
+    s.round ? `A round runs, since ${s.round.startedAt} (${(s.round.reasons || []).join(', ')}).` : '',
+    last,
+    `Rounds in the last hour: ${s.starts.length}. Since the last real event (${s.real.at || 'none'}: ${s.real.what || '-'}): ${s.sinceReal} round(s); in a row with nothing real: ${s.streak}.`,
+    s.pending.length ? `Waiting to start a round: ${s.pending.map((x) => x.what || x.type).join('; ')}.` : 'Nothing waits to start a round.',
+    s.fuse ? `Autopilot turned itself off on ${s.fuse.at}: ${s.fuse.text}` : '',
+  ].filter(Boolean).join('\n');
+}
+// The hub's own verify of the last task jobs: its state from the job's status, and a failing verify's first lines that
+// say so (never a worker's claim)
+function advisorVerifies(jobs) {
+  const done = jobs.filter((j) => j.type === 'task' && j.verify).sort((a, b) => String(a.finishedAt || a.updatedAt || '').localeCompare(String(b.finishedAt || b.updatedAt || ''))).slice(-10);
+  return done
+    .map((j) => {
+      const failing = j.verify === 'pass' ? [] : readText(path.join(jobDir(j.id), 'verify.log')).split(/\r?\n/).filter((l) => /\b(fail|failed|error|not ok)\b|✖/i.test(l)).slice(0, 4).map((l) => `    ${l.slice(0, 300)}`);
+      return [`- ${j.id} (attempt ${j.attempt || 1}): verify ${j.verify}${j.finishedAt ? `, ${j.finishedAt}` : ''}`, ...failing].join('\n');
+    })
+    .join('\n');
+}
+// Today's usage, a line per role
+function advisorUsage(jobs) {
+  const u = usageToday(jobs);
+  return u.roles.filter((r) => r.count).map((r) => `- ${r.title}: ${r.count} ${r.unit}(s), ${r.minutes} min${r.tokens ? `, ${r.tokens.toLocaleString('en-US')} tokens` : ''} (${r.engines.map((e) => e.title).join(', ')})`).join('\n') || 'Nothing ran today yet.';
+}
+// The composer's estimate (dashboardApi): the briefing's size for a mode and a card, kept until the project's stamp, the
+// mode or the card changes
+let estimateCache = null;
+function askEstimate({ mode = 'advise', card = '' } = {}) {
+  const m = ['advise', 'quick', 'explain'].includes(mode) ? mode : 'advise';
+  const stamp = `${projectStamp(allJobs())}|${m}|${card || ''}`;
+  if (estimateCache?.stamp === stamp) return estimateCache.value;
+  const ctx = askContext();
+  const value = briefingSize(ctx, { mode: card ? 'explain' : m, card: card ? cardFor(ctx, card) : null });
+  estimateCache = { stamp, value };
+  return value;
+}
+// The advisor's memory on the dashboard: the owner's own click, behind its session key. A change is no "owner acting"
+// for autopilot: it gives the team nothing to do.
+function advisorMemory(b = {}) {
+  const store = memoryStore(advisorDir(ROOT));
+  if (!b.action || b.action === 'list') {
+    const { items, problem } = store.read();
+    return { items, problem };
+  }
+  if (b.action === 'add') return { item: store.add({ text: b.text, kind: b.kind || undefined, from: b.from }), message: 'Remembered.' };
+  if (b.action === 'edit') return { item: store.edit(b.id, { text: b.text, kind: b.kind || undefined }), message: 'Changed.' };
+  if (b.action === 'remove') return { removed: store.remove(b.id).id, message: 'Forgotten.' };
+  throw new Error('action must be list, add, edit or remove');
 }
 
 // Run one hub command (or the menu, with no command) on the project at `root`.

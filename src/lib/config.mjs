@@ -384,8 +384,9 @@ export function secondProfile(cfg) {
 
 // The profile that fills a role; with { fallback: true } the one it falls back to (null without one), with
 // { second: true } the second worker (the worker role's only). The setup guide without an engine of its own is on the
-// orchestrator's.
-export function roleProfile(cfg, role, { fallback = false, second = false } = {}) {
+// orchestrator's. The assistant (the advisor) with no engine of its own: the automatic choice for Advise (`available`:
+// which engines it may pick, advisorAuto), or with { quick: true } today's light model (assistantAuto).
+export function roleProfile(cfg, role, { fallback = false, second = false, quick = false, available } = {}) {
   const r = cfg.roles[role];
   if (!r) return null;
   if (second) return role === 'worker' ? secondProfile(cfg) : null;
@@ -395,7 +396,7 @@ export function roleProfile(cfg, role, { fallback = false, second = false } = {}
   }
   if (r.profile) return findProfile(cfg, r.profile);
   if (role === 'guide' && !r.engine) return roleProfile(cfg, 'orchestrator');
-  if (role === 'assistant' && !r.engine) return assistantAuto(cfg);
+  if (role === 'assistant' && !r.engine) return quick ? assistantAuto(cfg) : advisorAuto(cfg, { available });
   return { name: '', engine: r.engine, account: '', model: r.model || '', effort: r.effort || '' };
 }
 
@@ -406,6 +407,20 @@ export function assistantAuto(cfg) {
   const used = new Set(profilesInUse(cfg).map((p) => p.engine));
   const engine = ASSISTANT_ENGINES.find((e) => used.has(e)) || 'codex';
   return { name: '', engine, account: '', model: LIGHT_MODELS[engine].model, effort: LIGHT_MODELS[engine].effort, auto: true };
+}
+
+// The advisor's automatic choice (docs/design/advisor.md): the first engine that can be run read-only (Claude Code, then
+// Codex) which isn't the orchestrator's and is `available`, on its own default model and effort, so it can disagree with
+// the orchestrator; else the orchestrator's engine ("not independent"). Never Antigravity: the advisor there is only ever
+// pinned. Pure: `available` defaults to the engines a role already uses; the advisor's run, the Team page and the doctor
+// pass "its CLI is installed". `independent`: whether it is on another engine than the orchestrator.
+export function advisorAuto(cfg, { available } = {}) {
+  const used = new Set(profilesInUse(cfg).map((p) => p.engine));
+  const can = typeof available === 'function' ? available : (e) => used.has(e);
+  const orchestrator = roleProfile(cfg, 'orchestrator')?.engine || '';
+  const other = ASSISTANT_ENGINES.find((e) => e !== orchestrator && can(e));
+  const engine = other || (ASSISTANT_ENGINES.includes(orchestrator) && can(orchestrator) ? orchestrator : ASSISTANT_ENGINES.find(can) || 'codex');
+  return { name: '', engine, account: '', model: '', effort: '', auto: true, independent: engine !== orchestrator };
 }
 
 // Where a profile's model and effort are set in nextlevel.json ('' when nowhere: the engine's own choice).
