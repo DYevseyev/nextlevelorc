@@ -68,6 +68,8 @@ export const OLD_TEMPLATES = {
     '3aa6e303e12a4afb01f923d38832b3f30bb6a4f9d79e61a81cb438b044bdff99', // FR-012 (commands tried to learn what they do)
     '374366b1fdab5b5ccfb22f8596ba9a93223d1ecd8fedea2d2c099857e925f97e', // before the security engineer (AGENTS.override.md and SECURITY.md not protected)
   ],
+  // The security engineer's role doc (docs/design/security-engineer.md): new with the role, none older yet
+  'docs/agents/SECURITY-ENGINEER.md': [],
   'docs/agents/GUIDE.md': [
     '76afcf14de37fff5be0cd96c6014dee1438e2d41218b3ef228238bd0ada893e1', // M1
     '9f7572386463ff7107a71b495575a7f8046d207fd5be1408352cfc8333615ded', // FR-003
