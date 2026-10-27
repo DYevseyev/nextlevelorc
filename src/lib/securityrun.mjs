@@ -3,6 +3,7 @@
 // file names, the Daybreak check's model list, and the copy-out. Each takes `docker(args, { timeoutMs })` -> { ok, code,
 // missing, timedOut, out } (lib/proc.mjs runQuiet's shape), so the checks' fake PC and the scan's process drive them alike.
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { COPY_LIMITS, MANIFEST, copyList, readManifest, sha256, unsafeName } from './findings.mjs';
 import { DIGEST, IMAGE, imageRef } from './securityimage.mjs';
@@ -21,6 +22,36 @@ export function dockerFacts(docker, { settingsText = '' } = {}) {
   if (/"?ExposeDockerAPIOnTCP2375"?\s*:\s*true/i.test(settingsText)) return { ok: false, tcp: true, why: "Docker's API is open on TCP port 2375 (Docker Desktop: Settings, General, \"Expose daemon on tcp://localhost:2375 without TLS\"): any program on this PC, a scanned project's included, could drive Docker" };
   return { ok: true, detail: `engine ${version.replace(/"/g, '')}, Linux containers`, apparmor: /name=apparmor/.test(opts) };
 }
+
+// Docker Desktop's settings, for one key (ExposeDockerAPIOnTCP2375; never shown): Windows only, '' elsewhere
+export function dockerSettingsText({ platform = process.platform, env = process.env, read, join = path.join } = {}) {
+  if (platform !== 'win32' || !env.APPDATA) return '';
+  const readText = read || ((f) => {
+    try {
+      return fs.readFileSync(f, 'utf8');
+    } catch {
+      return null;
+    }
+  });
+  return readText(join(env.APPDATA, 'Docker', 'settings-store.json')) || readText(join(env.APPDATA, 'Docker', 'settings.json')) || '';
+}
+
+// Whether Docker's API answers on TCP on this PC (2375 without TLS, 2376 with): the first open port, or 0. Under the
+// tests' stubs no port is tried: NEXTLEVEL_TEST_DOCKER_API names the ones that play open
+export function apiPortOpen({ connect = net.connect, ports = [2375, 2376], env = process.env } = {}) {
+  if (env.NEXTLEVEL_TEST_STUBS) return Promise.resolve(ports.find((p) => String(env.NEXTLEVEL_TEST_DOCKER_API || '').split(',').includes(String(p))) || 0);
+  return Promise.all(ports.map((port) => new Promise((resolve) => {
+    const s = connect({ host: '127.0.0.1', port });
+    const done = (open) => {
+      s.destroy();
+      resolve(open ? port : 0);
+    };
+    s.setTimeout(1500, () => done(false));
+    s.once('connect', () => done(true));
+    s.once('error', () => done(false));
+  }))).then((r) => r.find(Boolean) || 0);
+}
+export const apiPortWords = (port) => `Docker's API answers on 127.0.0.1:${port}: any program on this PC, a scanned project's included, could drive Docker`;
 
 // Whether the pinned image is on this PC (pulled by its digest)
 export function imagePresent(docker) {
@@ -72,7 +103,7 @@ export function runProbes(docker, { seccomp, account, stateVolume }) {
   docker(['volume', 'rm', probe], { timeoutMs: 20_000 });
   const problem = r.ok ? probeProblem(r.out) : `the probe didn't run (${firstLine(r.out) || `exit ${r.code}`})`;
   // (kept for the image only when the probe answered: a volume or Docker problem is asked again next time)
-  return { ok: !problem, kept: r.ok, problem, answer: r.out.split(/\s+/).filter((w) => /^(login|authfile|net)-/.test(w)) };
+  return { ok: !problem, kept: r.ok, problem, answer: r.out.split(/\s+/).filter((w) => /^(login|authfile|net|ip)-/.test(w)) };
 }
 
 // Whether the sign-in volume holds a sign-in: by its files' names only (never read)
@@ -107,7 +138,14 @@ export const daybreakFor = (m) => (!m ? 'refused' : m.programs === null ? 'uncon
 // The copy-out (V3): the output volume through a container that never starts, the manifest first, then each listed file
 // and the few the scan writes beside them, one `docker cp` each, every one checked (a regular file, no link, within the
 // caps; the listed ones' hashes against the manifest). -> { files: { rel: sha256 }, manifest } or { problem }
-export function copyOut(docker, id, vols, dest, { seccomp, lstat = fs.lstatSync, read = fs.readFileSync }) {
+export function copyOut(docker, id, vols, dest, opts) {
+  const r = copyFiles(docker, id, vols, dest, opts);
+  // (a refused copy leaves nothing on the PC: rmSync removes a link, never its target; the output volume is the evidence
+  // until the scan ends)
+  if (r.problem) fs.rmSync(dest, { recursive: true, force: true });
+  return r;
+}
+function copyFiles(docker, id, vols, dest, { seccomp, lstat = fs.lstatSync, read = fs.readFileSync }) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
   docker(['rm', '-f', copyName(id)], { timeoutMs: 30_000 });

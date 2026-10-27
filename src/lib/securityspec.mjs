@@ -28,14 +28,16 @@ export const PROBE_CONFIG = [
   '-c', `default_permissions="${PROBE_PROFILE}"`,
   '-c', `permissions.${PROBE_PROFILE}.filesystem={":root"="read",":workspace_roots"="write","${LOGIN_AT}"={"."="deny"}}`,
 ];
-// What the probe runs inside Codex's sandbox: four words, each the answer the scan needs (V5)
+// What the probe runs inside Codex's sandbox: five words, each the answer the scan needs (V5)
 export const PROBE_SCRIPT = [
   `test -r ${LOGIN_AT} && echo login-readable || echo login-denied`,
   `ls ${LOGIN_AT} >/dev/null 2>&1 && echo login-listable || echo login-not-listable`,
   `test -r ${LOGIN_AT}/auth.json && echo authfile-readable || echo authfile-denied`,
   'getent hosts example.com >/dev/null && echo net-open || echo net-closed',
+  // (a name that doesn't resolve says nothing of an address: a connect to one, with the image's own node)
+  `node -e "const s=require('net').connect({host:'1.1.1.1',port:443});const e=(w)=>{console.log(w);process.exit(0)};s.setTimeout(3000,()=>e('ip-closed'));s.on('connect',()=>e('ip-open'));s.on('error',()=>e('ip-closed'))"`,
 ].join('; ');
-export const PROBE_EXPECTED = ['login-denied', 'login-not-listable', 'authfile-denied', 'net-closed'];
+export const PROBE_EXPECTED = ['login-denied', 'login-not-listable', 'authfile-denied', 'net-closed', 'ip-closed'];
 
 const hash = (s) => createHash('sha256').update(s).digest('hex');
 
@@ -95,8 +97,7 @@ export function scanCommand({ model, effort, deep = false, daybreak = false, max
   return [
     'scan', REPO_AT,
     '--output-dir', OUT_AT,
-    // (the scanner's own flag, inside the container: no console, nothing to do with conhost's, FR-013)
-    "--headless",
+    '--headless', // (the scanner's own flag, inside its Linux container: no Windows console host, FR-013)
     '--auth', 'chatgpt',
     '--mode', deep ? 'deep' : 'standard',
     ...(model ? ['--model', model] : []),
@@ -161,9 +162,9 @@ export function probeArgs(probeVolume, { seccomp, stateVolume }) {
     '--entrypoint', 'node', imageRef(), CODEX_JS, 'sandbox', ...PROBE_CONFIG, 'sh', '-c', PROBE_SCRIPT,
   ];
 }
-// The probe's verdict from its output: '' when the four answers are exactly the ones the scan needs
+// The probe's verdict from its output: '' when the five answers are exactly the ones the scan needs
 export function probeProblem(out) {
-  const words = String(out || '').split(/\s+/).filter((w) => /^(login|authfile|net)-/.test(w));
+  const words = String(out || '').split(/\s+/).filter((w) => /^(login|authfile|net|ip)-/.test(w));
   if (words.join(' ') === PROBE_EXPECTED.join(' ')) return '';
   return `Codex's sandbox in the scanner answered ${words.length ? words.join(', ') : 'nothing'} (expected ${PROBE_EXPECTED.join(', ')})`;
 }

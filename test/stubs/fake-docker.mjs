@@ -11,10 +11,11 @@
 //   STUB_DOCKER_PERMS=777        the helper's chmod doesn't take (stat says 777)
 //   STUB_DOCKER_CHOWN=eperm      the vendored seccomp profile refuses the helper's chown (Docker's default takes it)
 //   STUB_DOCKER_NESTED=fail      Codex's sandbox can't start in the container
-//   STUB_DOCKER_PROBE=<words>    what the probe prints (default: the four words the scan needs)
+//   STUB_DOCKER_PROBE=<words>    what the probe prints (default: the five words the scan needs)
 //   STUB_DOCKER_MODELS=<json>    `codex debug models` (default: two models, one with Daybreak Blue)
 //   STUB_DOCKER_DRYRUN=refuse    the scanner's dry run refuses its settings
-//   STUB_SCAN=ok|broken-seal|link|unlisted|reproduced-text|malformed|slow|exit2|deep-name
+//   STUB_SCAN=ok|broken-seal|link|unlisted|reproduced-text|malformed|slow|exit2|exit2-sealed|deep-name
+//                                (exit2-sealed: a whole, sealed output, then exit 2: the scanner's integrity failure)
 //   STUB_SCAN_TEXT=<text>        put into the first finding's summary (a planted .env value)
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -203,7 +204,7 @@ if (args[0] === 'run') {
     const [, sub, ...more] = o.rest;
     if (sub === 'sandbox' && more[0] === '/usr/bin/true') process.exit(env.STUB_DOCKER_NESTED === 'fail' ? 1 : 0);
     if (sub === 'sandbox') {
-      out(env.STUB_DOCKER_PROBE || 'login-denied\nlogin-not-listable\nauthfile-denied\nnet-closed');
+      out(env.STUB_DOCKER_PROBE || 'login-denied\nlogin-not-listable\nauthfile-denied\nnet-closed\nip-closed');
       process.exit(0);
     }
     if (sub === 'debug' && more[0] === 'models') {
@@ -355,5 +356,6 @@ async function scan(o) {
   const manifest = { documentType: 'codex-security.scan-manifest', schemaVersion: '1.0', scan: { id: scanId, producer: { name: 'codex-security', version: '0.7.0' }, status: 'completed', startedAt: '2026-10-27T06:02:58Z', completedAt: done, sealedAt: done, target: { kind: 'directory_snapshot', targetId: 't', displayName: 'repository', snapshotDigest: 'd' }, scope: { includePaths: ['.'], excludePaths: ['.git/**'] }, coverageRef: 'coverage.json', findingsRef: 'findings.json', artifacts } };
   fs.writeFileSync(path.join(outDir, 'scan-manifest.json'), JSON.stringify(manifest));
   process.stderr.write('\n  FINDINGS  2 (1 medium, 1 low)\n  TOKENS    160,071 uncached input, 3,265,408 cache reads, 0 cache writes, 19,397 output, 3,444,876 total\n');
+  if (kind === 'exit2-sealed') die('codex-security: Error: target integrity check failed', 2);
   process.exit(0);
 }

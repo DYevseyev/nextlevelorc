@@ -20,6 +20,7 @@
 //   tmpDir             the system's temp folder (the model trial's folder is made there)
 //   fresh              ask everything again (doctor --fresh, the dashboard's Check again), kept answers or not
 //   which(cmd)         -> { file, all } | null
+//   tcpOpen(ports)     -> the first of these ports on 127.0.0.1 that answers, or 0 (lib/securityrun.mjs apiPortOpen)
 //   git(args, { cwd }) -> { ok, out, err }  (cwd defaults to root)
 //   read(file) -> text | null, exists(file), write(file, text), list(dir) -> names, copy(from, to)
 //   cache              get(id) / set(id, value): results worth keeping between runs (.nextlevel/check-cache.json)
@@ -42,6 +43,7 @@ import { readEnv } from '../lib/gitlock.mjs';
 import { recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
+import { apiPortOpen } from '../lib/securityrun.mjs';
 import { parseEnvFile } from '../notify.mjs';
 
 export function makeContext({ root = null, problem = '', config, configInfo, stateDir = null, hubAlive = () => false, cwd = process.cwd() } = {}) {
@@ -83,6 +85,7 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     },
     forget: () => memo.clear(), // after a fix changed something
     which: (cmd) => resolveBin(cmd),
+    tcpOpen: (ports) => apiPortOpen({ ports }),
     // Without git's optional locks: a check's `git status` never holds index.lock while the hub commits (lib/gitlock.mjs)
     git(args, { cwd: dir = root || cwd } = {}) {
       const r = spawnSync('git', args, { cwd: dir, env: readEnv(), encoding: 'utf8', windowsHide: true });

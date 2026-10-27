@@ -89,7 +89,8 @@ function version() {
 export async function main(argv) {
   pinChildren();
   // The security engineer's scan runs no nextlevel command at all, its help included: it reads and reports, and the
-  // hub does everything else (docs/design/security-engineer.md). A bar, not a wall: KNOWN_ISSUES.
+  // hub does everything else (docs/design/security-engineer.md). Its scans run in OpenAI's scanner, where nextlevel
+  // isn't, so nothing starts such a session today: kept as an extra bar, not a wall (KNOWN_ISSUES).
   if (process.env.NEXTLEVEL_AGENT === 'security') {
     console.error(SECURITY_REFUSAL);
     return 1;

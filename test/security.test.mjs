@@ -3,6 +3,7 @@
 //   npm test
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { processStartSync } from '../src/lib/proctree.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -177,7 +178,10 @@ test("the volumes' helper, the copy-out's container and the probe: no network, n
   assert.ok(probe.includes('source=nextlevel-sec-probe-x,target=/output/.codex-security-state/codex-home') && !probe.includes('nextlevel-sec-login-'));
   assert.ok(probe.includes(`permissions.nextlevel_probe.filesystem={":root"="read",":workspace_roots"="write","/output/.codex-security-state/codex-home"={"."="deny"}}`));
   assert.equal(probeProblem(PROBE_EXPECTED.join('\n')), '');
-  assert.match(probeProblem('login-denied login-not-listable authfile-readable net-closed'), /authfile-readable/);
+  assert.match(probeProblem('login-denied login-not-listable authfile-readable net-closed ip-closed'), /authfile-readable/);
+  // (a name that doesn't resolve isn't enough: an address that answers fails it, and so does a missing answer)
+  assert.match(probeProblem('login-denied login-not-listable authfile-denied net-closed ip-open'), /ip-open/);
+  assert.match(probeProblem('login-denied login-not-listable authfile-denied net-closed'), /expected .*ip-closed/);
   assert.match(probeProblem(''), /answered nothing/);
   assert.ok(loginArgs({ state: 'st', login: 'lg' }, { seccomp: '/s' }).join(' ').endsWith('login --device-auth'));
   assert.deepEqual(volumeCreateArgs('lg', { kind: 'login', projectKey: 'k' }), ['volume', 'create', '--label', 'nextlevel.kind=login', 'lg'], "the sign-in's volume names no project");
@@ -312,14 +316,24 @@ test('a scan end to end: asked by the owner, run by the hub in the scanner, its 
 
 test("a scan's output that doesn't hold is never trusted: a broken seal, a link, a malformed file, an unsafe name", () => {
   const p = secProject();
+  const kept = [];
   try {
     for (const [kind, want] of [['broken-seal', /a sealed file changed/], ['link', /isn't a plain file/], ['malformed', /findings file isn't the scanner's/], ['deep-name', /more than two folders deep/]]) {
-      const { scan } = scanOnce(p, { STUB_SCAN: kind });
+      const { id, scan } = scanOnce(p, { STUB_SCAN: kind });
       assert.equal(scan.state, 'failed', `${kind}: ${scan.why}`);
       assert.ok(!scan.trusted, kind);
       assert.match(scan.why, want, kind);
+      // The output volume is kept as the evidence (V3), and a refused copy leaves nothing on the PC
+      assert.equal(scan.keptOutput, `nextlevel-sec-out-${id}`, kind);
+      if (kind !== 'malformed') assert.ok(!fs.existsSync(p.state('security', 'scans', id, 'raw')), `${kind}: what it copied is removed`);
+      kept.push(scan.keptOutput);
     }
-    assert.doesNotMatch(p.hub(['security', 'status']).out, /Findings of/, 'no trusted scan, no findings shown');
+    const status = p.hub(['security', 'status']).out;
+    assert.doesNotMatch(status, /Findings of/, 'no trusted scan, no findings shown');
+    assert.match(status, new RegExp(`its output kept in the Docker volume ${kept[0]}; docker volume rm ${kept[0]} removes it`));
+    // Each hub's start removes the output volumes no scan holds, never a kept one (four hubs have started by now)
+    const vols = fs.readdirSync(path.join(p.env.HOME, '.fake-docker', 'volumes'));
+    for (const v of kept) assert.ok(vols.includes(v), v);
   } finally {
     p.cleanup();
   }
@@ -333,6 +347,8 @@ test("a scan stops before it runs on what it can't trust: the volumes, the probe
       [{ STUB_DOCKER_PERMS: '777' }, /isn't the scanner's alone/],
       [{ STUB_DOCKER_DRYRUN: 'refuse' }, /refused its settings \(web search off, approvals never\)/],
       [{ STUB_DOCKER_OS: 'windows' }, /needs Linux containers/],
+      // (Docker's API on TCP, whatever the setting says: delta 1's stop rule, at the scan's own start too)
+      [{ NEXTLEVEL_TEST_DOCKER_API: '2376' }, /Docker's API answers on 127\.0\.0\.1:2376: any program on this PC, a scanned project's included, could drive Docker: no scan runs/],
     ];
     for (const [env, want] of cases) {
       const { scan } = scanOnce(p, env);
@@ -371,6 +387,12 @@ test("a scan's end: a scanner error says so with its words, a stop is partial, a
     const err = scanOnce(p, { STUB_SCAN: 'exit2' }).scan;
     assert.equal(err.state, 'couldnt');
     assert.match(err.why, /ended with exit 2: .*usage limit reached/);
+    // Exit 2 after a whole, sealed output: the scanner's own integrity failure, never trusted (its findings unshown)
+    const sealed2 = scanOnce(p, { STUB_SCAN: 'exit2-sealed' });
+    assert.equal(sealed2.scan.state, 'couldnt');
+    assert.equal(sealed2.scan.trusted, false);
+    assert.match(sealed2.scan.why, /ended with exit 2: .*target integrity check failed/);
+    assert.equal(JSON.parse(p.hub(['security', 'status', '--json']).out).last, null);
     const planted = scanOnce(p, { STUB_SCAN_TEXT: 'the value is PLANTED-harmless-value-123' });
     assert.equal(planted.scan.state, 'done');
     const text = fs.readFileSync(p.state('security', 'scans', planted.id, 'findings.json'), 'utf8');
@@ -420,7 +442,68 @@ test("who may scan: the owner's commands refuse in an agent's session, status is
     assert.match(ro.out, /refused\. This is a read-only session/);
     // The scan's own session runs no nextlevel at all
     assert.match(p.hub(['security', 'status'], { extraEnv: { NEXTLEVEL_AGENT: 'security' } }).out, /nextlevel doesn't run in the security engineer's scan/);
+    // Nor can an agent start the hub's own scan process with no ask from the owner
+    const runsBefore = seenRuns(p).length;
+    const direct = p.hub(['_scan', Buffer.from(JSON.stringify({ id: 'sec-20261027-080000-abcd' })).toString('base64url')], { extraEnv: { NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_ROOT: p.repo } }); // (as an agent that knows how the hub calls it)
+    assert.equal(direct.code, 1);
+    assert.match(direct.out, /nextlevel _scan is the owner's, so it doesn't run in an agent's session \(this is the orchestrator's window\)/);
+    assert.equal(seenRuns(p).length, runsBefore, 'no docker run');
+    assert.ok(!fs.existsSync(p.state('security', 'scans', 'sec-20261027-080000-abcd')));
+    // The sign-in waits for a scan that runs (one writer of the sign-in volume at a time)
+    const lease = path.join(p.env.HOME, '.nextlevel', 'security-lease.json');
+    fs.mkdirSync(path.dirname(lease), { recursive: true });
+    fs.writeFileSync(lease, JSON.stringify({ root: '/elsewhere/other-project', pid: process.pid, start: processStartSync(process.pid), scan: 'sec-20261027-070000-beef' }));
+    const busy = p.hub(['security', 'login']);
+    assert.equal(busy.code, 1);
+    assert.match(busy.out, /Can't sign in now: a security scan runs \(in other-project\)/);
+    assert.ok(!seenRuns(p).slice(runsBefore).some((r) => r.args.includes('login')), 'no sign-in container');
+    fs.rmSync(lease);
+    assert.equal(p.hub(['security', 'login']).code, 0);
+    assert.ok(!fs.existsSync(lease), 'the sign-in gives the lease back');
   } finally {
     p.cleanup();
   }
+});
+
+test('a security engineer on a named profile: its sign-in is that account\'s, and turning it on says how to make it', () => {
+  const p = makeProject();
+  try {
+    p.setConfig((c) => ({ ...c, profiles: { ...(c.profiles || {}), work: { engine: 'codex', account: 'work', model: '', effort: '' }, gem: { engine: 'agy', account: '', model: '', effort: '' } } }));
+    const team = (args) => JSON.parse(p.hub(['team', 'set', 'security', ...args, '--json']).out);
+    const early = team(['--profile', 'work', '--daybreak', 'on']);
+    assert.equal(early.saved, false, early.message);
+    const r = p.hub(['team', 'set', 'security', '--profile', 'work', '--daybreak', 'on']);
+    assert.match(r.out, /nextlevel security login --profile work/);
+    // Only a Codex profile of nextlevel.json; then its own volume, apart from the unnamed account's
+    assert.match(p.hub(['security', 'login', '--profile', 'nope']).out, /Can't sign in: "nope" isn't a Codex profile in nextlevel\.json/);
+    assert.match(p.hub(['security', 'login', '--profile', 'gem']).out, /isn't a Codex profile/);
+    assert.equal(p.hub(['security', 'login', '--profile', 'work']).code, 0);
+    const vols = fs.readdirSync(path.join(p.env.HOME, '.fake-docker', 'volumes'));
+    assert.ok(vols.includes(`nextlevel-sec-login-${accountKey('work')}`) && !vols.includes(`nextlevel-sec-login-${accountKey('')}`), vols.join(' '));
+    const on = team(['--profile', 'work', '--daybreak', 'on']);
+    assert.equal(on.saved, true, on.message);
+  } finally {
+    p.cleanup();
+  }
+});
+
+test("Docker's API on TCP: the first port that answers on 127.0.0.1, never a real one under the tests' stubs", async () => {
+  const { EventEmitter } = await import('node:events');
+  const { apiPortOpen } = await import('../src/lib/securityrun.mjs');
+  const asked = [];
+  const connect = (open) => ({ host, port }) => {
+    asked.push(`${host}:${port}`);
+    const s = new EventEmitter();
+    s.setTimeout = () => {};
+    s.destroy = () => {};
+    setImmediate(() => (open.includes(port) ? s.emit('connect') : s.emit('error', new Error('ECONNREFUSED'))));
+    return s;
+  };
+  assert.equal(await apiPortOpen({ connect: connect([2376]), env: {} }), 2376);
+  assert.equal(await apiPortOpen({ connect: connect([]), env: {} }), 0);
+  assert.deepEqual([...new Set(asked)].sort(), ['127.0.0.1:2375', '127.0.0.1:2376']);
+  asked.length = 0;
+  assert.equal(await apiPortOpen({ connect: connect([2375]), env: { NEXTLEVEL_TEST_STUBS: '1' } }), 0);
+  assert.equal(await apiPortOpen({ connect: connect([]), env: { NEXTLEVEL_TEST_STUBS: '1', NEXTLEVEL_TEST_DOCKER_API: '2375' } }), 2375);
+  assert.deepEqual(asked, [], 'no port tried under the stubs');
 });

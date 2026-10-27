@@ -2011,7 +2011,7 @@ One entry each: date, decision, why, alternatives.
   never starts, so no host folder is ever writable by the scanner.
 - 2026-10-27 — **The probe's verdict is kept for the image only when the probe answered.** A volume that couldn't be
   owned or a Docker hiccup on the way says nothing about the image, and keeping it would stop every later scan with a
-  stale reason; Codex's sandbox failing to start, or the four answers, are about the image and are kept for its digest
+  stale reason; Codex's sandbox failing to start, or the five answers, are about the image and are kept for its digest
   (a fresh doctor run asks again).
 - 2026-10-27 — **`nextlevel security login` works while the role is off.** Turning the role on runs its checks first,
   the sign-in among them, so a sign-in that needed the role on could never be made. Off, it signs in the account an

@@ -58,7 +58,13 @@ test("the console with no window (FR-013): Windows' CREATE_NO_WINDOW and the con
   // (FR-013): no source file starts conhost.exe, or passes the arguments that started it headless
   const src = path.join(path.dirname(BIN), '..', 'src');
   const code = (text) => text.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
-  const hits = fs.readdirSync(src, { recursive: true }).filter((n) => n.endsWith('.mjs') && /conhost(\.exe)?['"`]|conhostPath|'--headless'/i.test(code(fs.readFileSync(path.join(src, n), 'utf8'))));
+  // (the security scanner's own --headless flag, an argument inside its Linux container, is no conhost's)
+  const HEADLESS_OK = new Set([path.join('lib', 'securityspec.mjs')]);
+  const hits = fs.readdirSync(src, { recursive: true }).filter((n) => {
+    if (!n.endsWith('.mjs')) return false;
+    const c = code(fs.readFileSync(path.join(src, n), 'utf8'));
+    return /conhost(\.exe)?['"`]|conhostPath/i.test(c) || (/['"`]--headless['"`]/i.test(c) && !HEADLESS_OK.has(n));
+  });
   assert.deepEqual(hits, []);
 });
 

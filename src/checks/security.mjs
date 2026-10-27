@@ -6,18 +6,15 @@
 import { securityProfile } from '../lib/config.mjs';
 import { projectKey } from '../lib/guard.mjs';
 import { DIGEST, SECCOMP_FILE, imageRef, imageWords, seccompProblem } from '../lib/securityimage.mjs';
-import { accessPrograms, daybreakFor, dockerFacts, imagePresent, pullArgs, runProbes, signedIn } from '../lib/securityrun.mjs';
+import { accessPrograms, apiPortOpen, apiPortWords, daybreakFor, dockerFacts, dockerSettingsText, imagePresent, pullArgs, runProbes, signedIn } from '../lib/securityrun.mjs';
 import { accountKey, volumes } from '../lib/securityspec.mjs';
 import { fail, inProject, pass, step } from './lib.mjs';
 
 const off = (ctx) => (ctx.root && securityProfile(ctx.config) ? null : 'the security engineer is off');
 const docker = (ctx) => (args, opts) => ctx.run('docker', args, { cwd: ctx.root || ctx.cwd, ...opts });
 // Docker Desktop's settings, read for one key (never shown): Windows only
-function settingsText(ctx) {
-  if (ctx.platform !== 'win32' || !ctx.env.APPDATA) return '';
-  const p = ctx.path;
-  return ctx.read(p.join(ctx.env.APPDATA, 'Docker', 'settings-store.json')) || ctx.read(p.join(ctx.env.APPDATA, 'Docker', 'settings.json')) || '';
-}
+const settingsText = (ctx) => dockerSettingsText({ platform: ctx.platform, env: ctx.env, read: ctx.read, join: ctx.path.join });
+const TCP_STEP = 'Docker Desktop: Settings, General: turn off "Expose daemon on tcp://localhost:2375 without TLS", then Apply';
 const accountOf = (ctx) => accountKey(securityProfile(ctx.config)?.name || '');
 export const securityVolumes = (ctx) => volumes({ projectKey: projectKey(ctx.root), account: accountOf(ctx) });
 
@@ -29,13 +26,16 @@ export const securityDockerCheck = {
   severity: 'error',
   learnMore: 'docs/CHECKS.md#securitydocker',
   skipIf: off,
-  run(ctx) {
+  async run(ctx) {
     const bad = seccompProblem(SECCOMP_FILE);
     if (bad) return fail(bad, { steps: [step('terminal', 'nextlevel update')] });
     const f = dockerFacts(docker(ctx), { settingsText: settingsText(ctx) });
     if (f.missing) return fail(`not installed: the security engineer's scans run in Docker`, { steps: [ctx.platform === 'win32' ? step('terminal', 'winget install -e --id Docker.DockerDesktop') : step('browser', 'https://docs.docker.com/get-docker/')] });
     if (f.stopped) return fail(f.why, { next: 'start Docker Desktop', steps: [step('app', null, { text: 'start Docker Desktop and wait until it says "Engine running"' })] });
-    if (!f.ok) return fail(f.why, { steps: [step('app', null, { text: f.tcp ? 'Docker Desktop: Settings, General: turn off "Expose daemon on tcp://localhost:2375 without TLS", then Apply' : 'Docker Desktop: switch to Linux containers (its tray menu)' })] });
+    if (!f.ok) return fail(f.why, { steps: [step('app', null, { text: f.tcp ? TCP_STEP : 'Docker Desktop: switch to Linux containers (its tray menu)' })] });
+    // (the ports too, whatever the setting says: delta 1's stop rule)
+    const port = await (ctx.tcpOpen ? ctx.tcpOpen([2375, 2376]) : apiPortOpen());
+    if (port) return fail(apiPortWords(port), { steps: [step('app', null, { text: TCP_STEP })] });
     return pass(`${f.detail}${f.apparmor ? '; no AppArmor profile is loaded for the scanner (Docker Desktop has none)' : ''}`);
   },
 };
@@ -70,7 +70,7 @@ export const securityLoginCheck = {
     if (s.ok) return pass('signed in, in its own Docker volume (OpenAI\'s device sign-in; nextlevel never reads it)');
     return fail(`${s.why}: the scanner signs in once with your ChatGPT account, on OpenAI's own page`, {
       next: 'sign in',
-      steps: [inProject(ctx, 'nextlevel security login')],
+      steps: [inProject(ctx, `nextlevel security login${securityProfile(ctx.config)?.name ? ` --profile ${securityProfile(ctx.config).name}` : ''}`)],
     });
   },
 };

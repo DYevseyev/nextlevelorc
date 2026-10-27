@@ -2018,7 +2018,7 @@ test('advisor.independent: the engine the advisor runs on, whether it is the orc
 
 // The security engineer's checks (src/checks/security.mjs): a pretend Docker that answers as the scanner image does
 const SEC_ON = { roles: { security: { engine: 'codex', model: 'gpt-6-sol', daybreak: true } } };
-function fakeDocker({ os = 'linux', image = true, signedIn = true, probe = 'login-denied\nlogin-not-listable\nauthfile-denied\nnet-closed', nested = true, models } = {}) {
+function fakeDocker({ os = 'linux', image = true, signedIn = true, probe = 'login-denied\nlogin-not-listable\nauthfile-denied\nnet-closed\nip-closed', nested = true, models } = {}) {
   return (args) => {
     const line = args.join(' ');
     if (args[0] === 'info') return { out: `"${os}" ["name=seccomp,profile=builtin"] "29.7.2"` };
@@ -2047,6 +2047,13 @@ test("security.docker, security.image, security.login: the scanner's Docker, its
   assert.deepEqual([tcp.status, tcp.severity], ['fail', 'error']);
   assert.match(tcp.detail, /API is open on TCP port 2375/);
   assert.match(tcp.steps[0].text, /Expose daemon on tcp:\/\/localhost:2375/);
+  // ...and by its ports, whatever the setting says (2376 is the API with TLS): the same error
+  for (const port of [2375, 2376]) {
+    const open = await check('security.docker', { config: SEC_ON, tcpOpen: [port], commands: { 'docker *': fakeDocker() } });
+    assert.deepEqual([open.status, open.severity], ['fail', 'error'], String(port));
+    assert.equal(open.detail, `Docker's API answers on 127.0.0.1:${port}: any program on this PC, a scanned project's included, could drive Docker`);
+    assert.match(open.steps[0].text, /Expose daemon on tcp:\/\/localhost:2375/);
+  }
   const none = await check('security.docker', { config: SEC_ON });
   assert.match(none.detail, /^not installed/);
   // The image, pinned by its digest; pulling it is the owner's fix, in their own window

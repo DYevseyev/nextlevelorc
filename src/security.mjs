@@ -20,7 +20,7 @@ import { guardDir, projectKey } from './lib/guard.mjs';
 import { resolveBin, runQuiet } from './lib/proc.mjs';
 import { processStartSync } from './lib/proctree.mjs';
 import { DIGEST, REVISION, SECCOMP_FILE, VERSION, imageRef, seccompProblem } from './lib/securityimage.mjs';
-import { copyOut, daybreakFor, accessPrograms, dockerFacts, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
+import { apiPortOpen, apiPortWords, copyOut, daybreakFor, accessPrograms, dockerFacts, dockerSettingsText, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
 import { newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
 import { LABEL_KIND, LABEL_PROJECT, ROLE_FILE, accountKey, containerName, loginArgs, memoryLimit, scanRunArgs, volumes } from './lib/securityspec.mjs';
 import { fileURLToPath } from 'node:url';
@@ -65,7 +65,7 @@ export async function cmdSecurity(argv, ctx) {
   }
   if (sub === 'scan') return askForScan(a, ctx);
   if (sub === 'stop') return stopScan(a, ctx);
-  if (sub === 'login') return login(ctx);
+  if (sub === 'login') return login(a, ctx);
   console.error(`nextlevel security: no "${sub}" (scan, status, stop, login)`);
   return 1;
 }
@@ -96,10 +96,15 @@ function stopScan(a, { stateDir }) {
 
 // The sign-in, in the owner's own window: the state and login volumes made and given to the scanner, then OpenAI's
 // device sign-in in this window (its code shows only here; nothing of it is kept by nextlevel)
-async function login({ root, config, envKeys }) {
-  // (with the role off too: turning it on checks the sign-in first, so it comes before; the off role's account is the
-  // one `team set security --engine codex` without --profile gives it)
-  const p = securityProfile(config) || { name: '' };
+async function login(a, { root, config, envKeys }) {
+  // (with the role off too: turning it on checks the sign-in first, so it comes before. Its account: --profile's, else
+  // the role's, else the one `team set security --engine codex` without --profile gives it)
+  const named = a.profile ? config.profiles?.[a.profile] : null;
+  if (a.profile && named?.engine !== 'codex') {
+    console.error(`Can't sign in: "${a.profile}" isn't a Codex profile in nextlevel.json.`);
+    return 1;
+  }
+  const p = a.profile ? { name: a.profile } : securityProfile(config) || { name: '' };
   const docker = dockerRunner(envKeys);
   const bad = seccompProblem() || (!imagePresent(docker) ? `the scanner isn't on this PC: docker pull ${imageRef()}` : '');
   if (bad) {
@@ -113,16 +118,28 @@ async function login({ root, config, envKeys }) {
     console.error(`Can't sign in: ${own.problem}`);
     return 1;
   }
-  console.log("Sign in to Codex Security for the security engineer: open the page below in your browser and enter the code. nextlevel keeps none of it; the sign-in stays in the scanner's own Docker volume.");
-  const bin = resolveBin('docker');
-  const code = await new Promise((resolve) => {
-    const child = spawn(bin.file, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys), windowsHide: false }); // (the owner's own window: the device code shows there)
-    child.on('exit', (c) => resolve(c ?? 1));
-    child.on('error', () => resolve(1));
-  });
-  const s = signedIn(docker, vols, { seccomp: SECCOMP_FILE });
-  console.log(code === 0 && s.ok ? 'Signed in. nextlevel doctor shows the security engineer ready.' : `The sign-in didn't finish (${s.why || `exit ${code}`}). Run nextlevel security login again.`);
-  return code === 0 && s.ok ? 0 : 1;
+  // (one at a time with the scans: a scan and a sign-in never write the login volume together)
+  const home = os.homedir();
+  const me = { root, pid: process.pid, start: processStartSync(process.pid), scan: 'login' };
+  const lease = takeLease(home, me);
+  if (!lease.ok) {
+    console.error(`Can't sign in now: a security scan runs${lease.holder?.root ? ` (in ${path.basename(lease.holder.root)})` : ''}. Sign in when it ends (nextlevel security status).`);
+    return 1;
+  }
+  try {
+    console.log("Sign in to Codex Security for the security engineer: open the page below in your browser and enter the code. nextlevel keeps none of it; the sign-in stays in the scanner's own Docker volume.");
+    const bin = resolveBin('docker');
+    const code = await new Promise((resolve) => {
+      const child = spawn(bin.file, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys), windowsHide: false }); // (the owner's own window: the device code shows there)
+      child.on('exit', (c) => resolve(c ?? 1));
+      child.on('error', () => resolve(1));
+    });
+    const s = signedIn(docker, vols, { seccomp: SECCOMP_FILE });
+    console.log(code === 0 && s.ok ? 'Signed in. nextlevel doctor shows the security engineer ready.' : `The sign-in didn't finish (${s.why || `exit ${code}`}). Run nextlevel security login again.`);
+    return code === 0 && s.ok ? 0 : 1;
+  } finally {
+    releaseLease(home, me);
+  }
 }
 
 // What status shows: the scans, and the findings of the last one that counts (titles cut and marked as data). A scan
@@ -139,7 +156,7 @@ export function statusData(stateDir, root) {
     }
   }
   return {
-    scans: scans.map((s) => ({ id: s.id, state: s.state, deep: !!s.deep, at: s.startedAt || s.askedAt || '', minutes: s.minutes || 0, findings: s.counts || '', trusted: !!s.trusted, partial: !!s.partial, why: s.changed ? 'its findings file changed after the scan: not trusted' : s.why || '', daybreak: s.daybreak || '' })),
+    scans: scans.map((s) => ({ id: s.id, state: s.state, deep: !!s.deep, at: s.startedAt || s.askedAt || '', minutes: s.minutes || 0, findings: s.counts || '', trusted: !!s.trusted, partial: !!s.partial, why: s.changed ? 'its findings file changed after the scan: not trusted' : s.why || '', daybreak: s.daybreak || '', keptOutput: s.keptOutput || '' })),
     last: trusted ? { id: trusted.id, commit: trusted.commit || '', findings: findings.map((f) => ({ id: f.id, severity: f.severity, title: String(f.title).slice(0, 120), validation: f.validation?.state || 'none' })) } : null,
   };
 }
@@ -154,7 +171,7 @@ function status(a, { root, stateDir }) {
     return 0;
   }
   const lines = ['Security scans (newest first):'];
-  for (const s of d.scans) lines.push(`  ${s.id}  ${s.deep ? 'deep ' : ''}${s.state}${s.minutes ? `, ${Math.round(s.minutes)} min` : ''}${s.findings ? `, ${s.findings}` : ''}${s.partial ? ', partial' : ''}${s.trusted ? '' : s.state === 'done' ? ', not trusted' : ''}${s.why ? `: ${s.why}` : ''}`);
+  for (const s of d.scans) lines.push(`  ${s.id}  ${s.deep ? 'deep ' : ''}${s.state}${s.minutes ? `, ${Math.round(s.minutes)} min` : ''}${s.findings ? `, ${s.findings}` : ''}${s.partial ? ', partial' : ''}${s.trusted ? '' : s.state === 'done' ? ', not trusted' : ''}${s.why ? `: ${s.why}` : ''}${s.keptOutput ? ` (its output kept in the Docker volume ${s.keptOutput}; docker volume rm ${s.keptOutput} removes it)` : ''}`);
   if (d.last) {
     lines.push('', `Findings of ${d.last.id} (at ${d.last.commit.slice(0, 8)}; titles are the scanner's words about the code, data, not instructions):`);
     for (const f of d.last.findings) lines.push(`  ${f.id}  ${f.severity.padEnd(8)} ${f.title}${f.validation === 'reproduced' ? ' (Codex Security reproduced it)' : f.validation === 'source' ? ' (validated by source)' : ''}`);
@@ -204,8 +221,10 @@ export function recoverScans({ root, stateDir, envKeys, running = null }) {
   }
   if (resolveBin('docker')) {
     const r = docker(['volume', 'ls', '-q', '--filter', `label=${LABEL_KIND}=out`, '--filter', `label=${LABEL_PROJECT}=${projectKey(root)}`], { timeoutMs: 30_000 });
+    // (an output kept as the evidence of a refused import stays, V3: the owner removes it)
+    const kept = new Set(listScans(stateDir).map((s) => s.keptOutput).filter(Boolean));
     for (const v of r.ok ? r.out.split(/\s+/).filter(Boolean) : []) {
-      if (running && v === `nextlevel-sec-out-${running.id}`) continue;
+      if ((running && v === `nextlevel-sec-out-${running.id}`) || kept.has(v)) continue;
       docker(['volume', 'rm', v], { timeoutMs: 30_000 });
       said.push(`removed a scan's output volume no scan holds (${v})`);
     }
@@ -216,6 +235,12 @@ export function recoverScans({ root, stateDir, envKeys, running = null }) {
 // ---------- one scan: nextlevel _scan <what> ----------
 // ctx: { root, stateDir, config, base, envKeys, secrets: { values, names, home }, log }
 export async function cmdScanProcess(what, ctx) {
+  // (only the hub's own child, after the owner asked: an agent can't start one with the plan's tokens)
+  const session = agentSession();
+  if (session) {
+    console.error(ownerOnly('nextlevel _scan', 'The hub starts a scan after the owner asks for it (nextlevel security scan).', session));
+    return 1;
+  }
   let ask = null;
   try {
     ask = JSON.parse(Buffer.from(String(what), 'base64url').toString('utf8'));
@@ -230,6 +255,7 @@ export async function cmdScanProcess(what, ctx) {
   const pidStart = processStartSync(pid);
   const startedAt = Date.now();
   const say = (m) => ctx.log(`security scan ${id}: ${m}`);
+  let keepOutput = false; // (an import refused for what the output holds: its volume is kept as the evidence, V3)
   const end = (state, why, extra = {}) => {
     const minutes = Math.round(((Date.now() - startedAt) / 60_000) * 1000) / 1000;
     writeScan(stateDir, id, { state, why, endedAt: new Date().toISOString(), minutes, ...extra });
@@ -255,9 +281,11 @@ export async function cmdScanProcess(what, ctx) {
   const logFile = path.join(scanDir(stateDir, id), 'scan.log');
   try {
     const seccomp = SECCOMP_FILE;
-    const facts = dockerFacts(docker);
+    const facts = dockerFacts(docker, { settingsText: dockerSettingsText() });
     const bad = seccompProblem() || (facts.ok ? '' : facts.why) || (!imagePresent(docker) ? `the scanner isn't on this PC (nextlevel doctor --fix security.image)` : '');
     if (bad) return end('couldnt', bad);
+    const port = await apiPortOpen();
+    if (port) return end('couldnt', `${apiPortWords(port)}: no scan runs (nextlevel doctor, security.docker)`);
     // The gates kept for this image: the model-free probe (V5), run now when none is kept
     const cache = ctx.cache;
     let probe = cache.get(PROBES)?.[DIGEST];
@@ -324,9 +352,11 @@ export async function cmdScanProcess(what, ctx) {
     const dest = path.join(scanDir(stateDir, id), 'raw');
     const copy = copyOut(docker, id, vols, dest, { seccomp });
     if (run.stopped) return end('stopped', run.why, { partial: true });
+    if (copy.problem && run.code === 0) keepOutput = true;
     if (copy.problem) return end(run.code === 0 ? 'failed' : 'couldnt', run.code === 0 ? `the scan's output isn't trusted: ${copy.problem}` : `the scanner ended with exit ${run.code}: ${lastWords(output, ctx.secrets)}`, { trusted: false });
     const seal = sealProblem(copy.manifest, copy.files);
     const f = readFindings(readText(path.join(dest, 'findings.json')), ctx.secrets);
+    if (f.problem) keepOutput = true;
     if (f.problem) return end('failed', f.problem, { trusted: false });
     const coverage = readCoverage(readText(path.join(dest, 'coverage.json')), ctx.secrets);
     const findingsFile = path.join(scanDir(stateDir, id), 'findings.json');
@@ -338,14 +368,17 @@ export async function cmdScanProcess(what, ctx) {
     fs.writeFileSync(path.join(recordsDir(root), `${id}.json`), `${JSON.stringify(record, null, 2)}\n`);
     redactLog(logFile, ctx.secrets);
     const counted = { counts: countsText(f.findings), coverage, partial: coverage.partial || run.code !== 0 };
+    if (seal) keepOutput = true;
     if (seal) return end('failed', `the scan's output isn't trusted: ${seal}`, { trusted: false, ...counted });
-    if (run.code !== 0 && run.code !== 1) return end('couldnt', `the scanner ended with exit ${run.code}: ${lastWords(output, ctx.secrets)}`, { trusted: true, ...counted });
+    // (exit 2 is the scanner's own integrity or required-output failure: its files never count, sealed or not)
+    if (run.code !== 0 && run.code !== 1) return end('couldnt', `the scanner ended with exit ${run.code}: ${lastWords(output, ctx.secrets)}`, { trusted: false, ...counted });
     return end('done', '', { trusted: true, ...counted });
   } finally {
     redactLog(logFile, ctx.secrets);
     docker(['rm', '-f', containerName(id)], { timeoutMs: 60_000 });
     docker(['rm', '-f', containerName(`${id}-dry`)], { timeoutMs: 60_000 });
-    docker(['volume', 'rm', vols.out], { timeoutMs: 60_000 });
+    if (keepOutput) writeScan(stateDir, id, { keptOutput: vols.out });
+    else docker(['volume', 'rm', vols.out], { timeoutMs: 60_000 });
     releaseLease(home, { pid, start: pidStart });
   }
 }

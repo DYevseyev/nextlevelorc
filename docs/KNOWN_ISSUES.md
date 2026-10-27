@@ -811,7 +811,7 @@ A round starts only because something happened (`src/lib/rounds.mjs`; DECISIONS 
   the minutes that lead to a lock; it may not get past one (the design's sources).
 
 ## The security engineer's scanner (OpenAI's Codex Security container)
-Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 25 and 26 October), with the image nextlevel pins
+Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), with the image nextlevel pins
 (`src/lib/securityimage.mjs`, by digest).
 - **Inside the container, Codex's sandbox holds.** The model's commands run in Codex's own sandbox there (bubblewrap
   with the vendored seccomp profile): the sign-in folder is denied and can't be listed, the planted `auth.json` can't be
@@ -838,8 +838,9 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 25 and 26 October), w
   (`AGENTS.md`, `.claude/`, `.codex/`, `SECURITY.md` and the rest the guard protects), and the output is read through
   its seal (the manifest's hashes) and shape checks, but what the model concludes from the code itself is its own: bars,
   not walls.
-- **What an agent running as the owner can still do here:** ask for a scan (`nextlevel security scan` refuses in an
-  agent's session, which is no wall: FR-017), including a deep one that spends the plan; change `.nextlevel/security/`
+- **What an agent running as the owner can still do here:** ask for a scan (`nextlevel security scan` and the hub's
+  own `_scan` refuse in an agent's session, which is no wall: FR-017), including a deep one that spends the plan, or
+  write a request file into the guard's folder, which the hub takes as the owner's ask; change `.nextlevel/security/`
   (the findings' hashes are kept in the guard's folder, outside the project, so a changed file reads as untrusted); hold
   the one-scan lease. Each is a bar, not a wall.
 

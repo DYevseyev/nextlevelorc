@@ -220,7 +220,8 @@ never changes the code. Its scans run in OpenAI's Codex Security scanner, in Doc
 account in a Docker volume of its own. In PowerShell, in the project's folder:
 1. Docker Desktop running, with Linux containers. `nextlevel doctor` says what is missing.
 2. `docker pull` of the scanner, exactly as the doctor's `security.image` row shows it (about 1.4 GB).
-3. `nextlevel security login`: open the page it names in your browser and type the code it shows there.
+3. `nextlevel security login` (with `--profile P` for a Codex profile of `nextlevel.json`): open the page it names in
+   your browser and type the code it shows there.
 4. Turn the role on: the Team page, or `nextlevel team set security --engine codex --daybreak on`. Without a model it
    picks the first one Daybreak Blue works on.
 5. `nextlevel security scan` (or `--deep`), then `nextlevel security status` for how it goes and its findings;

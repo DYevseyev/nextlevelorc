@@ -21,9 +21,11 @@ a plugin, is the one path, and nothing falls back to another.
   `nextlevel team set security --engine codex [--model M] [--effort E] [--daybreak on|off]` checks its five checks
   first and saves only when they pass; without a model it saves the first one the scanner's own Codex lists that
   Daybreak Blue works on (named, never an alias). `--engine off` turns it off.
-- `nextlevel security login`, in the owner's own window: OpenAI's device sign-in, inside the scanner, into its sign-in
-  volume. It works while the role is off, since turning it on checks the sign-in first.
-- `nextlevel security scan [--deep]` (the owner's; it refuses in an agent's session), `nextlevel security stop [<id>]`
+- `nextlevel security login [--profile P]`, in the owner's own window: OpenAI's device sign-in, inside the scanner, into
+  the sign-in volume of that account (`--profile`: a Codex profile of `nextlevel.json`, else the role's). It works while
+  the role is off, since turning it on checks the sign-in first, and it waits for no scan: it refuses while one holds
+  the lease, so a scan and a sign-in never write the sign-in volume together.
+- `nextlevel security scan [--deep]` (the owner's; it and the hub's own `_scan` refuse in an agent's session), `nextlevel security stop [<id>]`
   and `nextlevel security status [--json]` (a look command, allowed under `NEXTLEVEL_READ_ONLY=1`).
 - The usage ledger and Today get a Security engineer line per scan, with the scanner's own token count.
 - The doctor's rows `security.docker`, `security.image`, `security.login`, `security.probe`, `security.daybreak`
@@ -39,12 +41,14 @@ before every run). A new image comes only with a nextlevel release, and its prob
 
 ## The volumes (no host folder is writable by the container)
 
-- `nextlevel-sec-state-<project key>` at `/output/.codex-security-state`: the scanner's state.
+- `nextlevel-sec-state-<project key>` at `/output/.codex-security-state`: the scanner's state. The project key is the
+  guard's hashed one (`projectKey` in `src/lib/guard.mjs`); `versions.mjs`'s key is the raw path.
 - `nextlevel-sec-login-<account key>` at the state's `codex-home`: the sign-in. The account key is a hash of the
   profile's name, so a second account is a volume of its own; it carries no project label, since one sign-in serves
   every project.
-- `nextlevel-sec-out-<scan id>` at `/output/scan`: one scan's output, removed after it is copied out. A hub that starts
-  removes any left behind.
+- `nextlevel-sec-out-<scan id>` at `/output/scan`: one scan's output, removed after it is copied out, or kept as the
+  evidence when its import is refused (`nextlevel security status` names it, with the command that removes it). A hub
+  that starts removes any other left behind.
 
 Each has the labels `nextlevel.kind` and `nextlevel.project`, and a volume that exists with another kind is refused.
 Before each run a helper container of the same image (`--user 0:0`, every capability dropped but CHOWN and FOWNER,
@@ -56,7 +60,7 @@ some PCs ("operation not permitted"): then the helper runs with Docker's default
 
 Model-free, before any scan with an image: Codex's sandbox must start inside the container (`codex sandbox
 /usr/bin/true`), then, against a throwaway sign-in volume with a planted `auth.json`, a permission profile that denies
-the sign-in folder answers exactly `login-denied`, `login-not-listable`, `authfile-denied` and `net-closed`. Any other
+the sign-in folder answers exactly `login-denied`, `login-not-listable`, `authfile-denied`, `net-closed` (no name resolves) and `ip-closed` (no address answers). Any other
 answer stops every scan with that image; the doctor's `security.probe` keeps the verdict for the digest (a fresh doctor
 run asks again). A volume or Docker problem on the way isn't kept: it is asked again next time.
 
@@ -72,8 +76,8 @@ container starts):
 
 1. **One scan at a time on the PC:** a lease in `~/.nextlevel/security-lease.json`, its holder told by pid and start
    time. A scan in another project waits, and says for which.
-2. Docker answers, with Linux containers and its API not exposed on TCP 2375 (Docker Desktop's setting read for that
-   key only); the seccomp file's hash; the image.
+2. Docker answers, with Linux containers and its API not on TCP: neither Docker Desktop's setting (read for that key
+   only) nor an answer on 127.0.0.1:2375 or 2376; the seccomp file's hash; the image.
 3. The probe's verdict for the image (above), run now when none is kept.
 4. The model and Daybreak, from the scanner's own `codex debug models`.
 5. **The checkout:** `<project>.slots/security`, a clone with `--no-hardlinks` of the base branch's tip (never a
@@ -108,7 +112,8 @@ container starts):
 
 Ends: `done` (trusted), `failed` (the output didn't hold), `couldn't run` (a stop rule, or the scanner's own error with
 its last lines, redacted), `stopped` (the owner's stop, marked partial). A scan never runs again by itself. Whatever
-ends, its containers and its output volume are removed and the lease is given back.
+ends, its containers are removed, its output volume too unless it is kept as evidence, and the lease is given back.
+A refused copy-out also removes what it had copied onto the PC.
 
 ## What stays open (KNOWN_ISSUES)
 

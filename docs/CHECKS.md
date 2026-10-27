@@ -417,8 +417,9 @@ the step.
 ### security.docker
 The security engineer's scans run in OpenAI's Codex Security container, so they need Docker running with Linux
 containers, and Docker's API not open on TCP port 2375 (Docker Desktop's "Expose daemon on tcp://localhost:2375
-without TLS", read from its `settings-store.json` by that one key): with it open, any program on the PC, a scanned
-project's included, could drive Docker. It also checks the seccomp profile nextlevel ships for the scanner
+without TLS", read from its `settings-store.json` by that one key), and nothing answering on 127.0.0.1:2375 or 2376
+(the API without and with TLS, whatever the setting says): with it open, any program on the PC, a scanned project's
+included, could drive Docker. A scan checks both again before it starts. It also checks the seccomp profile nextlevel ships for the scanner
 (`docker/codex-security-seccomp.json`) against its pinned hash. Skipped while the role is off; **error** while it is
 on. Nothing falls back to the host's Codex or a plugin. See `docs/design/security-engineer.md`.
 
@@ -436,7 +437,7 @@ the role is on. Anything on the PC that can run `docker` can mount that volume: 
 ### security.probe
 Inside the scanner, with no model: Codex's sandbox starts (nested namespaces, upstream's own check), and under the
 scan's permission profile a throwaway sign-in volume with a planted harmless `auth.json` can't be read or listed and
-the network is closed (`login-denied`, `login-not-listable`, `authfile-denied`, `net-closed`). Kept for the image's
+the network is closed (`login-denied`, `login-not-listable`, `authfile-denied`, `net-closed`, `ip-closed`). Kept for the image's
 digest; Check again (or `doctor --fresh`) asks again. Any other answer: **error**, and no scan runs with that image.
 
 ### security.daybreak
