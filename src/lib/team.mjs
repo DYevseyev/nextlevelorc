@@ -133,7 +133,11 @@ export function teamView(config, where = {}) {
         row.role === 'worker' ? workerCaveat(p, where.platform || process.platform, args)?.warning : '',
         full?.level === 'warn' ? full.text : '',
       ].filter(Boolean),
-      notices: full?.level === 'info' ? [full.text] : [],
+      notices: [
+        full?.level === 'info' ? full.text : '',
+        // (V8: Docker's access is the PC's, KNOWN_ISSUES)
+        row.role === 'security' ? "The scanner's sign-in is kept in a Docker volume of its own: any program that can use Docker on this PC can read it." : '',
+      ].filter(Boolean),
       // the advisor: whether it is on another engine than the orchestrator, so it can disagree with it
       ...(row.role === 'assistant' ? { independent: advisorIndependent(config, p) } : {}),
       // the security engineer: whether its scans run with OpenAI's Daybreak Blue, and what that means

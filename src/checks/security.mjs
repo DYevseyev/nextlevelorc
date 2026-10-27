@@ -1,0 +1,126 @@
+// The security engineer's checks (docs/design/security-engineer.md §9, deltas 1 and 2): its scans run in OpenAI's scanner
+// container, so what it needs is Docker with Linux containers and its API closed, the pinned image, a sign-in in its own
+// volume, Codex's sandbox holding inside the container (the model-free probe, kept for the image's digest), and Daybreak
+// Blue for the chosen model. Information while the role is off; errors while it is on, and nothing falls back to the host's
+// Codex or a plugin.
+import { securityProfile } from '../lib/config.mjs';
+import { projectKey } from '../lib/guard.mjs';
+import { DIGEST, SECCOMP_FILE, imageRef, imageWords, seccompProblem } from '../lib/securityimage.mjs';
+import { accessPrograms, daybreakFor, dockerFacts, imagePresent, pullArgs, runProbes, signedIn } from '../lib/securityrun.mjs';
+import { accountKey, volumes } from '../lib/securityspec.mjs';
+import { fail, inProject, pass, step } from './lib.mjs';
+
+const off = (ctx) => (ctx.root && securityProfile(ctx.config) ? null : 'the security engineer is off');
+const docker = (ctx) => (args, opts) => ctx.run('docker', args, { cwd: ctx.root || ctx.cwd, ...opts });
+// Docker Desktop's settings, read for one key (never shown): Windows only
+function settingsText(ctx) {
+  if (ctx.platform !== 'win32' || !ctx.env.APPDATA) return '';
+  const p = ctx.path;
+  return ctx.read(p.join(ctx.env.APPDATA, 'Docker', 'settings-store.json')) || ctx.read(p.join(ctx.env.APPDATA, 'Docker', 'settings.json')) || '';
+}
+const accountOf = (ctx) => accountKey(securityProfile(ctx.config)?.name || '');
+export const securityVolumes = (ctx) => volumes({ projectKey: projectKey(ctx.root), account: accountOf(ctx) });
+
+export const PROBES = 'security.probes'; // check-cache.json: { [image digest]: { ok, problem, answer, at } }
+
+export const securityDockerCheck = {
+  id: 'security.docker',
+  title: 'Docker for the security engineer',
+  severity: 'error',
+  learnMore: 'docs/CHECKS.md#securitydocker',
+  skipIf: off,
+  run(ctx) {
+    const bad = seccompProblem(SECCOMP_FILE);
+    if (bad) return fail(bad, { steps: [step('terminal', 'nextlevel update')] });
+    const f = dockerFacts(docker(ctx), { settingsText: settingsText(ctx) });
+    if (f.missing) return fail(`not installed: the security engineer's scans run in Docker`, { steps: [ctx.platform === 'win32' ? step('terminal', 'winget install -e --id Docker.DockerDesktop') : step('browser', 'https://docs.docker.com/get-docker/')] });
+    if (f.stopped) return fail(f.why, { next: 'start Docker Desktop', steps: [step('app', null, { text: 'start Docker Desktop and wait until it says "Engine running"' })] });
+    if (!f.ok) return fail(f.why, { steps: [step('app', null, { text: f.tcp ? 'Docker Desktop: Settings, General: turn off "Expose daemon on tcp://localhost:2375 without TLS", then Apply' : 'Docker Desktop: switch to Linux containers (its tray menu)' })] });
+    return pass(`${f.detail}${f.apparmor ? '; no AppArmor profile is loaded for the scanner (Docker Desktop has none)' : ''}`);
+  },
+};
+
+export const securityImageCheck = {
+  id: 'security.image',
+  title: "The security engineer's scanner",
+  severity: 'error',
+  learnMore: 'docs/CHECKS.md#securityimage',
+  skipIf: off,
+  requires: ['security.docker'],
+  run(ctx) {
+    if (imagePresent(docker(ctx))) return pass(imageWords());
+    return fail(`not on this PC yet: ${imageWords()}`, { next: 'pull it (about 1.4 GB, once per nextlevel release that changes it)', steps: [step('terminal', `docker pull ${imageRef()}`)] });
+  },
+  fixPrompt: () => `Download OpenAI's Codex Security scanner (docker pull, about 1.4 GB)?`,
+  fix(ctx, ui) {
+    ui.run('docker', pullArgs());
+  },
+  fixInWindow: true, // (an install: the owner's, in their own window)
+};
+
+export const securityLoginCheck = {
+  id: 'security.login',
+  title: "The security engineer's sign-in",
+  severity: 'error',
+  learnMore: 'docs/CHECKS.md#securitylogin',
+  skipIf: off,
+  requires: ['security.image'],
+  run(ctx) {
+    const s = signedIn(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE });
+    if (s.ok) return pass('signed in, in its own Docker volume (OpenAI\'s device sign-in; nextlevel never reads it)');
+    return fail(`${s.why}: the scanner signs in once with your ChatGPT account, on OpenAI's own page`, {
+      next: 'sign in',
+      steps: [inProject(ctx, 'nextlevel security login')],
+    });
+  },
+};
+
+export const securityProbeCheck = {
+  id: 'security.probe',
+  title: "The scanner's sandbox",
+  severity: 'error',
+  learnMore: 'docs/CHECKS.md#securityprobe',
+  skipIf: off,
+  requires: ['security.image'],
+  run(ctx) {
+    const kept = ctx.cache.get(PROBES)?.[DIGEST];
+    const v = kept && !ctx.fresh ? kept : { ...runProbes(docker(ctx), { seccomp: SECCOMP_FILE, account: accountOf(ctx), stateVolume: securityVolumes(ctx).state }), at: new Date().toISOString() };
+    if (v !== kept && v.kept) ctx.cache.set(PROBES, { ...(ctx.cache.get(PROBES) || {}), [DIGEST]: v });
+    if (v.ok) return pass(`inside the scanner, Codex's sandbox hides the sign-in and closes the network (${(v.answer || []).join(', ')})`);
+    return fail(`${v.problem}: no scan runs with this scanner`, { next: "tell nextlevel's developers", steps: [inProject(ctx, 'nextlevel report security.probe')] });
+  },
+};
+
+// The chosen model and Daybreak Blue, from the scanner's own Codex. A role without a model gets the first that works
+// (`pick`, which nextlevel team saves).
+export const securityDaybreakCheck = {
+  id: 'security.daybreak',
+  title: 'Daybreak for the security engineer',
+  severity: (ctx) => (ctx.config.roles.security?.daybreak ? 'error' : 'info'),
+  learnMore: 'docs/CHECKS.md#securitydaybreak',
+  skipIf: off,
+  requires: ['security.login'],
+  run(ctx) {
+    const p = securityProfile(ctx.config);
+    const r = accessPrograms(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE });
+    if (!r.ok) return fail(`the scanner's Codex couldn't list its models (${r.why})`, { severity: 'warn' });
+    if (!p.daybreak) {
+      const model = p.model || r.models[0].id;
+      return fail(`standard safeguards on ${model}: OpenAI's cyber screening may block parts of a scan`, { ...(p.model ? {} : { pick: model }), next: 'turn Daybreak on (Team page) for a model it covers' });
+    }
+    if (!p.model) {
+      const first = r.models.find((m) => daybreakFor(m) === 'works');
+      if (first) return pass(`Daybreak Blue works on ${first.id} (the scanner's Codex lists it)`, { pick: first.id });
+      const maybe = r.models.find((m) => daybreakFor(m) === 'unconfirmed');
+      if (maybe) return pass(`Daybreak unconfirmed on ${maybe.id}: Codex says nothing of its access programs`, { pick: maybe.id, unconfirmed: true });
+      return fail('no model of this account takes Daybreak Blue', { next: 'turn Daybreak off, or ask OpenAI for its cyber access program' });
+    }
+    const m = r.models.find((x) => x.id === p.model);
+    const v = daybreakFor(m);
+    if (v === 'works') return pass(`Daybreak Blue works on ${p.model}`);
+    if (v === 'unconfirmed') return pass(`Daybreak unconfirmed on ${p.model}: Codex says nothing of its access programs`, { unconfirmed: true });
+    return fail(m ? `${p.model} doesn't take Daybreak Blue (${m.programs.join(', ') || 'no access program'})` : `${p.model} isn't among the scanner's models`, { next: 'choose a model Daybreak covers, or turn Daybreak off' });
+  },
+};
+
+export const securityChecks = [securityDockerCheck, securityImageCheck, securityLoginCheck, securityProbeCheck, securityDaybreakCheck];

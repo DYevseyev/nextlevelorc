@@ -414,6 +414,38 @@ Microsoft Store placeholder), or a script it names by its full path isn't there;
 resolve isn't reported. `[features] hooks = false` turns them all off. **warn**; fix: the file named in
 the step.
 
+### security.docker
+The security engineer's scans run in OpenAI's Codex Security container, so they need Docker running with Linux
+containers, and Docker's API not open on TCP port 2375 (Docker Desktop's "Expose daemon on tcp://localhost:2375
+without TLS", read from its `settings-store.json` by that one key): with it open, any program on the PC, a scanned
+project's included, could drive Docker. It also checks the seccomp profile nextlevel ships for the scanner
+(`docker/codex-security-seccomp.json`) against its pinned hash. Skipped while the role is off; **error** while it is
+on. Nothing falls back to the host's Codex or a plugin. See `docs/design/security-engineer.md`.
+
+### security.image
+OpenAI's scanner image is on the PC, pinned by its digest (`src/lib/securityimage.mjs`, with its version and the
+commit it was built from). A new digest comes only with a nextlevel release. Fix: `docker pull <image>@<digest>`
+(about 1.4 GB), in the owner's own window, since it is an install. **error** while the role is on.
+
+### security.login
+The scanner is signed in: its own sign-in volume holds `auth.json`, seen by its file names only (nextlevel never reads,
+copies or moves it). The owner signs in once with `nextlevel security login`, which runs the scanner's
+`login --device-auth` in their window on OpenAI's own page. A second Codex account is a second volume. **error** while
+the role is on. Anything on the PC that can run `docker` can mount that volume: `docs/KNOWN_ISSUES.md`.
+
+### security.probe
+Inside the scanner, with no model: Codex's sandbox starts (nested namespaces, upstream's own check), and under the
+scan's permission profile a throwaway sign-in volume with a planted harmless `auth.json` can't be read or listed and
+the network is closed (`login-denied`, `login-not-listable`, `authfile-denied`, `net-closed`). Kept for the image's
+digest; Check again (or `doctor --fresh`) asks again. Any other answer: **error**, and no scan runs with that image.
+
+### security.daybreak
+Whether the security engineer's model takes OpenAI's Daybreak Blue, from the scanner's own `codex debug models`
+(`available_access_programs`): works, refused (only `standard`, or only Red, which the role never uses), or unconfirmed
+(Codex says nothing of it). Turning the role on without a model saves the first one the check finds working. **error**
+with Daybreak on and refused; **info** with Daybreak off (standard safeguards may block parts of a scan). The scan
+record says Daybreak was asked for: nothing in the scanner's output confirms it.
+
 ### tool.agy
 The Antigravity CLI is installed and 1.2.4 or newer; fix: `agy update`, then a new window. **error**
 when a role uses agy, **warn** when only a fallback does, else **info**. From FR-001 #4.

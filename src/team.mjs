@@ -180,10 +180,11 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   // (the orchestrator on Antigravity starts only with a passing lock test for what it would run: lock.test, an error)
   // (the security engineer: its own checks, never the model check of the roles in use, which doesn't see its model)
   const ids = row.role === 'security'
-    ? [`tool.${profile.engine}`, `${profile.engine}.login`, 'security.engine', 'security.daybreak', 'profiles.accounts']
+    ? ['security.docker', 'security.image', 'security.login', 'security.probe', 'security.daybreak']
     : [`tool.${profile.engine}`, `${profile.engine}.login`, MODEL_CHECK[profile.engine], 'profiles.accounts', ...(row.role === 'worker' ? ['codex.worker-windows'] : []), ...(needsLockTest(profile, row.role) ? ['lock.test'] : [])];
   const checks = ids.map((id) => byId(id)).filter(Boolean);
-  const results = (await runChecks(ctx, { checks })).map((r) => ({
+  const ran = await runChecks(ctx, { checks });
+  const results = ran.map((r) => ({
     id: r.id,
     title: r.title,
     status: r.status,
@@ -217,11 +218,14 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
     print({ ok: true, saved: false, message: `${who}: the checks pass.${warned}`, ...base }, [`${who}: the checks pass (not saved: --check).${warned}`, ...howTo(warnings)].join('\n'));
     return 0;
   }
-  let text = formatConfig(next);
+  // (the security engineer without a model: the one its Daybreak check found, named, never an alias)
+  const pick = row.role === 'security' && !profile.model ? ran.find((r) => r.id === 'security.daybreak')?.pick : '';
+  const saved = pick ? withRole(raw, row.role, { ...change, model: pick }) : next;
+  let text = formatConfig(saved);
   if (crlf) text = text.replace(/\n/g, '\r\n');
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
-  const message = `Saved. ${who}. It applies ${applies}.${warned}`;
+  const message = `Saved. ${who}${pick ? `, model ${pick} (the first the scanner's Codex lists for it)` : ''}. It applies ${applies}.${warned}`;
   print({ ok: true, saved: true, message, ...base }, [message, ...howTo(warnings), 'Commit nextlevel.json with your next change.'].join('\n'));
   return 0;
 }

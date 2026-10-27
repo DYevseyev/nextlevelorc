@@ -2016,6 +2016,87 @@ test('advisor.independent: the engine the advisor runs on, whether it is the orc
   assert.deepEqual(none.steps.map((s) => [s.window, s.command]), [['terminal', 'npm install -g @openai/codex']]);
 });
 
+// The security engineer's checks (src/checks/security.mjs): a pretend Docker that answers as the scanner image does
+const SEC_ON = { roles: { security: { engine: 'codex', model: 'gpt-6-sol', daybreak: true } } };
+function fakeDocker({ os = 'linux', image = true, signedIn = true, probe = 'login-denied\nlogin-not-listable\nauthfile-denied\nnet-closed', nested = true, models } = {}) {
+  return (args) => {
+    const line = args.join(' ');
+    if (args[0] === 'info') return { out: `"${os}" ["name=seccomp,profile=builtin"] "29.7.2"` };
+    if (args[0] === 'image') return image ? { out: '["ghcr.io/openai/codex-security@sha256:a90bc3bf8b67ae1c1b046d7987bbfc0ed44dc869b938a393204ec62b5cce65fc"]' } : { ok: false, code: 1, out: 'Error: No such image' };
+    if (args[0] === 'volume' && args[1] === 'inspect') return line.includes('nextlevel-sec-login-') && !signedIn ? { ok: false, code: 1 } : { out: args.includes('{{.Name}}') ? args.at(-1) : line.includes('-probe-') ? 'probe' : 'state' };
+    if (args[0] === 'volume') return { out: '' };
+    if (args.includes('stat')) return { out: '10001:10001 700\n10001:10001 700' };
+    if (args.includes('ls')) return { out: signedIn ? 'auth.json\nlog' : 'log' };
+    if (line.includes('sandbox /usr/bin/true')) return nested ? { out: '' } : { ok: false, code: 1, out: 'bwrap: No permissions to create new namespace' };
+    if (line.includes(' sandbox ')) return { out: probe };
+    if (line.includes('debug models')) return { out: models || JSON.stringify({ models: [{ slug: 'gpt-6-sol', available_access_programs: { cyber: ['standard', 'daybreak_blue'] } }, { slug: 'gpt-6-astra', available_access_programs: { cyber: ['standard'] } }, { slug: 'gpt-red', available_access_programs: { cyber: ['daybreak_red'] } }, { slug: 'gpt-quiet' }] }) };
+    return { out: '' };
+  };
+}
+
+test("security.docker, security.image, security.login: the scanner's Docker, its pinned image and its own sign-in (docs/CHECKS.md)", async () => {
+  // Off: nothing is asked of Docker
+  const off = await check('security.docker', { commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([off.status, off.detail], ['skip', 'the security engineer is off']);
+  const on = await check('security.docker', { config: SEC_ON, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([on.status, on.detail], ['ok', 'engine 29.7.2, Linux containers']);
+  const win = await check('security.docker', { config: SEC_ON, commands: { 'docker *': fakeDocker({ os: 'windows' }) } });
+  assert.match(win.detail, /Docker runs windows containers: the scanner needs Linux containers/);
+  // Docker's API open on TCP (read from Docker Desktop's settings by its key only): an error, with where to turn it off
+  const tcp = await check('security.docker', { platform: 'win32', config: SEC_ON, env: { APPDATA: 'C:\\Users\\me\\AppData\\Roaming' }, files: { 'C:\\Users\\me\\AppData\\Roaming\\Docker\\settings-store.json': '{"ExposeDockerAPIOnTCP2375": true, "other": "x"}' }, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([tcp.status, tcp.severity], ['fail', 'error']);
+  assert.match(tcp.detail, /API is open on TCP port 2375/);
+  assert.match(tcp.steps[0].text, /Expose daemon on tcp:\/\/localhost:2375/);
+  const none = await check('security.docker', { config: SEC_ON });
+  assert.match(none.detail, /^not installed/);
+  // The image, pinned by its digest; pulling it is the owner's fix, in their own window
+  const img = await check('security.image', { config: SEC_ON, commands: { 'docker *': fakeDocker() } });
+  assert.match(img.detail, /^Codex Security 0\.7\.0 \(ghcr\.io\/openai\/codex-security@sha256:a90bc3bf8b67/);
+  const noImg = await check('security.image', { config: SEC_ON, commands: { 'docker *': fakeDocker({ image: false }) } });
+  assert.equal(noImg.status, 'fail');
+  assert.deepEqual(noImg.steps.map((s) => s.command), ['docker pull ghcr.io/openai/codex-security@sha256:a90bc3bf8b67ae1c1b046d7987bbfc0ed44dc869b938a393204ec62b5cce65fc']);
+  assert.equal(byId('security.image').fixInWindow, true, 'an install: never from the dashboard');
+  const ui = fakeUi();
+  byId('security.image').fix(noImg.ctx, ui);
+  assert.deepEqual(ui.ran, ['docker pull ghcr.io/openai/codex-security@sha256:a90bc3bf8b67ae1c1b046d7987bbfc0ed44dc869b938a393204ec62b5cce65fc']);
+  // The sign-in: its volume's file names, never their content
+  const inOk = await check('security.login', { config: SEC_ON, commands: { 'docker *': fakeDocker() } });
+  assert.equal(inOk.status, 'ok');
+  assert.ok(!inOk.ctx.calls.some((c) => /\bcat\b|auth\.json/.test(c)), 'nothing reads the sign-in');
+  const out = await check('security.login', { config: SEC_ON, commands: { 'docker *': fakeDocker({ signedIn: false }) } });
+  assert.deepEqual([out.status, out.steps[0].command], ['fail', 'nextlevel security login']);
+});
+
+test("security.probe and security.daybreak: Codex's sandbox inside the scanner, kept for the image; Daybreak Blue from its model list (docs/CHECKS.md)", async () => {
+  const ok = await check('security.probe', { config: SEC_ON, commands: { 'docker *': fakeDocker() } });
+  assert.equal(ok.status, 'ok', ok.detail);
+  assert.deepEqual(Object.keys(ok.ctx.cacheData['security.probes']), ['sha256:a90bc3bf8b67ae1c1b046d7987bbfc0ed44dc869b938a393204ec62b5cce65fc'], 'kept for the image digest');
+  const probeRun = ok.ctx.calls.find((c) => c.includes(' sandbox ') && !c.includes('/usr/bin/true'));
+  assert.match(probeRun, /nextlevel-sec-probe-/, 'against a throwaway sign-in volume, never the real one');
+  assert.doesNotMatch(probeRun, /nextlevel-sec-login-/);
+  const leaky = await check('security.probe', { config: SEC_ON, commands: { 'docker *': fakeDocker({ probe: 'login-readable\nlogin-listable\nauthfile-readable\nnet-open' }) } });
+  assert.deepEqual([leaky.status, leaky.severity], ['fail', 'error']);
+  assert.match(leaky.detail, /answered login-readable, login-listable, authfile-readable, net-open .*: no scan runs with this scanner/);
+  const nested = await check('security.probe', { config: SEC_ON, commands: { 'docker *': fakeDocker({ nested: false }) } });
+  assert.match(nested.detail, /Codex's sandbox can't start in the scanner \(nested namespaces/);
+  // Daybreak
+  const works = await check('security.daybreak', { config: SEC_ON, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([works.status, works.detail], ['ok', 'Daybreak Blue works on gpt-6-sol']);
+  const standardOnly = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', model: 'gpt-6-astra', daybreak: true } } }, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([standardOnly.status, standardOnly.severity], ['fail', 'error']);
+  assert.match(standardOnly.detail, /gpt-6-astra doesn't take Daybreak Blue \(standard\)/);
+  const red = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', model: 'gpt-red', daybreak: true } } }, commands: { 'docker *': fakeDocker() } });
+  assert.match(red.detail, /gpt-red doesn't take Daybreak Blue \(daybreak_red\)/, 'never Red');
+  const quiet = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', model: 'gpt-quiet', daybreak: true } } }, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([quiet.status, quiet.unconfirmed], ['ok', true]);
+  assert.match(quiet.detail, /^Daybreak unconfirmed on gpt-quiet/);
+  const pick = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', daybreak: true } } }, commands: { 'docker *': fakeDocker() } });
+  assert.equal(pick.pick, 'gpt-6-sol', 'no model: the first that takes Blue');
+  const standard = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', model: 'gpt-6-astra', daybreak: false } } }, commands: { 'docker *': fakeDocker() } });
+  assert.deepEqual([standard.status, standard.severity], ['fail', 'info']);
+  assert.match(standard.detail, /^standard safeguards on gpt-6-astra: OpenAI's cyber screening may block parts of a scan/);
+});
+
 test('every registered check is valid, has a unique id and a learnMore, and is covered above', () => {
   const ids = CHECKS.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length, 'ids are unique');

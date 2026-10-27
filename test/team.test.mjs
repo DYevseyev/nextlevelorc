@@ -142,6 +142,7 @@ test("the engine's own choice, as its files say: Codex's config.toml and model c
   assert.equal(secOn.model.key, 'roles.security.model');
   assert.ok(secOn.daybreak);
   assert.match(secOn.daybreakText, /^Daybreak Blue/);
+  assert.ok(secOn.notices.some((n) => /^The scanner's sign-in is kept in a Docker volume of its own: any program that can use Docker on this PC can read it./.test(n)), 'V8: said on its row');
   assert.ok(secOn.notes.some((n) => /Codex Security/.test(n)));
   assert.deepEqual(secOn.warnings, [], 'a scan never runs with engines.codex.args: no full-access warning');
   // FR-009: Codex as a worker or fallback worker on Windows is a warning on its card; the orchestrator on Codex isn't.
@@ -273,11 +274,19 @@ test('nextlevel team set security: on Codex with Daybreak, off again, and refuse
     assert.match(teamJson(p, ['set', 'worker', '--engine', 'codex', '--daybreak', 'on']).message, /--daybreak is the security engineer's/);
     assert.match(teamJson(p, ['set', 'security', '--engine', 'nothing']).message, /--engine must be codex, agy, claude, or off|--engine must be .*, or off/);
     assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing written');
+    // Turning it on checks its sign-in first: refused, naming the sign-in, which works while the role is off
+    const early = teamJson(p, ['set', 'security', '--engine', 'codex', '--effort', 'xhigh', '--daybreak', 'on']);
+    assert.equal(early.saved, false);
+    assert.match(early.message, /^Not saved: The security engineer's sign-in: not signed in yet/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing written');
+    const login = p.hub(['security', 'login']);
+    assert.equal(login.code, 0, login.out);
     const on = teamJson(p, ['set', 'security', '--engine', 'codex', '--effort', 'xhigh', '--daybreak', 'on']);
     assert.equal(on.saved, true, on.message);
-    assert.match(on.message, /^Saved\. Security engineer: Codex, effort xhigh, Daybreak Blue\. It applies to the next scan you start/);
+    // (no model given: the first Daybreak works on, from the scanner's own Codex, saved by name)
+    assert.match(on.message, /^Saved\. Security engineer: Codex, effort xhigh, Daybreak Blue, model gpt-6-sol \(the first the scanner's Codex lists for it\)\. It applies to the next scan you start/);
     assert.ok(!on.results.some((r) => r.id === 'codex.model'), "the model check of the roles in use doesn't see its model");
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).roles.security, { engine: 'codex', model: '', effort: 'xhigh', profile: '', daybreak: true });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).roles.security, { engine: 'codex', model: 'gpt-6-sol', effort: 'xhigh', profile: '', daybreak: true });
     const row = teamJson(p, []).rows.find((r) => r.key === 'security');
     assert.ok(row.daybreak && !row.none);
     const offAgain = teamJson(p, ['set', 'security', '--engine', 'off']);
