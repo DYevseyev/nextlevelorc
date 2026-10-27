@@ -67,6 +67,15 @@ test('each engine: writes and commands aimed elsewhere, relative paths that leav
     ['/tmp/x/proj/stray.txt'],
   );
   assert.match(outsideWords(Array.from({ length: 7 }, (_, i) => ({ kind: 'file', what: `/f${i}` }))), /^wrote \/f0; .*wrote \/f4; and 2 more$/);
+  // A command that names the security engineer's Docker volumes, on any engine, though it runs in the slot (KNOWN_ISSUES)
+  const sec = [
+    codex({ type: 'command_execution', command: 'docker run --rm -v nextlevel-sec-login-0123456789abcdef:/l alpine ls /l' }),
+    claude('Bash', { command: 'docker volume ls --filter name=NEXTLEVEL-SEC-' }),
+    agy('run_command', { CommandLine: 'docker ps' }),
+  ].join('\n');
+  const named = outsideSlot(sec, { slot });
+  assert.deepEqual(named.map((x) => x.kind), ['security', 'security']);
+  assert.match(outsideWords(named), /^ran `docker run .*` \(it names the security engineer's Docker volumes, where its sign-in is\); ran `docker volume ls/);
 });
 
 async function fakeNtfy() {

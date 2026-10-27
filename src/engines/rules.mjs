@@ -22,6 +22,11 @@ export const WORKER_DENY = [
   'scp',
 ];
 
+// Words a worker's command may not name anywhere in it (Claude Code's `Bash(*word*)`): the security engineer's Docker
+// volumes, whose sign-in volume anything that can run `docker` could mount (KNOWN_ISSUES). Only an extra layer, as the
+// rest; agy's deny-list isn't enforced (FR-003) and Codex has none: slotwatch flags such a command after the attempt.
+export const WORKER_DENY_NAMING = ['nextlevel-sec-'];
+
 // The orchestrator's git writes go through the hub on every engine (nextlevel commit, merge, cleanup):
 // Codex's sandbox can't write .git, and the hub keeps them in one lane, logged, next to the workers'.
 export const ORCHESTRATOR_DENY = [

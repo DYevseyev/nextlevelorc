@@ -153,15 +153,18 @@ export function outsideSlot(text, { slot, allowed = [], never = [] }) {
     if (r.carry) carried = aims.length ? base : end;
     if (cwdOut) aims.unshift(r.cwd);
     if (aims.length && !out.some((x) => x.kind === 'command' && x.what === r.command)) out.push({ kind: 'command', what: r.command, aims: aims.join(', ') });
+    // (a command naming the security engineer's Docker volumes: its sign-in is in one, KNOWN_ISSUES)
+    else if (NAMES_SECURITY.test(r.command.slice(0, 8192)) && !out.some((x) => x.what === r.command)) out.push({ kind: 'security', what: r.command });
   }
   return out;
 }
+const NAMES_SECURITY = /nextlevel-sec-/i;
 
 // In one line, for the card, the phone and hub.log
 export const outsideWords = (found) =>
   found
     .slice(0, 5)
-    .map((x) => (x.kind === 'file' ? `wrote ${x.what}` : `ran \`${x.what}\` (in ${x.aims})`))
+    .map((x) => (x.kind === 'file' ? `wrote ${x.what}` : x.kind === 'security' ? `ran \`${x.what}\` (it names the security engineer's Docker volumes, where its sign-in is)` : `ran \`${x.what}\` (in ${x.aims})`))
     .join('; ') + (found.length > 5 ? `; and ${found.length - 5} more` : '');
 
 // A path or command line cut for the card, the phone and hub.log (after redaction: a value cut in two isn't found)
