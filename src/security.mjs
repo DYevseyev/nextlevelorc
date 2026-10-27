@@ -9,7 +9,6 @@
 // approved policy read-only, three volumes the scanner alone owns, and nothing else of the PC. Its findings count only
 // when the scanner's seal checks out and their copy matches the hub's record (lib/findings.mjs). A scan is not a job: it
 // is never in queue/ or jobs/, and its end starts no autopilot round.
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +16,7 @@ import { commandArgs } from './lib/commands.mjs';
 import { securityProfile } from './lib/config.mjs';
 import { countsText, readCoverage, readFindings, sealProblem, sha256 } from './lib/findings.mjs';
 import { guardDir, projectKey } from './lib/guard.mjs';
-import { resolveBin, runQuiet } from './lib/proc.mjs';
+import { resolveBin, runQuiet, spawnDirect } from './lib/proc.mjs';
 import { processStartSync } from './lib/proctree.mjs';
 import { DIGEST, REVISION, SECCOMP_FILE, VERSION, imageRef, seccompProblem } from './lib/securityimage.mjs';
 import { apiPortOpen, apiPortWords, copyOut, daybreakFor, accessPrograms, dockerFacts, dockerSettingsText, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
@@ -51,7 +50,7 @@ const dockerEnv = (envKeys = []) => {
   for (const k of envKeys) delete env[k];
   return env;
 };
-const dockerRunner = (envKeys) => (args, { timeoutMs = 60_000 } = {}) => runQuiet('docker', args, { timeoutMs, env: dockerEnv(envKeys) });
+const dockerRunner = (envKeys) => (args, { timeoutMs = 60_000 } = {}) => runQuiet('docker', args, { timeoutMs, env: dockerEnv(envKeys), direct: true });
 
 // ---------- the owner's commands ----------
 export async function cmdSecurity(argv, ctx) {
@@ -130,7 +129,7 @@ async function login(a, { root, config, envKeys }) {
     console.log("Sign in to Codex Security for the security engineer: open the page below in your browser and enter the code. nextlevel keeps none of it; the sign-in stays in the scanner's own Docker volume.");
     const bin = resolveBin('docker');
     const code = await new Promise((resolve) => {
-      const child = spawn(bin.file, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys), windowsHide: false }); // (the owner's own window: the device code shows there)
+      const child = spawnDirect(bin, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys), windowsHide: false }); // (the owner's own window: the device code shows there)
       child.on('exit', (c) => resolve(c ?? 1));
       child.on('error', () => resolve(1));
     });
@@ -399,12 +398,12 @@ function runContainer(args, { id, logFile, limitMs, stopAsked, envKeys }) {
   return new Promise((resolve) => {
     const bin = resolveBin('docker');
     const out = fs.openSync(logFile, 'a');
-    const child = spawn(bin.file, args, { stdio: ['ignore', out, out], env: dockerEnv(envKeys), windowsHide: true });
+    const child = spawnDirect(bin, args, { stdio: ['ignore', out, out], env: dockerEnv(envKeys), windowsHide: true });
     let stopped = '';
     const stop = (why) => {
       if (stopped) return;
       stopped = why;
-      runQuiet('docker', ['stop', '--time', '20', containerName(id)], { timeoutMs: 60_000, env: dockerEnv(envKeys) });
+      runQuiet('docker', ['stop', '--time', '20', containerName(id)], { timeoutMs: 60_000, env: dockerEnv(envKeys), direct: true });
     };
     const timer = setInterval(() => {
       if (stopAsked()) stop('stopped by the owner');

@@ -68,6 +68,15 @@ test("the console with no window (FR-013): Windows' CREATE_NO_WINDOW and the con
   assert.deepEqual(hits, []);
 });
 
+test("the security engineer's docker lines start without cmd.exe: a Go template's and the probe's quotes reach docker whole", () => {
+  const src = path.join(path.dirname(BIN), '..', 'src');
+  for (const file of ['security.mjs', path.join('lib', 'securityrun.mjs'), path.join('checks', 'security.mjs')]) {
+    const c = fs.readFileSync(path.join(src, file), 'utf8');
+    for (const call of c.match(/(runQuiet|ctx\.run)\('docker'[^\n]*/g) || []) assert.match(call, /direct: true/, `${file}: ${call}`);
+    assert.doesNotMatch(c, /\bspawn\(bin\.file/, `${file} starts docker through spawnDirect`);
+  }
+});
+
 test('a console with no window that didn\'t start is remembered for this PC for a day, then tried again (FR-010)', () => {
   const box = makeSandbox();
   const prev = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };

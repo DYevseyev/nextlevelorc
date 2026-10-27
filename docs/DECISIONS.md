@@ -2027,3 +2027,8 @@ One entry each: date, decision, why, alternatives.
   today. A Claude Code worker gets a deny rule for commands naming `nextlevel-sec-` (Claude Code's wildcard rules are
   documented; agy's deny-list isn't enforced and a new rule there would fail every existing `agy.deny-list` check), and
   every worker's log is read for one after its attempt.
+- 2026-10-27 — **The security engineer's docker lines start without cmd.exe.** They carry quotes (a Go template in
+  `docker volume inspect --format`, the probe's script, `approval_policy="never"`), which cmd.exe's line can't pass
+  whole, and Node refuses to spawn a `.cmd` without a shell (`spawn EINVAL`). Docker Desktop's `docker` is an `.exe`;
+  a `.cmd` (the tests' stub, or a wrapper) has its program started directly, as the workers' engines are (FR-013):
+  `runQuiet(..., { direct: true })` and `spawnDirect`. The first Windows run of PR #8 found it.

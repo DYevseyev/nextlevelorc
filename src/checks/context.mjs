@@ -11,7 +11,7 @@
 //   nodeVersion        the Node.js running nextlevel
 //   config, configInfo nextlevel.json merged over the defaults; { exists, file, warnings, error }
 //   stateDir           the project's .nextlevel/ folder
-//   run(cmd, args, { timeoutMs, cwd, input, env, cacheMs })  -> { ok, code, missing, timedOut, out }
+//   run(cmd, args, { timeoutMs, cwd, input, env, cacheMs, direct })  -> { ok, code, missing, timedOut, out }
 //                      env: a whole environment (a profile's account: engines/index.mjs profileEnv). cacheMs: a slow
 //                      answer that says yes is kept that long between runs (lib/proc.mjs runCached), unless `fresh`
 //   runConsole(cmd, args, { timeoutMs, cwd, env, direct })   the same in a real console with no window on Windows (agy's
@@ -69,12 +69,12 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     stateDir,
     // The same command twice in one doctor run (agy models, codex --version) is run once.
     fresh: false,
-    run(cmd, args = [], { timeoutMs = 20000, cwd: dir = root || cwd, input, env, fresh = false, cacheMs = 0 } = {}) {
+    run(cmd, args = [], { timeoutMs = 20000, cwd: dir = root || cwd, input, env, fresh = false, cacheMs = 0, direct = false } = {}) {
       // the same command for another account is another command
       const differs = env ? [...new Set([...Object.keys(env), ...Object.keys(process.env)])].filter((k) => env[k] !== process.env[k]).sort().map((k) => [k, env[k] ?? null]) : [];
       const key = JSON.stringify([cmd, args, dir, input, differs]);
       if (!fresh && memo.has(key)) return memo.get(key);
-      const opts = { timeoutMs, cwd: dir, input, ...(env ? { env } : {}) };
+      const opts = { timeoutMs, cwd: dir, input, direct, ...(env ? { env } : {}) };
       const r = cacheMs ? runCached(cmd, args, { ...opts, cacheMs, fresh: ctx.fresh }) : runQuiet(cmd, args, opts);
       memo.set(key, r);
       return r;

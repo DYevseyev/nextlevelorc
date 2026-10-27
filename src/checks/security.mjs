@@ -11,7 +11,7 @@ import { accountKey, volumes } from '../lib/securityspec.mjs';
 import { fail, inProject, pass, step } from './lib.mjs';
 
 const off = (ctx) => (ctx.root && securityProfile(ctx.config) ? null : 'the security engineer is off');
-const docker = (ctx) => (args, opts) => ctx.run('docker', args, { cwd: ctx.root || ctx.cwd, ...opts });
+const docker = (ctx) => (args, opts) => ctx.run('docker', args, { cwd: ctx.root || ctx.cwd, direct: true, ...opts });
 // Docker Desktop's settings, read for one key (never shown): Windows only
 const settingsText = (ctx) => dockerSettingsText({ platform: ctx.platform, env: ctx.env, read: ctx.read, join: ctx.path.join });
 const TCP_STEP = 'Docker Desktop: Settings, General: turn off "Expose daemon on tcp://localhost:2375 without TLS", then Apply';
