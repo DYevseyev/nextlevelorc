@@ -35,7 +35,9 @@ export const testerConfigCheck = {
   run(ctx) {
     const t = ctx.config.tester;
     const envs = Object.entries(t.environments || {});
-    const kept = personasOf(vaultFromText(ctx.read(vaultFile(ctx.root, ctx.home)) ?? ''));
+    // (the vault's file, joined the way this PC's paths are: the fake PC in the tests is POSIX on Windows too)
+    const file = ctx.path.join(ctx.home, '.nextlevel', 'vault', vaultFile(ctx.root).split(/[\\/]/).pop());
+    const kept = personasOf(vaultFromText(ctx.read(file) ?? ''));
     // which personas each environment needs: the ones the plans name, on the environments each plan runs on
     const need = new Map(envs.map(([name]) => [name, new Set()]));
     for (const { text } of plansOf(ctx)) {
