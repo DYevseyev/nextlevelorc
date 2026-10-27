@@ -20,7 +20,16 @@ export const CONFIG_FILE = 'nextlevel.json';
 export const CONFIG_VERSION = 1;
 export const ENGINES = ENGINE_NAMES;
 export const ROLES = ['orchestrator', 'worker'];
-export const ALL_ROLES = [...ROLES, 'guide', 'assistant']; // the build team's roles, the setup guide and the assistant (Ask)
+export const ALL_ROLES = [...ROLES, 'guide', 'assistant', 'security']; // the build team's roles, the setup guide, the assistant (Ask) and the security engineer
+// The security engineer (docs/design/security-engineer.md): off until the owner gives it an engine, and then only on
+// these. Never Antigravity (nothing keeps it read-only or sandboxed, and this role never runs with full access); Claude
+// Code comes later. It has no fallback, and it is kept out of profilesInUse (securityProfile).
+export const SECURITY_ENGINES = ['codex'];
+const NOT_SECURITY = {
+  agy: 'nothing keeps Antigravity read-only or sandboxed, and this role never runs with full access',
+  claude: 'Claude Code comes in a later version of this role',
+};
+export const notSecurity = (engine) => NOT_SECURITY[engine] || 'it has no sandboxed scan';
 // The assistant answers the owner's questions read-only (src/ask.mjs): only engines that can be run read-only by
 // construction may take it. Its automatic choice is a light model on the first of these the roles already use.
 export const ASSISTANT_ENGINES = ['claude', 'codex'];
@@ -54,6 +63,8 @@ export function defaults(name = 'project') {
       worker: { engine: 'agy', model: '', effort: '', profile: '', fallback: 'codex', second: null },
       guide: { engine: '', model: '', effort: '', profile: '' }, // no engine: the orchestrator's
       assistant: { engine: '', model: '', effort: '', profile: '' }, // no engine: automatic (a light model, ASSISTANT_ENGINES)
+      // no engine: off. daybreak: the scans run with OpenAI's Daybreak Blue (the owner's cyber access program)
+      security: { engine: '', model: '', effort: '', profile: '', daybreak: false },
     },
     profiles: {},
     // What every profile of an engine gets (src/engines/<name>.mjs says why). workerArgs: what every worker task on that
@@ -67,6 +78,8 @@ export function defaults(name = 'project') {
     // name, and whether they get the owner's skills (with plugins; on agy also rules) and hooks. None by default.
     workers: { slots: 2, taskTimeoutMin: 60, killGraceMin: 5, window: 'hidden', addons: { mcpServers: [], skills: false, hooks: false } },
     checks: { timeoutMin: 30 },
+    // The security engineer's scans: the longest a scan and a deep scan may run, in minutes (the hub stops it then)
+    security: { scanMinutes: 90, deepScanMinutes: 240 },
     // Files the agents' and the owner's tools load outside any sandbox: a change to one waits for the owner's approval
     // on the dashboard (lib/protect.mjs has the built-in list). "add" and "remove" change that list for this project.
     protected: { add: [], remove: [] },
@@ -203,7 +216,8 @@ function applyEnv(cfg, env) {
   if ((x = v('NEXTLEVEL_AUTOPILOT')) !== undefined) cfg.hub.autopilot = x.trim() === '1' || /^true$/i.test(x.trim());
   for (const engine of LEGACY_ENGINES) {
     const up = engine.toUpperCase();
-    if ((x = v(null, `${up}_MODEL`)) !== undefined) for (const role of Object.values(cfg.roles)) if (!role.profile && role.engine === engine) role.model = x.trim();
+    // (never the security engineer's: its model is the one its Daybreak check passed)
+    if ((x = v(null, `${up}_MODEL`)) !== undefined) for (const [key, role] of Object.entries(cfg.roles)) if (key !== 'security' && !role.profile && role.engine === engine) role.model = x.trim();
     if ((x = v(null, `${up}_ARGS`)) !== undefined) cfg.engines[engine].args = words(x);
   }
   if ((x = v(null, 'NTFY_SERVER')) !== undefined) cfg.notifications.server = x.trim();
@@ -244,7 +258,11 @@ function validate(cfg, root, problems) {
   for (const [role, r] of Object.entries(cfg.roles)) {
     if (r.profile) {
       if (!Object.hasOwn(profiles, r.profile)) err(`"roles.${role}.profile" is "${r.profile}", which "profiles" doesn't have`);
-    } else if (!ENGINES.includes(r.engine) && !(['guide', 'assistant'].includes(role) && !r.engine)) err(`"roles.${role}.engine" must be ${orList(ENGINES)}, not "${r.engine}"`);
+    } else if (!ENGINES.includes(r.engine) && !(['guide', 'assistant', 'security'].includes(role) && !r.engine)) err(`"roles.${role}.engine" must be ${orList(ENGINES)}, not "${r.engine}"`);
+    if (role === 'security') {
+      const engine = r.profile ? profiles[r.profile]?.engine : r.engine;
+      if (engine && !SECURITY_ENGINES.includes(engine)) err(`"roles.security" can't run on ${engine}: ${notSecurity(engine)}. Use ${orList(SECURITY_ENGINES)}, or leave the engine empty to keep the role off`);
+    }
     // The assistant is read-only by construction: only an engine that can be run so (src/ask.mjs), or Antigravity in a
     // throwaway copy of the project (lib/askcopy.mjs), which starts only with a passing lock test: that is checked where a
     // question starts, never here (an invalid file would stop the hub and the orchestrator's commands)
@@ -279,6 +297,7 @@ function validate(cfg, root, problems) {
   if (!WINDOW_MODES.includes(w.window)) err(`"workers.window" must be ${orList(WINDOW_MODES)}, not "${w.window}"`);
   for (const n of w.addons.mcpServers) if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(n)) err(`"workers.addons.mcpServers" names MCP servers as the engine's own config names them, like "github": "${n}" isn't one`);
   if (!(cfg.checks.timeoutMin > 0)) err('"checks.timeoutMin" must be more than 0');
+  for (const k of ['scanMinutes', 'deepScanMinutes']) if (!(cfg.security[k] >= 5 && cfg.security[k] <= 1440)) err(`"security.${k}" must be a number of minutes from 5 to 1440`);
   if (!Number.isInteger(cfg.hub.reportHour) || cfg.hub.reportHour < 0 || cfg.hub.reportHour > 23) err('"hub.reportHour" must be a whole number from 0 to 23');
   const rounds = cfg.hub.rounds;
   if (!Number.isInteger(rounds.brake) || rounds.brake < 1 || rounds.brake > 20) err('"hub.rounds.brake" must be a whole number from 1 to 20 (the rounds that may start after the last real event; default 3)');
@@ -397,6 +416,7 @@ export function roleProfile(cfg, role, { fallback = false, second = false, quick
   if (r.profile) return findProfile(cfg, r.profile);
   if (role === 'guide' && !r.engine) return roleProfile(cfg, 'orchestrator');
   if (role === 'assistant' && !r.engine) return quick ? assistantAuto(cfg) : advisorAuto(cfg, { available });
+  if (role === 'security' && !r.engine) return null; // off
   return { name: '', engine: r.engine, account: '', model: r.model || '', effort: r.effort || '' };
 }
 
@@ -439,6 +459,7 @@ export function settingKeys(cfg, role, { fallback = false, second = false } = {}
   if (r.profile) return named(r.profile);
   if (role === 'guide' && !r.engine) return settingKeys(cfg, 'orchestrator');
   if (role === 'assistant' && !r.engine) return { model: '', effort: '' }; // automatic: nothing pinned
+  if (role === 'security' && !r.engine && !r.profile) return { model: '', effort: '' }; // off
   return { model: `roles.${role}.model`, effort: `roles.${role}.effort` };
 }
 
@@ -456,6 +477,15 @@ export function profilesInUse(cfg) {
   const fallbacks = ROLES.map((role) => entry(role, true)).filter(Boolean);
   const extra = ['guide', 'assistant'].filter((role) => cfg.roles[role]?.engine || cfg.roles[role]?.profile).map((role) => entry(role, false));
   return [...own, ...second, ...fallbacks, ...extra];
+}
+
+// The security engineer's profile, with its Daybreak setting, or null while the role is off. Never in profilesInUse:
+// there its model would be tried without Daybreak before every round, the advisor's automatic choice would count its
+// engine, and the full-access check would read arguments a scan never uses (docs/design/security-engineer.md).
+export function securityProfile(cfg) {
+  const r = cfg.roles.security;
+  const p = r && roleProfile(cfg, 'security');
+  return p && p.engine ? { ...p, role: 'security', daybreak: r.daybreak === true } : null;
 }
 
 // How the roles use an engine: 'role' (the build team runs on it), 'fallback' (only a fallback, the second worker or the
@@ -545,7 +575,8 @@ export function withRole(raw, role, change, { fallback = false, second = false }
   const next = change.profile
     ? { profile: clean(change.profile) }
     : { engine: clean(change.engine), model: clean(change.model), effort: clean(change.effort), profile: '' };
-  // (the role's fallback and second worker stay as they were)
-  out.roles[role] = { ...next, ...(fb === undefined ? {} : { fallback: fb }), ...(sec === undefined ? {} : { second: sec }) };
+  // (the role's fallback and second worker stay as they were; the security engineer's Daybreak unless the change sets it)
+  const daybreak = role === 'security' ? { daybreak: typeof change.daybreak === 'boolean' ? change.daybreak : cur.daybreak === true } : {};
+  out.roles[role] = { ...next, ...daybreak, ...(fb === undefined ? {} : { fallback: fb }), ...(sec === undefined ? {} : { second: sec }) };
   return out;
 }

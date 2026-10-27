@@ -235,8 +235,8 @@ against 0.157.1 (FR-011, FR-013).
   So the orchestrator and Codex workers can read what the owner's user can read (another project's `.env`,
   `~\.codex\auth.json`). Codex has permission profiles (`default_permissions`, `permissions.<name>.filesystem` with
   `{ "." = "deny" }` for a path: Codex Security's own scan uses them, `":root" = "read"` on Windows since the elevated
-  sandbox needs it), which nextlevel doesn't use yet; whether a deny works on Windows isn't measured (0.164.0 documents
-  no spelling for it). A wall needs another user or a container (ROADMAP, "Safety: from bars to walls").
+  sandbox needs it), which nextlevel doesn't use yet; 0.164.0 doesn't enforce a permission-profile deny on Windows, elevated or not
+  (the security engineer's Step 0b, B5: holds for the orchestrator and Codex workers). A wall needs another user or a container (ROADMAP, "Safety: from bars to walls").
 - **Not every add-on switches off per run (FR-023).** On 0.164.0 `-c mcp_servers.<name>.enabled=false` for the Codex
   app's own `codex_app` and `cua_repl` fails the run at config load (`Error loading config.toml: invalid transport in
   mcp_servers.codex_app`), so nextlevel can't keep them from a run; `codex debug models` prints JSON already (its
@@ -809,6 +809,40 @@ A round starts only because something happened (`src/lib/rounds.mjs`; DECISIONS 
 - **A billing lock may stop self-hosted jobs too.** GitHub's docs don't say whether an account whose Actions spending is
   blocked still runs jobs on self-hosted runners, and community reports say they stayed queued. A runner on the PC saves
   the minutes that lead to a lock; it may not get past one (the design's sources).
+
+## The security engineer's scanner (OpenAI's Codex Security container)
+Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), with the image nextlevel pins
+(`src/lib/securityimage.mjs`, by digest).
+- **Inside the container, Codex's sandbox holds.** The model's commands run in Codex's own sandbox there (bubblewrap
+  with the vendored seccomp profile): the sign-in folder is denied and can't be listed, the planted `auth.json` can't be
+  read, and the network is closed. The doctor's `security.probe` asks that again for every new image, model-free, and
+  no scan runs with an image whose probe gave another answer.
+- **The scanner's own process keeps a network path to the PC.** `--add-host` points `host.docker.internal` and
+  `gateway.docker.internal` nowhere, but the host stays reachable at its address (192.168.65.254 in 0b): a name
+  change, not a wall. Every program on the PC listening on 127.0.0.1 is reachable from the scanner's process (OpenAI's
+  code, not the model's commands), not only the dashboard, which needs its session key (FR-017 part 2A). Web search is
+  off for the scan (`--codex web_search="disabled"`, checked by the scanner's dry run). An egress proxy comes later.
+- **Docker's access reads the sign-in.** Anything on the PC that can run `docker` can mount `nextlevel-sec-login-*` and
+  read the scanner's ChatGPT sign-in. That includes a Codex worker out of its sandbox, which has Docker (workers' part
+  A). It is no worse than today's reads (FR-023: a worker out of the sandbox reads `~\.codex\auth.json`), and no wall.
+  Extra layers, by pattern and after the fact: a Claude Code worker is told not to run a command that names
+  `nextlevel-sec-` (`WORKER_DENY_NAMING`); every worker's log is read for one (`src/lib/slotwatch.mjs`: a Home card,
+  as for writes outside the slot). The Team row says so.
+- **Daybreak Blue is asked for, not confirmed.** The scanner accepts `--cyber-access-program daybreak_blue` with a
+  ChatGPT sign-in, but nothing in its output says Blue was used. The doctor's `security.daybreak` passes on what
+  `codex debug models` lists for the model (`available_access_programs`), and a scan's record says "asked for, not
+  confirmed by the scanner".
+- **A scan costs.** A 41-file scan used about 6% of a week's allowance (3,444,876 tokens, mostly cache reads); a larger
+  project uses more. Each scan's tokens go into the usage ledger from the scanner's own TOKENS line.
+- **A repository written to fool the scanner can still hide a finding.** Its steering files are set aside before a scan
+  (`AGENTS.md`, `.claude/`, `.codex/`, `SECURITY.md` and the rest the guard protects), and the output is read through
+  its seal (the manifest's hashes) and shape checks, but what the model concludes from the code itself is its own: bars,
+  not walls.
+- **What an agent running as the owner can still do here:** ask for a scan (`nextlevel security scan` and the hub's
+  own `_scan` refuse in an agent's session, which is no wall: FR-017), including a deep one that spends the plan, or
+  write a request file into the guard's folder, which the hub takes as the owner's ask; change `.nextlevel/security/`
+  (the findings' hashes are kept in the guard's folder, outside the project, so a changed file reads as untrusted); hold
+  the one-scan lease. Each is a bar, not a wall.
 
 ## What the guard doesn't cover (yet)
 The guard (`src/lib/guard.mjs`, `docs/CHECKS.md#guardheld`) holds changes to protected files that go through git

@@ -19,7 +19,7 @@
 //   alone, so the log loses nothing. Its interactive window's tokens aren't counted.
 import { firstLine } from '../checks/lib.mjs';
 import { accountDir, commandEvent, commandOutcome, count, inFolder, jsonLine, lastJsonWith, lastLines, oneLine, readJsonText } from './util.mjs';
-import { ASSISTANT_DENY_TOOLS, ASSISTANT_LOOK, ORCHESTRATOR_ALLOW, ORCHESTRATOR_DENY, WORKER_DENY } from './rules.mjs';
+import { ASSISTANT_DENY_TOOLS, ASSISTANT_LOOK, ORCHESTRATOR_ALLOW, ORCHESTRATOR_DENY, WORKER_DENY, WORKER_DENY_NAMING } from './rules.mjs';
 
 // Claude Code's permission rules for shell commands: "Bash(git push:*)" matches git push and anything after it.
 const bash = (commands) => commands.map((c) => `Bash(${c}:*)`).join(',');
@@ -196,7 +196,7 @@ function permissions(role, mode) {
     // Unattended in a slot with no secrets and no way to push: edits in the slot, any command but these. No Monitor:
     // a session ends when the model ends its turn, so a wait for what a background watcher reports never comes back
     // (FR-020; workerEnv turns the background commands off)
-    return ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash,WebFetch,WebSearch', '--disallowedTools', `${bash(WORKER_DENY)},Monitor`];
+    return ['--permission-mode', 'acceptEdits', '--allowedTools', 'Bash,WebFetch,WebSearch', '--disallowedTools', `${bash(WORKER_DENY)},${WORKER_DENY_NAMING.map((w) => `Bash(*${w}*)`).join(',')},Monitor`];
   }
   if (role === 'orchestrator') {
     // The hub's commands and git that only reads, without asking; git writes never (the hub does them)

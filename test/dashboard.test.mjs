@@ -789,7 +789,7 @@ test('Home and Team (M9): what needs the owner with the next action, autopilot w
     const first = await live.until('build', (b) => b.ok && b.needs);
     assert.equal(fs.realpathSync.native(first.tool.root).toLowerCase(), fs.realpathSync.native(REPO).toLowerCase(), "the tool's location is on the page");
     assert.match(first.tool.installCommand, /install\.ps1/);
-    assert.deepEqual(first.team.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant']);
+    assert.deepEqual(first.team.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant', 'security']);
     assert.match(first.team[0].model.text, /^gpt-6 \(Codex's own, from ~[\\/]\.codex[\\/]config\.toml\)$/);
     assert.deepEqual(first.alerts.map((a) => [a.id, a.kind]), [['M9-04-gateway', 'attempts']]);
     assert.equal(first.usage.rounds, 0);
@@ -909,7 +909,7 @@ test("worker.log says which attempt it is, and never shows the attempt before un
 
     // Home: the switch with why, and the day per role (the finished attempt, and the one running now) and engine
     assert.deepEqual(b.switches.map((x) => [x.kind, x.id, x.attempt, x.engineTitle, x.roleEngineTitle, x.why]), [['task', 'M8-06-fail', 2, 'Codex', 'Antigravity', 'retry with --engine codex']]);
-    assert.deepEqual(b.usage.roles.map((r) => r.key), ['autopilot', 'orchestrator', 'worker', 'guide', 'assistant']);
+    assert.deepEqual(b.usage.roles.map((r) => r.key), ['autopilot', 'orchestrator', 'worker', 'guide', 'assistant', 'security']);
     const workers = b.usage.roles.find((r) => r.key === 'worker');
     assert.deepEqual([workers.count, workers.running], [2, 1]);
     assert.deepEqual(workers.engines.map((e) => [e.engine, e.count, e.tokensFrom]).sort(), [['agy', 1, 'its stream-json output'], ['codex', 1, 'its JSON output (codex exec --json)']]);

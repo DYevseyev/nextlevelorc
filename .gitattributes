@@ -20,3 +20,6 @@
 *.exe binary
 *.dmg binary
 *.AppImage binary
+
+# The security engineer's seccomp profile is pinned by its hash (src/lib/securityimage.mjs): never converted
+docker/codex-security-seccomp.json -text

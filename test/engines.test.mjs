@@ -149,7 +149,7 @@ test('headless and interactive arguments per engine and role', () => {
   assert.equal(w[w.indexOf('--allowedTools') + 1], 'Bash,WebFetch,WebSearch');
   const deny = w[w.indexOf('--disallowedTools') + 1].split(',');
   // (and no Monitor: a wait for what a background watcher reports never comes back to a session that ended, FR-020)
-  assert.deepEqual(deny, [...WORKER_DENY.map((c) => `Bash(${c}:*)`), 'Monitor']);
+  assert.deepEqual(deny, [...WORKER_DENY.map((c) => `Bash(${c}:*)`), 'Bash(*nextlevel-sec-*)', 'Monitor']); // (the security engineer's volumes, named anywhere)
   assert.ok(deny.includes('Bash(git push:*)') && deny.includes('Bash(gh:*)'));
   assert.equal(w.at(-1), '--verbose', "engines.claude.args come last");
   // The orchestrator: the hub's commands without asking, its own git writes never (the hub does them)

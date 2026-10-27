@@ -58,8 +58,23 @@ test("the console with no window (FR-013): Windows' CREATE_NO_WINDOW and the con
   // (FR-013): no source file starts conhost.exe, or passes the arguments that started it headless
   const src = path.join(path.dirname(BIN), '..', 'src');
   const code = (text) => text.split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
-  const hits = fs.readdirSync(src, { recursive: true }).filter((n) => n.endsWith('.mjs') && /conhost(\.exe)?['"`]|conhostPath|'--headless'/i.test(code(fs.readFileSync(path.join(src, n), 'utf8'))));
+  // (the security scanner's own --headless flag, an argument inside its Linux container, is no conhost's)
+  const HEADLESS_OK = new Set([path.join('lib', 'securityspec.mjs')]);
+  const hits = fs.readdirSync(src, { recursive: true }).filter((n) => {
+    if (!n.endsWith('.mjs')) return false;
+    const c = code(fs.readFileSync(path.join(src, n), 'utf8'));
+    return /conhost(\.exe)?['"`]|conhostPath/i.test(c) || (/['"`]--headless['"`]/i.test(c) && !HEADLESS_OK.has(n));
+  });
   assert.deepEqual(hits, []);
+});
+
+test("the security engineer's docker lines start without cmd.exe: a Go template's and the probe's quotes reach docker whole", () => {
+  const src = path.join(path.dirname(BIN), '..', 'src');
+  for (const file of ['security.mjs', path.join('lib', 'securityrun.mjs'), path.join('checks', 'security.mjs')]) {
+    const c = fs.readFileSync(path.join(src, file), 'utf8');
+    for (const call of c.match(/(runQuiet|ctx\.run)\('docker'[^\n]*/g) || []) assert.match(call, /direct: true/, `${file}: ${call}`);
+    assert.doesNotMatch(c, /\bspawn\(bin\.file/, `${file} starts docker through spawnDirect`);
+  }
 });
 
 test('a console with no window that didn\'t start is remembered for this PC for a day, then tried again (FR-010)', () => {

@@ -403,7 +403,7 @@ export default {
   workerLacks: codexWorkerLacks, // what a task's "Needs:" asks that a worker in its sandbox can't give (lib/needs.mjs)
   // FR-017: a role it runs without its sandbox (the assistant always gets its read-only one). Workers have their own
   // arguments (engines.codex.workerArgs, the Team page's switch), the other roles engines.codex.args.
-  fullAccess: (args, role) => (role !== 'assistant' && codexWritesGit(args) ? `Codex runs it without its sandbox (danger-full-access or --dangerously-bypass-approvals-and-sandbox in ${role === 'worker' ? "the workers' arguments" : 'engines.codex.args'})` : ''),
+  fullAccess: (args, role) => (role !== 'assistant' && role !== 'security' && codexWritesGit(args) ? `Codex runs it without its sandbox (danger-full-access or --dangerously-bypass-approvals-and-sandbox in ${role === 'worker' ? "the workers' arguments" : 'engines.codex.args'})` : ''),
   // A worker's session (headless, role worker: WORKER_ENV): the hub's variables reach its commands whatever the owner's
   // config.toml says of them (Codex's shell_environment_policy can leave out variables whose names have KEY, SECRET or
   // TOKEN: the push block's GH_TOKEN, GITHUB_TOKEN), and on Windows PowerShell may run npm's .ps1 shims (pnpm, npm, npx)
@@ -482,6 +482,7 @@ export default {
     worker: "Each task runs headless (codex exec) in its slot, with no window. In its sandbox it can't write git (the hub merges the base branch in before a retry and commits what it leaves), and on Windows it can't reach Docker or install packages with pnpm. The Team page can take Codex workers out of its sandbox, like your other workers: then Docker, pnpm and git work.",
     guide: 'Opens Codex in a window of its own, in its sandbox: the doctor runs through the hub from there.',
     assistant: "Answers each question in a fresh codex exec in its read-only sandbox: it can't write or reach the network. Its tokens count in Today.",
+    security: "Scans the base branch's head in a checkout of its own with Codex Security, only when you start a scan: its commands run in Codex's sandbox with no network, no secrets and none of your add-ons. Uses the ChatGPT plan it is signed into, as the orchestrator does.",
   },
   knownIssues: [
     "codex exec's sandbox keeps .git read-only: git writes go through the hub (nextlevel commit, merge, cleanup)",

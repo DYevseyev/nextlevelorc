@@ -11,7 +11,7 @@
 //   nodeVersion        the Node.js running nextlevel
 //   config, configInfo nextlevel.json merged over the defaults; { exists, file, warnings, error }
 //   stateDir           the project's .nextlevel/ folder
-//   run(cmd, args, { timeoutMs, cwd, input, env, cacheMs })  -> { ok, code, missing, timedOut, out }
+//   run(cmd, args, { timeoutMs, cwd, input, env, cacheMs, direct })  -> { ok, code, missing, timedOut, out }
 //                      env: a whole environment (a profile's account: engines/index.mjs profileEnv). cacheMs: a slow
 //                      answer that says yes is kept that long between runs (lib/proc.mjs runCached), unless `fresh`
 //   runConsole(cmd, args, { timeoutMs, cwd, env, direct })   the same in a real console with no window on Windows (agy's
@@ -20,6 +20,7 @@
 //   tmpDir             the system's temp folder (the model trial's folder is made there)
 //   fresh              ask everything again (doctor --fresh, the dashboard's Check again), kept answers or not
 //   which(cmd)         -> { file, all } | null
+//   tcpOpen(ports)     -> the first of these ports on 127.0.0.1 that answers, or 0 (lib/securityrun.mjs apiPortOpen)
 //   git(args, { cwd }) -> { ok, out, err }  (cwd defaults to root)
 //   read(file) -> text | null, exists(file), write(file, text), list(dir) -> names, copy(from, to)
 //   cache              get(id) / set(id, value): results worth keeping between runs (.nextlevel/check-cache.json)
@@ -42,6 +43,7 @@ import { readEnv } from '../lib/gitlock.mjs';
 import { recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
+import { apiPortOpen } from '../lib/securityrun.mjs';
 import { parseEnvFile } from '../notify.mjs';
 
 export function makeContext({ root = null, problem = '', config, configInfo, stateDir = null, hubAlive = () => false, cwd = process.cwd() } = {}) {
@@ -67,12 +69,12 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     stateDir,
     // The same command twice in one doctor run (agy models, codex --version) is run once.
     fresh: false,
-    run(cmd, args = [], { timeoutMs = 20000, cwd: dir = root || cwd, input, env, fresh = false, cacheMs = 0 } = {}) {
+    run(cmd, args = [], { timeoutMs = 20000, cwd: dir = root || cwd, input, env, fresh = false, cacheMs = 0, direct = false } = {}) {
       // the same command for another account is another command
       const differs = env ? [...new Set([...Object.keys(env), ...Object.keys(process.env)])].filter((k) => env[k] !== process.env[k]).sort().map((k) => [k, env[k] ?? null]) : [];
       const key = JSON.stringify([cmd, args, dir, input, differs]);
       if (!fresh && memo.has(key)) return memo.get(key);
-      const opts = { timeoutMs, cwd: dir, input, ...(env ? { env } : {}) };
+      const opts = { timeoutMs, cwd: dir, input, direct, ...(env ? { env } : {}) };
       const r = cacheMs ? runCached(cmd, args, { ...opts, cacheMs, fresh: ctx.fresh }) : runQuiet(cmd, args, opts);
       memo.set(key, r);
       return r;
@@ -83,6 +85,7 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     },
     forget: () => memo.clear(), // after a fix changed something
     which: (cmd) => resolveBin(cmd),
+    tcpOpen: (ports) => apiPortOpen({ ports }),
     // Without git's optional locks: a check's `git status` never holds index.lock while the hub commits (lib/gitlock.mjs)
     git(args, { cwd: dir = root || cwd } = {}) {
       const r = spawnSync('git', args, { cwd: dir, env: readEnv(), encoding: 'utf8', windowsHide: true });

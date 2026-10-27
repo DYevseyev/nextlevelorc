@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import { parseAgyModels } from '../src/engines/agy.mjs';
 import { WORKER_ENV as CODEX_KEEP_ENV, parseCodexModels } from '../src/engines/codex.mjs';
 import { engine, sessionArgs } from '../src/engines/index.mjs';
-import { defaults, describeProfile, engineUse, loadConfig, profilesInUse, roleProfile, settingKeys, withRole } from '../src/lib/config.mjs';
+import { defaults, describeProfile, engineUse, loadConfig, profilesInUse, roleProfile, securityProfile, settingKeys, withRole } from '../src/lib/config.mjs';
 import { codexTokens, gist, ownerNeeds, taskAlerts, taskSentence, taskTitle } from '../src/lib/overview.mjs';
 import { inUse, teamView, windowView } from '../src/lib/team.mjs';
 import { REPO as REPO_ROOT, fileExists, makeProject, processesGone } from './helpers.mjs';
@@ -115,7 +115,7 @@ test("the engine's own choice, as its files say: Codex's config.toml and model c
 
   // The Team page's rows
   const rows = teamView(defaults('p'), where);
-  assert.deepEqual(rows.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant']);
+  assert.deepEqual(rows.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant', 'security']);
   assert.equal(rows[0].model.text, "gpt-6 (Codex's own, from ~/.codex/config.toml)");
   assert.equal(rows[1].effort.text, "high (from the model's name)");
   assert.equal(rows[1].effort.fixed, true, 'no Effort field: the level is in the model');
@@ -131,27 +131,40 @@ test("the engine's own choice, as its files say: Codex's config.toml and model c
   assert.match(windowView(defaults('p'), 'linux').text, /no window on this system/);
   assert.ok(rows[0].notes.some((n) => /ChatGPT plan/.test(n)));
   const withFb = teamView(configOf({ roles: { orchestrator: { engine: 'codex', fallback: 'claude' } } }).config, where);
-  assert.deepEqual(withFb.map((r) => r.key).slice(-2), ['orchestrator-fallback', 'assistant'], 'shown once there is one');
+  assert.deepEqual(withFb.map((r) => r.key).slice(-3), ['orchestrator-fallback', 'assistant', 'security'], 'shown once there is one');
+  // The security engineer: off by default; on Codex with Daybreak when the owner turns it on, never in profilesInUse
+  const sec = rows.find((r) => r.key === 'security');
+  assert.ok(sec.none && sec.off && !sec.daybreak);
+  assert.match(sec.text, /^off: turn it on/);
+  const secOn = teamView(configOf({ roles: { security: { engine: 'codex', model: 'gpt-6-sol', effort: 'xhigh', daybreak: true } } }).config, where).find((r) => r.key === 'security');
+  assert.equal(secOn.engine, 'codex');
+  assert.equal(secOn.model.set, 'gpt-6-sol');
+  assert.equal(secOn.model.key, 'roles.security.model');
+  assert.ok(secOn.daybreak);
+  assert.match(secOn.daybreakText, /^Daybreak Blue/);
+  assert.ok(secOn.notices.some((n) => /^The scanner's sign-in is kept in a Docker volume of its own: any program that can use Docker on this PC can read it./.test(n)), 'V8: said on its row');
+  assert.ok(secOn.notes.some((n) => /Codex Security/.test(n)));
+  assert.deepEqual(secOn.warnings, [], 'a scan never runs with engines.codex.args: no full-access warning');
   // FR-009: Codex as a worker or fallback worker on Windows is a warning on its card; the orchestrator on Codex isn't.
   // FR-017: a role that runs with no permission check has the owner's full access: a warning on a role in the main
   // checkout (the orchestrator...), a note on the workers (accepted by design: slots, the push block, Antigravity's
   // unattended mode).
-  assert.deepEqual(rows.map((r) => [r.warnings.length, r.notices.length]), [[0, 0], [0, 1], [0, 0], [0, 0], [0, 0], [0, 0]], 'on Linux: a note on the workers on Antigravity');
+  assert.deepEqual(rows.map((r) => [r.warnings.length, r.notices.length]), [[0, 0], [0, 1], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]], 'on Linux: a note on the workers on Antigravity');
   assert.match(rows[1].notices[0], /^Antigravity skips its permission checks for it \(--dangerously-skip-permissions in engines\.agy\.args, which it needs to run unattended\): it acts with your full access\. Accepted by design: a worker runs in a slot of its own/);
   const onWindows = teamView(defaults('p'), { ...where, platform: 'win32' });
-  assert.deepEqual(onWindows.map((r) => [r.key, r.warnings.length]), [['orchestrator', 0], ['worker', 0], ['worker-second', 0], ['worker-fallback', 1], ['guide', 0], ['assistant', 0]]);
+  assert.deepEqual(onWindows.map((r) => [r.key, r.warnings.length]), [['orchestrator', 0], ['worker', 0], ['worker-second', 0], ['worker-fallback', 1], ['guide', 0], ['assistant', 0], ['security', 0]]);
   assert.match(onWindows[3].warnings[0], /refused anything that starts Docker.*package installs \(pnpm install.*Turning its network on doesn't change that.*on the Team page/s);
   // Codex workers out of the sandbox (their own arguments): no warning, full access said as information; the orchestrator
   // on Codex keeps its sandbox and has nothing to say
   const out = configOf({ roles: { worker: { engine: 'codex' } }, engines: { codex: { workerArgs: ['--sandbox', 'danger-full-access', '-c', 'approval_policy=never'] } } }).config;
   const free = teamView(out, { ...where, platform: 'win32' });
-  assert.deepEqual(free.map((r) => [r.key, r.warnings.length, r.notices.length]), [['orchestrator', 0, 0], ['worker', 0, 1], ['worker-second', 0, 0], ['worker-fallback', 0, 1], ['guide', 0, 0], ['assistant', 0, 0]]);
+  assert.deepEqual(free.map((r) => [r.key, r.warnings.length, r.notices.length]), [['orchestrator', 0, 0], ['worker', 0, 1], ['worker-second', 0, 0], ['worker-fallback', 0, 1], ['guide', 0, 0], ['assistant', 0, 0], ['security', 0, 0]]);
   assert.match(free[1].notices[0], /^Codex runs it without its sandbox \(danger-full-access or --dangerously-bypass-approvals-and-sandbox in the workers' arguments\): it acts with your full access\. Accepted by design: a worker runs in a slot of its own, where git refuses its pushes \(FR-003\), and Codex's sandbox would keep it from Docker, pnpm and git/);
   const here = teamView(defaults('p'), { ...where, platform: undefined });
-  assert.deepEqual(here.map((r) => r.warnings.length), process.platform === 'win32' ? [0, 0, 0, 1, 0, 0] : [0, 0, 0, 0, 0, 0], "without a platform: this PC's");
+  assert.deepEqual(here.map((r) => r.warnings.length), process.platform === 'win32' ? [0, 0, 0, 1, 0, 0, 0] : [0, 0, 0, 0, 0, 0, 0], "without a platform: this PC's");
   // The orchestrator on Antigravity: a warning; the setup guide on it has none (it asks before it runs anything)
   const agyOrch = teamView(configOf({ roles: { orchestrator: { engine: 'agy' }, guide: { engine: 'agy' }, worker: { engine: 'claude' } } }).config, where);
-  assert.deepEqual(agyOrch.map((r) => [r.key, r.warnings.length, r.notices.length]), [['orchestrator', 1, 0], ['worker', 0, 0], ['worker-second', 0, 0], ['worker-fallback', 0, 0], ['guide', 0, 0], ['assistant', 0, 0]]);
+  assert.deepEqual(agyOrch.map((r) => [r.key, r.warnings.length, r.notices.length]), [['orchestrator', 1, 0], ['worker', 0, 0], ['worker-second', 0, 0], ['worker-fallback', 0, 0], ['guide', 0, 0], ['assistant', 0, 0], ['security', 0, 0]]);
   assert.match(agyOrch[0].warnings[0], /it acts with your full access in your main checkout and could push or deploy directly/);
 });
 
@@ -222,6 +235,70 @@ const teamJson = (p, args, opts) => {
   }
 };
 
+test('the security engineer: off by default, on Codex only, with its Daybreak setting, never a role in use', () => {
+  const off = configOf({}).config;
+  assert.deepEqual(off.roles.security, { engine: '', model: '', effort: '', profile: '', daybreak: false });
+  assert.deepEqual(off.security, { scanMinutes: 90, deepScanMinutes: 240 });
+  assert.equal(roleProfile(off, 'security'), null);
+  assert.equal(securityProfile(off), null);
+  assert.deepEqual(settingKeys(off, 'security'), { model: '', effort: '' });
+  // On: its profile, but never among the roles in use, so codex.model, autopilot's engine check and the advisor's
+  // automatic choice never see it
+  const only = configOf({ roles: { orchestrator: { engine: 'claude' }, worker: { engine: 'claude', fallback: '' }, security: { engine: 'codex', model: 'gpt-6-sol', effort: 'xhigh', daybreak: true } } }).config;
+  assert.deepEqual(securityProfile(only), { name: '', engine: 'codex', account: '', model: 'gpt-6-sol', effort: 'xhigh', role: 'security', daybreak: true });
+  assert.ok(!profilesInUse(only).some((p) => p.role === 'security'));
+  assert.equal(engineUse(only, 'codex'), null, 'only the security engineer on Codex: Codex is no role in use');
+  assert.equal(roleProfile(only, 'assistant').engine, 'claude', "the advisor's automatic choice doesn't count it");
+  // Never Antigravity or Claude Code, through a profile too
+  assert.throws(() => configOf({ roles: { security: { engine: 'agy' } } }), /"roles\.security" can't run on agy: nothing keeps Antigravity read-only or sandboxed/);
+  assert.throws(() => configOf({ profiles: { argon: { engine: 'agy' } }, roles: { security: { profile: 'argon' } } }), /"roles\.security" can't run on agy/);
+  assert.throws(() => configOf({ roles: { security: { engine: 'claude' } } }), /can't run on claude: Claude Code comes in a later version/);
+  assert.throws(() => configOf({ security: { scanMinutes: 0 } }), /"security\.scanMinutes" must be a number of minutes from 5 to 1440/);
+  // The old CODEX_MODEL never reaches it: its model is the one its Daybreak check passed
+  const legacy = loadConfig('/proj', { env: { CODEX_MODEL: 'gpt-old' }, raw: { version: 1, roles: { security: { engine: 'codex', model: 'gpt-6-sol' } } } }).config;
+  assert.equal(legacy.roles.orchestrator.model, 'gpt-old');
+  assert.equal(legacy.roles.security.model, 'gpt-6-sol');
+  // A change keeps Daybreak unless it sets it
+  assert.equal(withRole({ roles: { security: { engine: 'codex', daybreak: true } } }, 'security', { engine: 'codex', model: 'x', effort: '' }).roles.security.daybreak, true);
+  assert.equal(withRole({ roles: { security: { engine: 'codex', daybreak: true } } }, 'security', { engine: 'codex', model: 'x', effort: '', daybreak: false }).roles.security.daybreak, false);
+});
+
+test('nextlevel team set security: on Codex with Daybreak, off again, and refused elsewhere', () => {
+  const p = makeProject();
+  try {
+    const file = path.join(p.repo, 'nextlevel.json');
+    const before = fs.readFileSync(file, 'utf8');
+    assert.match(teamJson(p, ['set', 'security', '--engine', 'agy']).message, /can't run on agy: nothing keeps Antigravity read-only or sandboxed/);
+    assert.match(teamJson(p, ['set', 'security', '--engine', 'claude']).message, /Claude Code comes in a later version/);
+    assert.match(teamJson(p, ['set', 'security', '--engine', 'codex', '--daybreak', 'maybe']).message, /--daybreak is on or off, not "maybe"/);
+    assert.match(teamJson(p, ['set', 'worker', '--engine', 'codex', '--daybreak', 'on']).message, /--daybreak is the security engineer's/);
+    assert.match(teamJson(p, ['set', 'security', '--engine', 'nothing']).message, /--engine must be codex, agy, claude, or off|--engine must be .*, or off/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing written');
+    // Turning it on checks its sign-in first: refused, naming the sign-in, which works while the role is off
+    const early = teamJson(p, ['set', 'security', '--engine', 'codex', '--effort', 'xhigh', '--daybreak', 'on']);
+    assert.equal(early.saved, false);
+    assert.match(early.message, /^Not saved: The security engineer's sign-in: not signed in yet/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'nothing written');
+    const login = p.hub(['security', 'login']);
+    assert.equal(login.code, 0, login.out);
+    const on = teamJson(p, ['set', 'security', '--engine', 'codex', '--effort', 'xhigh', '--daybreak', 'on']);
+    assert.equal(on.saved, true, on.message);
+    // (no model given: the first Daybreak works on, from the scanner's own Codex, saved by name)
+    assert.match(on.message, /^Saved\. Security engineer: Codex, effort xhigh, Daybreak Blue, model gpt-6-sol \(the first the scanner's Codex lists for it\)\. It applies to the next scan you start/);
+    assert.ok(!on.results.some((r) => r.id === 'codex.model'), "the model check of the roles in use doesn't see its model");
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).roles.security, { engine: 'codex', model: 'gpt-6-sol', effort: 'xhigh', profile: '', daybreak: true });
+    const row = teamJson(p, []).rows.find((r) => r.key === 'security');
+    assert.ok(row.daybreak && !row.none);
+    const offAgain = teamJson(p, ['set', 'security', '--engine', 'off']);
+    assert.equal(offAgain.saved, true);
+    assert.match(offAgain.message, /The security engineer is off/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).roles.security, { engine: '', model: '', effort: '', profile: '', daybreak: true }, 'Daybreak stays for the next time');
+    assert.ok(teamJson(p, []).rows.find((r) => r.key === 'security').off);
+  } finally {
+    p.cleanup();
+  }
+});
+
 test('nextlevel team shows the team, lists models, and saves a change only when the doctor\'s checks pass', () => {
   const p = makeProject();
   try {
@@ -232,7 +309,7 @@ test('nextlevel team shows the team, lists models, and saves a change only when 
     assert.match(shown.out, /Orchestrator +Codex · model gpt-6 \(Codex's own, from ~[\\/]\.codex[\\/]config\.toml\) · effort high \(Codex's own/);
     assert.match(shown.out, /Setup guide +the orchestrator's: Codex/);
     const json = teamJson(p, []);
-    assert.deepEqual(json.rows.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant']);
+    assert.deepEqual(json.rows.map((r) => r.key), ['orchestrator', 'worker', 'worker-second', 'worker-fallback', 'guide', 'assistant', 'security']);
     assert.deepEqual(json.engines.map((e) => e.name).sort(), ['agy', 'claude', 'codex']);
 
     // What the CLIs list: Codex and agy list theirs, Claude Code has names its --model takes

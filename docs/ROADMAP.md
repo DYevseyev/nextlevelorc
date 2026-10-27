@@ -23,6 +23,15 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
   stalls, a read-only review reported to you, never to the orchestrator, within a daily cap. The advisor itself (Advise
   and Quick, its memory, drafts only your click sends, Explain on cards) is done.
 
+## The security engineer
+Scans of the project's code in OpenAI's Codex Security scanner (`docs/design/security-engineer.md`). Part 1a-1, the
+role, its checks and `nextlevel security scan|status|stop|login`, is done.
+- **1a-2, on the dashboard:** Home's Security tile and buttons, a Security page, and the SECURITY.md card (a policy only
+  your Approve makes count).
+- **1b:** a Claude Code version, a watch for the models Daybreak covers, SECURITY.md committed to the repository.
+- **2:** findings in autopilot rounds, a merge gate and the fix loop, dismissing a finding.
+- **3:** supply chain, automatic scans, phone alerts.
+
 ## GitHub checks on your PC
 - **The self-hosted runner, part B**: for a personal account's private repository, run its checks on a runner on this
   PC, as an account of its own that reaches nothing of yours (`docs/design/self-hosted-runner.md`). Part A, which says

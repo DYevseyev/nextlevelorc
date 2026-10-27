@@ -2,3 +2,7 @@ nextlevel
 Copyright The nextlevel authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+docker/codex-security-seccomp.json is OpenAI's seccomp profile for the Codex Security scanner image, copied unchanged
+from https://github.com/openai/codex-security at commit f05a0b096cc881242ddf34a4d6b3ce0f322f3cf9, licensed under the
+Apache License, Version 2.0. Copyright OpenAI.

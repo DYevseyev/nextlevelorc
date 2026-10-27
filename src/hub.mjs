@@ -29,6 +29,9 @@
 //               nextlevel team [set <role> ...]    who fills each role, with the model and effort in use; change one (src/team.mjs)
 //               nextlevel ask "question" [--thread <id>] | ask threads | show | rename | clear | delete
 //                                                  the assistant: a read-only side chat about the project (src/ask.mjs)
+//               nextlevel security scan [--deep] | status [--json] | stop [<id>] | login
+//                                                  the security engineer's scans, in OpenAI's scanner container; the hub
+//                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs)
 //               (cli.mjs: nextlevel update [--to <tag>|main] updates the tool itself: lib/update.mjs)
 // Orchestrator  nextlevel dispatch <task-id> [--engine agy|codex|claude|--profile P|--fallback] [--model M] [--timeout MIN] [--kind code|review|research|design|map]
 //               nextlevel retry <task-id> --feedback "what to fix" [--fallback|--engine E|--profile P]
@@ -104,6 +107,8 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
+import { cmdScanProcess, cmdSecurity, pendingRequests, recoverScans } from './security.mjs';
+import { readScan, runningScan } from './lib/securityscan.mjs';
 import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
@@ -2500,7 +2505,7 @@ function workerOutside(id, s, wt, attempt) {
 const slotEscapeView = () => {
   const e = getSettings().slotEscape;
   if (!e || !e.task) return null;
-  const items = (Array.isArray(e.items) ? e.items : []).map((x) => ({ kind: x.kind === 'command' ? 'command' : 'file', what: String(x.what || ''), aims: String(x.aims || '') }));
+  const items = (Array.isArray(e.items) ? e.items : []).map((x) => ({ kind: x.kind === 'command' || x.kind === 'security' ? x.kind : 'file', what: String(x.what || ''), aims: String(x.aims || '') }));
   const moves = (Array.isArray(e.moves) ? e.moves : []).map(String);
   const others = (Array.isArray(e.others) ? e.others : []).map(String);
   return { at: e.at, task: String(e.task), attempt: Number(e.attempt) || 1, items, moves, others, did: items.length ? outsideWords(items) : '' };
@@ -5760,6 +5765,7 @@ const USAGE_ROLES = [
   { key: 'worker', title: 'Workers', unit: 'attempt', kind: 'headless' },
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
   { key: 'assistant', title: 'Advisor', unit: 'question', kind: 'headless' },
+  { key: 'security', title: 'Security engineer', unit: 'scan', kind: 'headless' },
 ];
 // The usage ledger as the dashboard reads it: each month file's lines, read again only when that file changed (its
 // size or time), so the live feed's every look costs a stat per month and a run's end re-reads one month
@@ -6118,6 +6124,66 @@ function idleTick() {
   queueNotify(`${NAME} is idle`, `No activity for ${ago(st.idleHours).replace(' ago', '')}. ${why} START.cmd -> 5, or turn on autopilot (-> 6).`, 'high');
 }
 
+// ---------- the security engineer's scans (src/security.mjs, docs/design/security-engineer.md) ----------
+// Only the owner asks for a scan (nextlevel security scan, into the guard's folder the orchestrator's sandbox can't
+// write); the hub starts one at a time in a child process it follows (`_scan`), never while an update holds new work, and
+// counts its minutes and tokens when it ends. A scan isn't a job: no queue, no jobs/, no round (FR-019).
+const scan = { child: null, id: '' };
+function scanContext() {
+  const secrets = activitySecrets();
+  return { root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, envKeys: DOTENV_KEYS, cache: jsonStore(path.join(DIR, 'check-cache.json')), secrets: { ...secrets, redact: (t) => redactReport(t, secrets) }, log };
+}
+function securityTick() {
+  if (scan.child) return;
+  const [ask] = pendingRequests(ROOT);
+  if (!ask) return;
+  if (updateHold) return; // (it waits for the update, as new tasks do)
+  fs.rmSync(ask.file, { force: true });
+  const what = Buffer.from(JSON.stringify({ id: ask.id, deep: ask.deep })).toString('base64url');
+  const child = spawn(process.execPath, [BIN, '_scan', what], { cwd: ROOT, env: { ...process.env, NEXTLEVEL_ROOT: ROOT }, stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
+  Object.assign(scan, { child, id: ask.id });
+  log(`security scan ${ask.id}: starting (${ask.deep ? 'deep' : 'standard'}), asked by the owner`);
+  const done = () => {
+    if (scan.child !== child) return;
+    scan.child = null;
+    const s = readScan(DIR, ask.id);
+    if (s && ['starting', 'waiting', 'running'].includes(s.state)) {
+      // (its process ended without saying how: a crash, or the hub stopped it)
+      for (const line of recoverScans({ root: ROOT, stateDir: DIR, envKeys: DOTENV_KEYS })) log(line);
+    }
+    const r = readScan(DIR, ask.id) || {};
+    addUsage('security', 'codex', { runs: 1, minutes: r.minutes || 0, tokens: r.tokens || null, model: r.model, effort: r.effort, profile: r.profile, reason: ask.deep ? 'deep' : 'scan' });
+    log(`security scan ${ask.id}: ${r.state || 'ended'}${r.counts ? `, ${r.counts}` : ''}${r.why ? ` (${r.why})` : ''}`);
+  };
+  child.once('exit', done);
+  child.once('error', (err) => {
+    log(`security scan ${ask.id} didn't start: ${err.message}`);
+    done();
+  });
+}
+// The hub stops: a scan it runs is asked to stop (its container stopped, its partial output kept), and waited for a
+// minute and a half; one that doesn't end by then is removed by the next hub's start
+async function stopScanForHub() {
+  const child = scan.child;
+  if (!child) return;
+  log(`stopping: security scan ${scan.id} is asked to stop`);
+  try {
+    fs.mkdirSync(path.join(DIR, 'security', 'scans', scan.id), { recursive: true });
+    fs.writeFileSync(path.join(DIR, 'security', 'scans', scan.id, 'stop.json'), `${JSON.stringify({ at: now(), by: 'hub' })}\n`);
+  } catch (err) {
+    log(`couldn't ask the scan to stop: ${err.message}`);
+  }
+  await new Promise((resolve) => {
+    const t = setTimeout(resolve, 90_000);
+    child.once('exit', () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+}
+// A scan running in a process the hub didn't start (a hub restarted while one ran) still holds the PC's lease
+const scanBusy = () => !!scan.child || !!runningScan(DIR);
+
 // ---------- releases (safe updates, lib/update.mjs) ----------
 // The hub learns of a new release by fetching the tool's repository at its start and every 6 hours, in a child process
 // (a fetch can take a minute; the tick must go on), through the PC-wide update/available.json: a hub, or a dashboard,
@@ -6269,6 +6335,12 @@ async function cmdRun(argv) {
   }
   importOlderUsage(); // what usage.json has that the usage ledger doesn't (before the ledger, or a Go back's days)
   adoptRound(); // an autopilot round the last hub started: followed, or ended as what became of it (FR-019)
+  // (a security scan the last hub started whose process is gone: its container and output volume removed)
+  try {
+    for (const line of recoverScans({ root: ROOT, stateDir: DIR, envKeys: DOTENV_KEYS, running: runningScan(DIR) })) log(line);
+  } catch (err) {
+    log(`couldn't look for security scans the last hub left: ${err.message}`);
+  }
   let ports = '';
   try {
     ports = ` · slot port offsets ${[...Array(CFG.slots).keys()].map((i) => portOffset(i + 1)).join(', ')}`;
@@ -6301,6 +6373,7 @@ async function cmdRun(argv) {
       refreshConfig(); // a new team takes the next round and the next task
       await pollJobs();
       await flushOutbox();
+      securityTick();
       if (tick % 12 === 0) {
         gitGuard(); // git's own hooks and settings: a change gets its card now, not at the next git work
         closedWindowsTick(); // before a round: it would take orchestrator.json's place
@@ -6316,7 +6389,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -6324,6 +6397,7 @@ async function cmdRun(argv) {
     log(`stopping: waiting for ${busy.size} verification(s), check(s) or push(es) to finish`);
   }
   while (busy.size) await Promise.allSettled([...busy.values()]);
+  await stopScanForHub();
   await Promise.allSettled([...cleaning.values()]); // (a listing in progress ends: held slots say where they are)
   if (fixing) await fixing;
   await flushOutbox();
@@ -7845,6 +7919,8 @@ const COMMAND_TABLE = {
   _guide: (rest) => cmdGuideProcess(rest),
   _cycle: (rest) => cmdCycleProcess(rest),
   _trial: (rest) => cmdTrialProcess(rest[0]),
+  security: (rest) => cmdSecurity(rest, { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive, envKeys: DOTENV_KEYS }).then((code) => (process.exitCode = code)),
+  _scan: (rest) => cmdScanProcess(rest[0], scanContext()).then((code) => (process.exitCode = code)),
   _locktest: (rest) => cmdLockTestProcess(rest[0]),
   _locktry: (rest) => cmdLockTryProcess(rest[0]),
   'lock-test': (rest) => cmdLockTest(rest).then((ok) => (process.exitCode = ok ? 0 : 1)),

@@ -97,6 +97,7 @@ export function fakeContext(o = {}) {
     cache: { get: (k) => cache[k], set: (k, v) => (cache[k] = v) },
     userState: { get: (k) => user[k], set: (k, v) => (user[k] = v) },
     hubAlive: () => !!o.hubAlive,
+    tcpOpen: async (ports) => ports.find((x) => (o.tcpOpen || []).includes(x)) || 0,
     uses: (engine) => !!engineUse(config, engine),
     usage: (engine) => engineUse(config, engine),
     profiles: profilesInUse(config),

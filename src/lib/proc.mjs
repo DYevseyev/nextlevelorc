@@ -130,11 +130,12 @@ function onPath(name, env = process.env) {
 }
 // How to start `bin` with `args` (FR-013): a shim's program directly where shimLaunch finds it, else as spawnBin does
 export function spawnDirect(bin, args, opts = {}) {
-  const direct = IS_WIN && bin.shell ? shimLaunch(readShim(bin.file), bin.file, { which: (n) => onPath(`${n}.exe`, opts.env) }) : null;
+  const direct = shimProgram(bin, opts.env);
   if (!direct) return spawnBin(bin, args, { ...opts, windowsHide: hidden(opts) });
   tripWire(path.basename(bin.file), direct.file);
   return spawn(direct.file, [...direct.args, ...args], { ...opts, windowsHide: hidden(opts) });
 }
+const shimProgram = (bin, env) => (IS_WIN && bin.shell ? shimLaunch(readShim(bin.file), bin.file, { which: (n) => onPath(`${n}.exe`, env) }) : null);
 function readShim(file) {
   try {
     return fs.statSync(file).size <= 64 * 1024 ? fs.readFileSync(file, 'utf8') : '';
@@ -143,16 +144,20 @@ function readShim(file) {
   }
 }
 
-// Run a tool and collect what it printed. `missing` means it isn't installed (or not on this window's PATH).
-export function runQuiet(cmd, args, { timeoutMs = 20000, cwd, env = process.env, input } = {}) {
+// Run a tool and collect what it printed. `missing` means it isn't installed (or not on this window's PATH). `direct`: a
+// .cmd shim's program starts without cmd.exe, as spawnDirect does, so an argument with quotes reaches it whole (the
+// security engineer's docker lines: a Go template, a probe's script).
+export function runQuiet(cmd, args, { timeoutMs = 20000, cwd, env = process.env, input, direct = false } = {}) {
   const bin = resolveBin(cmd);
   if (!bin) return { ok: false, missing: true, code: null, out: '' };
-  const [file, line] = bin.shell ? cmdLine(bin, args) : [bin.file, args];
+  const program = direct ? shimProgram(bin, env) : null;
+  if (program) tripWire(path.basename(bin.file), program.file);
+  const [file, line] = program ? [program.file, [...program.args, ...args]] : bin.shell ? cmdLine(bin, args) : [bin.file, args];
   const r = spawnSync(file, line, {
     encoding: 'utf8',
     timeout: timeoutMs,
     windowsHide: true,
-    windowsVerbatimArguments: bin.shell,
+    windowsVerbatimArguments: bin.shell && !program,
     cwd,
     env,
     input,
