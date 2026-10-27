@@ -4,6 +4,7 @@
 // the owner approves it on the dashboard (lib/guard.mjs, hub.mjs). This file is the pure part: which paths are
 // protected, whether a task spec owns one, and what a change does in plain words, from code only: never from an AI
 // reading the change, so a change can't talk its way past the owner.
+import { testerChangeWords } from './testerconfig.mjs';
 import { whereJobsRun } from './workflows.mjs';
 import { hooksFromJson, hooksFromToml } from '../checks/codex-hooks.mjs';
 
@@ -420,7 +421,7 @@ export function describeChange({ path: rel, before = null, after = null, link = 
   } else if (kind === 'codex') detail.push(...codexConfig(b, a));
   else if (kind === 'workflow') detail.push(...workflow(b, a));
   else if (kind === 'tasks') detail.push(...vscodeTasks(parse(b), parse(a)));
-  else if (kind === 'nextlevel') detail.push(...jsonKeys(parse(b), parse(a)));
+  else if (kind === 'nextlevel') detail.push(...testerChangeWords(parse(b)?.tester, parse(a)?.tester), ...jsonKeys(parse(b), parse(a))); // (the tester's lines first: where a persona's values would go, docs/design/tester.md §4)
   else if (kind === 'json') detail.push(...jsonKeys(parse(b), parse(a), { values: false }), ...claudeRuns(parse(a)).filter((x) => !claudeRuns(parse(b)).includes(x)).map((x) => `would run: ${x}`), ...mcpChange(parse(b), parse(a)));
   else if (kind === 'npmrc') detail.push(...npmrc(b, a));
   else if (kind === 'script') detail.push(...script(b, a));

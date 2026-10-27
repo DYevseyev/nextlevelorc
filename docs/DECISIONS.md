@@ -2032,3 +2032,25 @@ One entry each: date, decision, why, alternatives.
   whole, and Node refuses to spawn a `.cmd` without a shell (`spawn EINVAL`). Docker Desktop's `docker` is an `.exe`;
   a `.cmd` (the tests' stub, or a wrapper) has its program started directly, as the workers' engines are (FR-013):
   `runQuiet(..., { direct: true })` and `spawnDirect`. The first Windows run of PR #8 found it.
+- 2026-10-27 — **The tester is a program, not a model.** A plan names every step, so walking it needs no AI: no model
+  holds a persona's password or sees a signed-in page, and a run costs no tokens. `nextlevel.json`'s `tester` refuses
+  an engine, a model and an effort (`docs/design/tester.md` §0).
+- 2026-10-27 — **Plans are YAML in a subset read by our own reader.** Zero runtime dependencies leave Node with no YAML
+  reader; the subset (`src/lib/yamlsub.mjs`, `docs/acceptance.md`) refuses anchors, tags, block scalars and values over
+  two lines with the line number, so every file it accepts means the same in any YAML 1.2 reader. Its fixtures'
+  expected output was made with PyYAML's BaseLoader outside the repository, never a dependency.
+- 2026-10-27 — **The tester's HTTP is `node:http`/`node:https` with a lookup of our own, not `fetch`.** Node's `fetch`
+  takes no lookup without the undici package, so a second DNS answer could move a request to this PC after the first
+  was checked. Each request resolves once, checks every address and connects to the checked one; redirects are
+  followed by hand, each hop checked against the environment's origin.
+- 2026-10-27 — **Persona sign-ins: one AES key per project held by the OS store, each value sealed with it.** On
+  Windows the key is sealed with DPAPI through .NET's `ProtectedData` in Windows PowerShell (always there; the key on
+  stdin), not `ConvertFrom-SecureString`, whose output and defaults differ between PowerShell 5.1 and 7. Each value is
+  bound to `<env>@<origin>/<persona>#<field>` (AES-GCM's associated data), so a value moved to another environment or
+  URL doesn't open. The store's program starts with only the variables it needs to find the user's store.
+- 2026-10-27 — **A run's process opens the vault itself** rather than taking the values on a pipe from the hub: it runs
+  as the same user, and the hub then holds the passwords only to redact. It reads the project's `.env` only to redact
+  with; its environment keeps none of it, and every nextlevel command refuses in it (`NEXTLEVEL_AGENT=tester`).
+- 2026-10-27 — **A store that can't be opened holds phone messages and reports back** rather than send a text that may
+  hold a password (`personaHold`): the project keeps a sign-in, so redaction without it isn't redaction. A username
+  isn't redacted (an `admin` username would blank every "admin"); a password or token under 8 characters is refused.

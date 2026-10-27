@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { redact } from '../checks/lib.mjs';
 import { parseEnvText } from './envfile.mjs';
+import { keepsSecrets, redactionValues } from './vault.mjs';
 
 // Names whose values are secrets wherever they appear (`NAME=value`), besides every name in the .env.
 export const SECRET_NAME = /^[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CLIENT_?KEY|CREDENTIALS?|COOKIE|DSN)[A-Z0-9_]*$/i;
@@ -21,12 +22,14 @@ const MORE_TOKENS = [
 ];
 
 // What a report must never contain: every value of the project's .env (and the names, for NAME=value), the
-// values of variables in this window whose names say secret, and the ntfy topic.
+// values of variables in this window whose names say secret, the ntfy topic, and the tester's persona passwords and
+// tokens (lib/vault.mjs: unsealed once per process, and only when the project keeps one; `ctx.personas` gives them).
 export function reportSecrets(ctx) {
   const dotenv = ctx.root ? parseEnvText(ctx.read(ctx.path.join(ctx.root, '.env'))) : {};
   // a variable of this window is taken when it is long enough to be a secret, not a word like "true"
   const fromEnv = Object.entries(ctx.env || {}).filter(([k, v]) => v && v.length >= 8 && (SECRET_NAME.test(k) || k === 'NTFY_TOPIC')).map(([, v]) => v);
-  const values = [...new Set([...(ctx.secrets || []), ...Object.values(dotenv), ...fromEnv].filter((v) => v && v.length >= 4))];
+  const personas = ctx.personas ?? (ctx.root ? redactionValues(ctx.root).values : []);
+  const values = [...new Set([...(ctx.secrets || []), ...Object.values(dotenv), ...fromEnv, ...personas].filter((v) => v && v.length >= 4))];
   return { values: values.sort((a, b) => b.length - a.length), names: Object.keys(dotenv) };
 }
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -57,6 +60,15 @@ export function redactReport(text, { values = [], names = [], home = '', platfor
     s = s.replace(new RegExp(`(${forms})(?![A-Za-z0-9_-])`, platform === 'win32' ? 'gi' : 'g'), tilde);
   }
   return s;
+}
+
+// Why nothing may leave for the project now, or '': it keeps a persona's password or token and this process can't open
+// them to redact with (a secret store that doesn't answer). notify() and a report then send nothing rather than send
+// a text that may hold one (docs/design/tester.md §5).
+export function personaHold(root) {
+  if (!root || !keepsSecrets(root)) return '';
+  const r = redactionValues(root);
+  return r.problem ? `the tester's sign-ins can't be read to keep them out (${r.problem})` : '';
 }
 
 // A setting's ordinary word: under a name that doesn't look secret (NODE_ENV=production, LOG_LEVEL=info) it is no secret,

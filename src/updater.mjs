@@ -47,6 +47,7 @@ import { checkReleases, fetchTool } from './lib/update.mjs';
 import { runsVersion } from './lib/runreg.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { runningScan } from './lib/securityscan.mjs';
+import { runningRun } from './tester.mjs';
 import { OLD_TEMPLATES, templateHash } from './lib/templates.mjs';
 import { addVersion, candidateName, channelOf, maintenanceOff, projectKey, pruneVersions, readChannels, readVersions, runningVersion, setChannel, updateVersions, versionPath } from './lib/versions.mjs';
 import { notify } from './notify.mjs';
@@ -214,6 +215,8 @@ export function workIn(root) {
   if (ui?.asking) out.push('the assistant is answering a question');
   const scan = runningScan(dir);
   if (scan) out.push(`security scan ${scan.id} runs`);
+  const run = runningRun(dir);
+  if (run) out.push(`acceptance run ${run.id} runs`);
   return out;
 }
 

@@ -35,7 +35,7 @@ import { TOOL_ROOT } from './lib/project.mjs';
 import { SANDBOX_NAME } from './lib/sandbox.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { describeTool } from './lib/update.mjs';
-import { redactReport, reportSecrets } from './lib/redact.mjs';
+import { personaHold, redactReport, reportSecrets } from './lib/redact.mjs';
 
 export const REPORT_LABEL = 'field-report';
 const LOG_LINES = 40;
@@ -274,6 +274,9 @@ const earlierFiled = (checks) => listReports().filter((r) => r.filed && r.checks
 // { ok: false, message }. gh runs without holding the process (the dashboard's page stays live meanwhile).
 export async function fileReport(r, { gh = (args) => runQuietAsync('gh', args, { timeoutMs: 60_000 }) } = {}) {
   if (r.filed) return { ok: true, ...r.filed, already: true };
+  // (the tester's sign-ins can't be opened to check the text for them: nothing leaves, docs/design/tester.md §5)
+  const held = personaHold(r.project || null);
+  if (held) return { ok: false, message: held };
   const file = path.join(reportsDir(), `${r.id}.md`);
   // What gh sends is that file: it must be the text the owner was shown (cmdReport shows an edited one again)
   if (readText(file) !== r.body) return { ok: false, message: `${file} isn't the text you were shown` };

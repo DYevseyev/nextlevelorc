@@ -40,6 +40,7 @@ import { runnerChecks } from './runner.mjs';
 import { bridgeCheck, denyListCheck, hubCheck, portsCheck, pushLockCheck } from './safety.mjs';
 import { nodeCheck, sleepCheck, windowChecks } from './system.mjs';
 import { securityChecks } from './security.mjs';
+import { testerChecks } from './tester.mjs';
 import { dockerCheck } from './tools.mjs';
 import { redact } from './lib.mjs';
 
@@ -75,6 +76,7 @@ export const CHECKS = [
   ...projectFiles,
   ...repoChecks,
   ...runnerChecks,
+  ...testerChecks,
   pushLockCheck,
   portsCheck,
   guardCheck,

@@ -11,7 +11,7 @@
 // websites (FR-004 #5). The hub adds the GitHub links and the handoff items before that.
 import { parseEnvFile, parseEnvText } from './lib/envfile.mjs';
 import { phoneText } from './lib/phone.mjs';
-import { phoneSecrets, redactReport } from './lib/redact.mjs';
+import { personaHold, phoneSecrets, redactReport } from './lib/redact.mjs';
 
 export { parseEnvFile, parseEnvText };
 
@@ -39,6 +39,11 @@ export function forThePhone(text, root) {
 
 export async function notify(title, message, { priority = 'default', tags = '', server = 'https://ntfy.sh', root } = {}) {
   if (root === undefined) throw new Error("notify(): name the project's folder (root; null outside a project): its .env values are kept out of every message");
+  const held = personaHold(root);
+  if (held) {
+    console.log(`[notify] not sent: ${held}`);
+    return false;
+  }
   const secrets = phoneSecrets({ root });
   const hide = (s) => redactReport(String(s ?? ''), secrets);
   const topic = process.env.NTFY_TOPIC;

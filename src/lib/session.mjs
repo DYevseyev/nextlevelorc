@@ -14,7 +14,10 @@ const WHO = {
   'git-job': "a project hook during the hub's git work for the orchestrator",
   push: 'a project hook during a push',
   security: "the security engineer's scan",
+  tester: "the tester's acceptance run",
 };
+// What every nextlevel command prints in the tester's acceptance run, where none runs (src/cli.mjs)
+export const TESTER_REFUSAL = "nextlevel doesn't run in the tester's acceptance run: the run walks its plan's steps, and the hub does everything else. Nothing was done.";
 // What every nextlevel command prints in the security engineer's scan, where none runs (src/cli.mjs)
 export const SECURITY_REFUSAL = "nextlevel doesn't run in the security engineer's scan: the scan reads the code and reports in the findings format; the hub does everything else. Nothing was done.";
 

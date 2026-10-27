@@ -28,10 +28,11 @@ export function findSecrets(content, values) {
   return values.filter((v) => buf.includes(Buffer.from(v.value))).map((v) => v.name);
 }
 
-// A text with every value replaced by its name, so a card can show the change without the secret
+// A text with every value replaced by its name, so a card can show the change without the secret (`from`: where a
+// value comes from when it isn't .env: the tester's sign-ins, lib/vault.mjs)
 export function redactSecrets(text, values) {
   let s = String(text ?? '');
-  for (const v of values) s = s.split(v.value).join(`[the value of ${v.name} from .env]`);
+  for (const v of values) s = s.split(v.value).join(`[the value of ${v.name} from ${v.from || '.env'}]`);
   return s;
 }
 
@@ -44,7 +45,7 @@ export function describeSecretFile(rel, content, values) {
   const lines = text.split(/\r?\n/);
   for (const v of values) {
     const at = lines.map((l, i) => (l.includes(v.value) ? i + 1 : 0)).filter(Boolean);
-    if (at.length) out.push(`${name}: has the value of ${v.name} from .env (line${at.length > 1 ? 's' : ''} ${at.slice(0, 8).join(', ')}${at.length > 8 ? ', ...' : ''})`);
+    if (at.length) out.push(`${name}: has the value of ${v.name} from ${v.from || '.env'} (line${at.length > 1 ? 's' : ''} ${at.slice(0, 8).join(', ')}${at.length > 8 ? ', ...' : ''})`);
   }
   return out.length ? out : [`${name}: has a value from .env`];
 }

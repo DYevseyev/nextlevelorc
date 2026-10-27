@@ -94,6 +94,16 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   files), the PC's one-scan lease and the scans' records; `src/lib/findings.mjs` — the manifest's seal and the findings,
   made safe (pure); `src/checks/security.mjs` — `security.docker`, `.image`, `.login`, `.probe`, `.daybreak`. The hub's
   side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans, scanBusy).
+- `src/tester.mjs` — the tester (`docs/design/tester.md`, `docs/acceptance.md`): `nextlevel tester
+  status|check|run|wait|show|stop|persona` and `_accept`, one run as the hub's child (no job; `NEXTLEVEL_AGENT=tester`,
+  every command refuses in it), its record and evidence in `.nextlevel/evidence/<run id>/`, the audit line and the
+  orchestrator's hourly cap in the guard's folder. `src/lib/yamlsub.mjs` — the YAML subset; `src/lib/acceptance.mjs` —
+  plans, their rules and `judge` (pure); `src/lib/testerconfig.mjs` — `nextlevel.json`'s `tester` and the guard's words
+  for it; `src/lib/testernet.mjs` — the HTTP client (the origin rules, one checked address per request, cookies);
+  `src/lib/evidence.mjs` — what a step keeps, made safe; `src/lib/vault.mjs` — the personas' sign-ins sealed under a
+  key the OS store holds, and `redactionValues`, which every redaction set and the guard's commit and push scans take
+  (`personaHold` in `src/lib/redact.mjs` when it can't be read). `src/checks/tester.mjs` — `tester.config`, `.vault`,
+  `.plans`, `.reach`. The hub's side is "the tester's runs" in `hub.mjs` (testerTick, acceptContext, acceptEnv).
 - `src/lib/usage.mjs` — the usage ledger (`docs/design/token-usage.md`): one line per ended run in
   `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
   today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
@@ -244,6 +254,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   `STUB_DOCKER_*` and `STUB_SCAN` knobs, what each run saw in `~/.fake-docker/seen.jsonl`): the pinned image, every
   `docker` line, the findings' shapes, a scan end to end with no job or round, output that doesn't hold, each stop rule,
   a scanner error, a stop, a planted `.env` value, the seccomp fallback, and who may scan;
+  `test/tester.test.mjs` covers the tester's part 1 with a stand-in web app in a process of its own
+  (`test/stubs/webapp.mjs`: three test accounts, a CSRF sign-in, a delayed audit log, a page that prints a password, a
+  redirect off the origin): the YAML subset against fixtures a full YAML reader made (`test/fixtures/tester-yaml`), the
+  plan and settings rules, the HTTP client's reach (`NEXTLEVEL_TEST_RESOLVE`), evidence, the vault with the stand-in
+  store (`NEXTLEVEL_TEST_VAULT`), whole runs through the hub, who may run one, and a commit holding a persona password;
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),
