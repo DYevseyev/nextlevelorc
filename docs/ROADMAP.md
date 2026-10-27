@@ -32,6 +32,16 @@ role, its checks and `nextlevel security scan|status|stop|login`, is done.
 - **2:** findings in autopilot rounds, a merge gate and the fix loop, dismissing a finding.
 - **3:** supply chain, automatic scans, phone alerts.
 
+## The tester
+Acceptance runs of plans in `docs/acceptance/` against a running copy of the app, as test accounts you name
+(`docs/design/tester.md`, `docs/acceptance.md`). Part 1, plans and HTTP runs from PowerShell with the sign-ins sealed on
+this PC, is done.
+- **2, the browser:** Playwright installed by you at a pinned version, a fresh browser per persona, screenshots with
+  masks.
+- **3, closing the loop:** cards with plans close on a passing run, a failing one drafts a fix task for the orchestrator,
+  runs after a deploy.
+- **4, on the dashboard:** the Team row, the evidence table, the sign-ins form.
+
 ## GitHub checks on your PC
 - **The self-hosted runner, part B**: for a personal account's private repository, run its checks on a runner on this
   PC, as an account of its own that reaches nothing of yours (`docs/design/self-hosted-runner.md`). Part A, which says

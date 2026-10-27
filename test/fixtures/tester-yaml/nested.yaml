@@ -1,0 +1,11 @@
+list:
+  - one
+  - two: 2
+    three: [x, y, { z: "q" }]
+  - - inner
+    - list
+map:
+  deep:
+    deeper:
+      deepest: end
+flow: { a: [], b: {}, c: [ [1, 2], [3] ] }

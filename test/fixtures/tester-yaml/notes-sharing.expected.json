@@ -1,0 +1,65 @@
+{
+  "plan": "notes-sharing",
+  "env": [
+    "staging"
+  ],
+  "steps": [
+    {
+      "name": "a member opens the note",
+      "as": "member",
+      "do": {
+        "request": "GET /notes/42"
+      },
+      "expect": {
+        "status": "200",
+        "text": "Quarterly plan"
+      }
+    },
+    {
+      "as": "outsider",
+      "do": {
+        "request": "GET /notes/42"
+      },
+      "expect": {
+        "denied": "true"
+      }
+    },
+    {
+      "as": "admin",
+      "do": {
+        "request": "GET /api/audit?note=42"
+      },
+      "expect": {
+        "json": {
+          "path": "$.entries[*].action",
+          "contains": "access-denied"
+        },
+        "within": "20s"
+      }
+    },
+    {
+      "as": "member",
+      "mutates": "true",
+      "do": {
+        "request": "POST /api/notes/42/comments",
+        "json": {
+          "text": "check {{run.stamp}}",
+          "tags": [
+            "a",
+            "b"
+          ],
+          "meta": {
+            "pinned": "false",
+            "n": "3"
+          }
+        }
+      },
+      "expect": {
+        "status": [
+          "200",
+          "201"
+        ]
+      }
+    }
+  ]
+}

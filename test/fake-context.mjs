@@ -10,6 +10,7 @@
 //   files     { '/home/me/.codex/config.toml': '...' }   dirs: ['/proj/sub']
 //   config    merged over the defaults, like nextlevel.json
 //   env       environment variables (Codex's sandbox shows in them); gitWritable: false for a .git it can't write
+//   urls      { 'https://staging.example.com': { status: 200 } | { problem } }: what getUrl answers (else it doesn't resolve)
 import path from 'node:path';
 import { defaults, engineUse, profilesInUse } from '../src/lib/config.mjs';
 import { detectSandbox } from '../src/lib/sandbox.mjs';
@@ -98,6 +99,10 @@ export function fakeContext(o = {}) {
     userState: { get: (k) => user[k], set: (k, v) => (user[k] = v) },
     hubAlive: () => !!o.hubAlive,
     tcpOpen: async (ports) => ports.find((x) => (o.tcpOpen || []).includes(x)) || 0,
+    getUrl: async (url) => {
+      calls.push(`GET ${url}`);
+      return (o.urls || {})[url] || { problem: `${new URL(url).host} doesn't resolve (ENOTFOUND)` };
+    },
     uses: (engine) => !!engineUse(config, engine),
     usage: (engine) => engineUse(config, engine),
     profiles: profilesInUse(config),

@@ -15,6 +15,7 @@ import path from 'node:path';
 import { ADAPTERS, ENGINE_NAMES } from '../engines/index.mjs';
 import { BUILT_IN, protectedList } from './protect.mjs';
 import { branchNameProblem, deployList, isDeployBranch } from './push.mjs';
+import { mergeTester } from './testerconfig.mjs';
 
 export const CONFIG_FILE = 'nextlevel.json';
 export const CONFIG_VERSION = 1;
@@ -80,6 +81,9 @@ export function defaults(name = 'project') {
     checks: { timeoutMin: 30 },
     // The security engineer's scans: the longest a scan and a deep scan may run, in minutes (the hub stops it then)
     security: { scanMinutes: 90, deepScanMinutes: 240 },
+    // The tester (docs/design/tester.md, lib/testerconfig.mjs): null, or its environments, personas and sign-in recipe.
+    // It runs no model; off unless "enabled" is true.
+    tester: null,
     // Files the agents' and the owner's tools load outside any sandbox: a change to one waits for the owner's approval
     // on the dashboard (lib/protect.mjs has the built-in list). "add" and "remove" change that list for this project.
     protected: { add: [], remove: [] },
@@ -156,6 +160,7 @@ function merge(base, over, at, problems) {
     }
     const b = base[k];
     if (key === 'profiles') out[k] = mergeProfiles(v, problems);
+    else if (key === 'tester') out[k] = mergeTester(v, problems); // (the environments are a map of the owner's names)
     else if (key === 'deployBranches') {
       if (v === null || (Array.isArray(v) && v.every((x) => typeof x === 'string'))) out[k] = v;
       else problems.errors.push('"deployBranches" must be a list of branch names, like ["main"] ([] if no branch deploys)');

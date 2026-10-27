@@ -30,4 +30,13 @@ PowerShell, not the whole project, and never turn the antivirus or Advanced Thre
    Dispatch pauses by itself while files are missing and goes on once they are back.
 5. Run the bridge test again (START.cmd -> 8).
 
+## The tester's sign-ins (Windows PowerShell)
+
+With the tester on, nextlevel starts Windows' own PowerShell (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe
+-NoProfile -NonInteractive`, hidden, never one a PATH entry puts first) to seal or
+open the key that protects the test accounts' sign-ins with Windows' own protection for your account (DPAPI,
+`System.Security.Cryptography.ProtectedData`): when you set a persona, and once per run and per process that redacts.
+The key goes in on stdin, never on its command line. A behaviour-based antivirus may note a hidden PowerShell reading
+protected data; it is that, and nothing else runs in it. With the tester off it never starts.
+
 **Checks:** `tool.files` (files a quarantine took), `workers.addons` (what of your own add-ons still reaches a worker).

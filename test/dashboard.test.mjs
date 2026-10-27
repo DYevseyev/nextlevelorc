@@ -909,7 +909,7 @@ test("worker.log says which attempt it is, and never shows the attempt before un
 
     // Home: the switch with why, and the day per role (the finished attempt, and the one running now) and engine
     assert.deepEqual(b.switches.map((x) => [x.kind, x.id, x.attempt, x.engineTitle, x.roleEngineTitle, x.why]), [['task', 'M8-06-fail', 2, 'Codex', 'Antigravity', 'retry with --engine codex']]);
-    assert.deepEqual(b.usage.roles.map((r) => r.key), ['autopilot', 'orchestrator', 'worker', 'guide', 'assistant', 'security']);
+    assert.deepEqual(b.usage.roles.map((r) => r.key), ['autopilot', 'orchestrator', 'worker', 'guide', 'assistant', 'security', 'tester']);
     const workers = b.usage.roles.find((r) => r.key === 'worker');
     assert.deepEqual([workers.count, workers.running], [2, 1]);
     assert.deepEqual(workers.engines.map((e) => [e.engine, e.count, e.tokensFrom]).sort(), [['agy', 1, 'its stream-json output'], ['codex', 1, 'its JSON output (codex exec --json)']]);

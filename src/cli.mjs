@@ -14,7 +14,7 @@ import { readOnly, readOnlyRefusal } from './lib/readonly.mjs';
 import { cmdFix, fixStore, followFixes } from './fix.mjs';
 import { cmdInit } from './init.mjs';
 import { COMMANDS, helpText, parseCommand, usageText } from './lib/commands.mjs';
-import { SECURITY_REFUSAL } from './lib/session.mjs';
+import { SECURITY_REFUSAL, TESTER_REFUSAL } from './lib/session.mjs';
 import { installCommand } from './lib/install.mjs';
 import { TOOL_ROOT, findProject } from './lib/project.mjs';
 import { AVAILABLE_EVERY_MS, checkReleases, cmdChannel, cmdUpdate, describeTool, rememberProject, startNotice, updateBlocker } from './lib/update.mjs';
@@ -93,6 +93,11 @@ export async function main(argv) {
   // isn't, so nothing starts such a session today: kept as an extra bar, not a wall (KNOWN_ISSUES).
   if (process.env.NEXTLEVEL_AGENT === 'security') {
     console.error(SECURITY_REFUSAL);
+    return 1;
+  }
+  // (the same for what an acceptance run starts: the browser of the tester's part 2, docs/design/tester.md)
+  if (process.env.NEXTLEVEL_AGENT === 'tester') {
+    console.error(TESTER_REFUSAL);
     return 1;
   }
   const parsed = takeProject(argv);

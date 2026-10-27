@@ -844,6 +844,24 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), w
   (the findings' hashes are kept in the guard's folder, outside the project, so a changed file reads as untrusted); hold
   the one-scan lease. Each is a bar, not a wall.
 
+## The tester (part 1)
+- **The sign-ins are sealed for your account, not walled from it.** Any program running as you can ask Windows' DPAPI,
+  an unlocked Linux keyring or (after its prompt) the macOS keychain to open the key, as `_accept` does. A worker in
+  its slot or the orchestrator in Codex's sandbox can't reach the store's program or `~/.nextlevel`; an agent running
+  as you, outside a sandbox (a Codex worker with the sandbox off, Antigravity's full access), can. Use test accounts
+  made for testing, with nothing real behind them.
+- **What an agent running as the owner can still do:** ask for runs (`tester run` takes the orchestrator's within
+  `maxRunsPerHour`; a request written into the guard's folder counts as the owner's), and write plans the orchestrator
+  commits. A plan reaches only the environments' origins and `alsoAllow`, and a step that mutates runs only where
+  `allowMutations` says; `nextlevel.json` changes only with your approval.
+- **Redaction is by value and by shape.** A password the app shows encoded another way (URL-encoded, base64 under 40
+  characters, split across fields) isn't recognised; JWTs, long base64 strings and secret-looking JSON keys are blanked
+  whatever they hold. The evidence keeps a body's first 2 KB and headers on an allow-list only.
+- **HTTP only, simply.** One cookie jar per host, without cookies' Domain and Path rules; no proxy (the run's
+  environment is built from nothing); a body read up to 2 MB. Browser steps end incomplete until part 2.
+- **The app under test sees the passwords** it signs the personas in with, as it would any user's: an environment
+  that logs request bodies keeps them. That is the app's to fix.
+
 ## What the guard doesn't cover (yet)
 The guard (`src/lib/guard.mjs`, `docs/CHECKS.md#guardheld`) holds changes to protected files that go through git
 (a task's merge, the orchestrator's commit) and sets back changes made on disk in the project while the

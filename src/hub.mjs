@@ -32,6 +32,9 @@
 //               nextlevel security scan [--deep] | status [--json] | stop [<id>] | login
 //                                                  the security engineer's scans, in OpenAI's scanner container; the hub
 //                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs)
+//               nextlevel tester status | check [<plan>] | run <plan> --env <env> | wait <run> | show <run> | stop | persona ...
+//                                                  acceptance plans run against the environments nextlevel.json names; the
+//                                                  hub starts an asked-for run (_accept), one at a time (src/tester.mjs)
 //               (cli.mjs: nextlevel update [--to <tag>|main] updates the tool itself: lib/update.mjs)
 // Orchestrator  nextlevel dispatch <task-id> [--engine agy|codex|claude|--profile P|--fallback] [--model M] [--timeout MIN] [--kind code|review|research|design|map]
 //               nextlevel retry <task-id> --feedback "what to fix" [--fallback|--engine E|--profile P]
@@ -109,6 +112,8 @@ import { cmdReport, fileShownReport, redactReport, reportSecrets } from './repor
 import { cmdTeam } from './team.mjs';
 import { cmdScanProcess, cmdSecurity, pendingRequests, recoverScans } from './security.mjs';
 import { readScan, runningScan } from './lib/securityscan.mjs';
+import { capProblem, cmdAcceptProcess, cmdTester, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runningRun, writeRun } from './tester.mjs';
+import { testerOn } from './lib/testerconfig.mjs';
 import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
@@ -128,7 +133,8 @@ import { describeChanges, isProtected, pathKey, protectedList, protectedOwned } 
 import { REMOTE, deployList, isDeployBranch, parseLsRemote, pushArgs, targetProblem } from './lib/push.mjs';
 import { KINDS, OUTPUT_BUDGET, RESULT_KINDS, byteLength, head, kindOf, resultFileOf, resultFileProblem, sizeOf, sizeText, tail } from './lib/reports.mjs';
 import { forThePhone, loadEnv, notify, parseEnvFile } from './notify.mjs';
-import { phoneSecrets } from './lib/redact.mjs';
+import { SECRET_NAME, phoneSecrets } from './lib/redact.mjs';
+import { redactionValues } from './lib/vault.mjs';
 import { READ_TOKEN, githubFailure } from './lib/github.mjs';
 import { pushBlockEnv } from './lib/pushblock.mjs';
 import { PER_HOUR, REASONS, REASON_ORDER, ROUND_LIMIT_MIN, addTrigger, autopilotOn, decide, freshState, isReason, ms as isoMs, noteReal, oneLine, roundEnded, roundStarted, roundsProblem, takeWake, waitView, wakeId, wakeKey } from './lib/rounds.mjs';
@@ -3650,7 +3656,7 @@ function pushSecrets(job, { sha, there, originBase, target, from }) {
   const shown = found.filter((f) => !f.env).map((f) => f.e.path); // (a .env file's content is never shown)
   const diff = shown.length ? gitDiff([COMMIT_RE.test(base) ? base : emptyTree(), sha, '--', ...shown]) : '';
   const { item, fresh } = store.held.add(secretRecord(found, values, diff, { on: 'push', job: job.id, sha, base: base || '', target, from, by: `a push to ${target}`, message: '', task: '' }));
-  const what = item.env ? `a .env file (${listFiles(names)}), which never goes out` : `the value of ${secretNames(item).join(', ')} from .env in ${listFiles(names)}`;
+  const what = item.env ? `a .env file (${listFiles(names)}), which never goes out` : `${valueWords(item)} in ${listFiles(names)}`;
   if (item.status === 'rejected') return { rejected: `the commits of ${from} carry ${what}, and the owner rejected that (${item.id})${item.reason ? `: "${item.reason}"` : ''}. Take it out of those commits (git revert, or rewrite the branch before it is pushed), then push again` };
   if (['approved', 'applied'].includes(item.status)) return { ok: true };
   const card = fresh ? raiseCard(item) : item.card;
@@ -4035,7 +4041,7 @@ async function holdSecrets(job, paths, run) {
   const card = fresh ? raiseCard(item) : item.card;
   log(`${job.id}: held ${names.join(', ')} (${item.env ? 'a .env file' : 'a value from .env'}) for the owner (${item.id})`);
   if (item.status === 'rejected') return { detail: `${listFiles(names)} not committed: the owner rejected it (${item.id})${item.reason ? `: "${item.reason}"` : ''}` };
-  return { detail: `held ${listFiles(names)}: ${item.env ? 'a .env file is never committed' : `it has the value of ${secretNames(item).join(', ')} from .env`} (${item.id}${card ? `, card ${card}` : ''}). It stays on disk, uncommitted, until the owner decides; the card never shows the value` };
+  return { detail: `held ${listFiles(names)}: ${item.env ? 'a .env file is never committed' : `it has ${valueWords(item)}`} (${item.id}${card ? `, card ${card}` : ''}). It stays on disk, uncommitted, until the owner decides; the card never shows the value` };
 }
 
 // The same for the hub's commit of what a worker left in its slot (FR-008): those files are taken out of the commit and
@@ -4059,7 +4065,7 @@ function holdSlotSecrets(id, job, wt, slot) {
   const card = fresh ? raiseCard(item) : item.card;
   setStatus(id, { held: { id: item.id, card: card || '', files: names, at: item.createdAt, text: heldText(item, card) } });
   log(`${id}: held ${names.join(', ')} (${item.env ? 'a .env file' : 'a value from .env'}) out of the hub's commit (${item.id})`);
-  return { detail: `held ${listFiles(names)}: ${item.env ? 'a .env file, which is never committed' : `the worker's changes put the value of ${secretNames(item).join(', ')} from .env in ${listFiles(names)}`}; nothing of that was committed (${item.id}${card ? `, card ${card}` : ''}), and the owner approves or rejects it on the dashboard` };
+  return { detail: `held ${listFiles(names)}: ${item.env ? 'a .env file, which is never committed' : `the worker's changes put ${valueWords(item)} in ${listFiles(names)}`}; nothing of that was committed (${item.id}${card ? `, card ${card}` : ''}), and the owner approves or rejects it on the dashboard` };
 }
 
 // A task's merge and the .env values or .env files it brings. -> { ok: true }, { ok: true, approved } or { ok: false, detail }
@@ -4077,12 +4083,12 @@ function secretMerge(job, tip) {
   const names = found.map((f) => f.e.path);
   const shown = found.filter((f) => !f.env).map((f) => f.e.path);
   const { item, fresh } = store.held.add(secretRecord(found, values, shown.length ? gitDiff([base, tip, '--', ...shown]) : '', { on: 'merge', task, job: job.id, sha: tip, base, message: job.message || '', by: `task ${task}` }));
-  if (item.status === 'rejected') return { ok: false, detail: `not merged: the owner rejected ${task}'s ${item.env ? '.env file' : `value of ${secretNames(item).join(', ')} from .env`} in ${listFiles(names)} (${item.id})${item.reason ? `: "${item.reason}"` : ''}. Retry it without that: nextlevel retry ${task} --feedback "..."` };
+  if (item.status === 'rejected') return { ok: false, detail: `not merged: the owner rejected ${task}'s ${item.env ? '.env file' : `${valueWords(item).replace(/^the /, '')}`} in ${listFiles(names)} (${item.id})${item.reason ? `: "${item.reason}"` : ''}. Retry it without that: nextlevel retry ${task} --feedback "..."` };
   const card = fresh ? raiseCard(item) : item.card;
   if (jobStatus(task)) setStatus(task, { held: { id: item.id, card: card || '', files: names, at: item.createdAt, text: heldText(item, card) } });
   return {
     ok: false,
-    detail: `held: ${task} ${item.env ? `has a .env file (${listFiles(names)}), which is never committed` : `puts the value of ${secretNames(item).join(', ')} from .env in ${listFiles(names)}`}: nextlevel merges it only once the owner approves that on the dashboard (${item.id}${card ? `, card ${card}` : ''}). Carry on with other tasks; when the owner rejects it, ${task} comes back to you with the owner's reason.`,
+    detail: `held: ${task} ${item.env ? `has a .env file (${listFiles(names)}), which is never committed` : `puts ${valueWords(item)} in ${listFiles(names)}`}: nextlevel merges it only once the owner approves that on the dashboard (${item.id}${card ? `, card ${card}` : ''}). Carry on with other tasks; when the owner rejects it, ${task} comes back to you with the owner's reason.`,
   };
 }
 
@@ -4124,13 +4130,20 @@ function guardMerge(job, tip) {
 const namesOf = (rec) => (rec.kind === 'git' ? rec.items || [] : (rec.files || []).map((f) => f.path));
 // The .env values a held change puts in its files (their names only)
 const secretNames = (rec) => [...new Set((rec.files || []).flatMap((f) => f.names || []))];
+// "the value of X from .env", or from the tester's sign-ins (lib/vault.mjs) for a persona's password or token
+function valueWords(rec) {
+  const from = new Map(envSecrets().map((v) => [v.name, v.from || '.env']));
+  const groups = new Map();
+  for (const name of secretNames(rec)) groups.set(from.get(name) || '.env', [...(groups.get(from.get(name) || '.env') || []), name]);
+  return [...groups].map(([where, names]) => `the value of ${names.join(', ')} from ${where}`).join(' and ');
+}
 // Who made a held change, and what it does, in one sentence (the card, the phone, Home)
 function heldWhat(rec) {
   const names = listFiles(namesOf(rec));
   if (rec.kind === 'push') return `A push of ${rec.count} commit(s) to ${rec.target} on ${REMOTE}${rec.deploy !== false ? ', a deploy branch' : ''}${rec.files?.length ? `${rec.deploy !== false ? ',' : ''} that changes ${names}` : ''}`;
   if (rec.kind === 'git') return `Git's own hooks or settings changed (${names}): all git work waits`;
   const who = rec.kind === 'merge' || rec.on === 'merge' || rec.on === 'slot' ? `Task ${rec.task}` : rec.kind === 'commit' || rec.on === 'commit' ? "The orchestrator's commit" : rec.on === 'push' ? `A push of ${rec.from} to ${rec.target}` : `A change on disk during ${rec.by}`;
-  if (rec.kind === 'secret') return rec.env ? `${who} has a .env file (${names})` : `${who} puts a value from .env (${secretNames(rec).join(', ')}) in ${names}`;
+  if (rec.kind === 'secret') return rec.env ? `${who} has a .env file (${names})` : `${who} puts ${valueWords(rec)} in ${names}`;
   return `${who} changes ${names}`;
 }
 // What a held task shows ("Blocked by the tool", Show activity)
@@ -4138,7 +4151,7 @@ const heldText = (rec, card = rec.card) => {
   const where = `Approve or reject it on the dashboard: Notes and handoffs${card ? `, card ${card}` : ''} (${rec.id}).`;
   const names = namesOf(rec);
   if (rec.kind === 'push') return `nextlevel holds the push of ${short(rec.sha)} to ${rec.target} on ${REMOTE} until the owner approves it. ${where}`;
-  if (rec.kind === 'secret') return `nextlevel holds ${rec.on === 'slot' ? "the hub's commit of its work" : rec.on === 'push' ? `the push to ${rec.target}` : 'its merge'}: ${rec.env ? `it has a .env file (${listFiles(names)}), which is never committed` : `it puts the value of ${secretNames(rec).join(', ')} from .env in ${listFiles(names)}`}. ${where}`;
+  if (rec.kind === 'secret') return `nextlevel holds ${rec.on === 'slot' ? "the hub's commit of its work" : rec.on === 'push' ? `the push to ${rec.target}` : 'its merge'}: ${rec.env ? `it has a .env file (${listFiles(names)}), which is never committed` : `it puts ${valueWords(rec)} in ${listFiles(names)}`}. ${where}`;
   return `nextlevel holds ${rec.kind === 'merge' ? 'its merge' : 'it'}: it changes ${listFiles(names)}, protected ${names.length === 1 ? 'file' : 'files'} (the agents and your tools load ${names.length === 1 ? 'it' : 'them'} outside any sandbox). ${where}`;
 };
 
@@ -4472,7 +4485,9 @@ function gitDecide(rec, action, why) {
 // aside), whatever .gitignore says: it holds that change with a card, the value hidden. The values are read again for
 // each look (the owner may change .env), and never go on a command line.
 function envSecrets() {
-  return secretValues(parseEnvFile(path.join(ROOT, '.env')), { example: parseEnvFile(path.join(ROOT, '.env.example')) });
+  const dotenv = secretValues(parseEnvFile(path.join(ROOT, '.env')), { example: parseEnvFile(path.join(ROOT, '.env.example')) });
+  // (and the tester's persona passwords and tokens, lib/vault.mjs: never committed or pushed either)
+  return [...dotenv, ...redactionValues(ROOT).named].sort((a, b) => b.value.length - a.value.length);
 }
 // The changes (git diff --raw entries) that put a .env file or a value from .env in: a value counts when the file
 // didn't have it before; content the owner let be committed doesn't. -> [{ e, b, a, names, env }]
@@ -4529,7 +4544,7 @@ function secretDecide(rec, action, why) {
     if (rec.on === 'push') {
       // (the push itself asks again: the orchestrator pushes again, and a deploy branch's card follows)
       cards().handoff.decideGuard(rec.id, { reply: `Approved: the value of ${secretNames(rec).join(', ')} in ${listFiles(names)} may go out. The orchestrator pushes ${rec.target} again` });
-      if (rec.job && jobStatus(rec.job)) setStatus(rec.job, { state: 'failed', acked: false, detail: `not pushed yet: the owner approved the value of ${secretNames(rec).join(', ')} from .env in ${listFiles(names)} (${rec.id}): push again` });
+      if (rec.job && jobStatus(rec.job)) setStatus(rec.job, { state: 'failed', acked: false, detail: `not pushed yet: the owner approved ${valueWords(rec)} in ${listFiles(names)} (${rec.id}): push again` });
       return { message: `Approved: ${listFiles(names)} may go out with that value. The orchestrator pushes again.` };
     }
     if (rec.on === 'merge') return approveMerge(rec, `the value of ${secretNames(rec).join(', ')} in ${listFiles(names)}`, later);
@@ -4541,12 +4556,12 @@ function secretDecide(rec, action, why) {
   cards().handoff.decideGuard(rec.id, { reply: `Rejected${why ? `: ${why}` : ' (no reason given)'}` });
   const back = rec.task && ['merge', 'slot'].includes(rec.on) && jobStatus(rec.task);
   if (back) {
-    setStatus(rec.task, { state: 'failed', held: null, finishedAt: now(), acked: false, detail: `the owner rejected ${rec.env ? `its .env file (${listFiles(names)})` : `the value of ${secretNames(rec).join(', ')} from .env in ${listFiles(names)}`} (${rec.id})${why ? `: "${why}"` : ''}. Retry it without that: nextlevel retry ${rec.task} --feedback "..."` });
+    setStatus(rec.task, { state: 'failed', held: null, finishedAt: now(), acked: false, detail: `the owner rejected ${rec.env ? `its .env file (${listFiles(names)})` : `${valueWords(rec)} in ${listFiles(names)}`} (${rec.id})${why ? `: "${why}"` : ''}. Retry it without that: nextlevel retry ${rec.task} --feedback "..."` });
   }
   log(`guard: the owner rejected ${rec.id} (${names.join(', ')})${why ? `: ${why}` : ''}`);
   if (rec.on === 'push') {
     const fix = `take it out of ${rec.from}'s commits (git revert of the commit that added it, or rewrite the branch before it is pushed), then push again`;
-    if (rec.job && jobStatus(rec.job)) setStatus(rec.job, { state: 'failed', acked: false, detail: `not pushed: the owner rejected ${rec.env ? `the .env file ${listFiles(names)}` : `the value of ${secretNames(rec).join(', ')} from .env in ${listFiles(names)}`} in its commits (${rec.id})${why ? `: "${why}"` : ''}. To push, ${fix}` });
+    if (rec.job && jobStatus(rec.job)) setStatus(rec.job, { state: 'failed', acked: false, detail: `not pushed: the owner rejected ${rec.env ? `the .env file ${listFiles(names)}` : `${valueWords(rec)} in ${listFiles(names)}`} in its commits (${rec.id})${why ? `: "${why}"` : ''}. To push, ${fix}` });
     return { message: `Rejected: nothing goes out with it. The orchestrator is told to ${fix}.` };
   }
   return { message: `Rejected: ${listFiles(names)} ${names.length === 1 ? 'stays' : 'stay'} out of git.${back ? ` Task ${rec.task} goes back to the orchestrator with your reason.` : ' The orchestrator sees your answer on its card.'}` };
@@ -4582,7 +4597,7 @@ function commitOntoBranch(rec) {
     }
     const tree = g(['write-tree']);
     const message = path.join(tmp, `message-${uniq()}.txt`);
-    fs.writeFileSync(message, `${rec.task}: what the hub held (${rec.id})\n\nThe owner approved it on the dashboard: ${listFiles(namesOf(rec))} with the value of ${secretNames(rec).join(', ')} from .env.\n`);
+    fs.writeFileSync(message, `${rec.task}: what the hub held (${rec.id})\n\nThe owner approved it on the dashboard: ${listFiles(namesOf(rec))} with ${valueWords(rec)}.\n`);
     const commit = g(['commit-tree', tree, '-p', tip, '-F', message]);
     fs.rmSync(message, { force: true });
     g(['update-ref', branch, commit, tip]);
@@ -4688,7 +4703,7 @@ const GIT_OPS = {
       const r = commitOntoBranch(rec);
       if (r.ok) {
         store.held.update(rec.id, { status: 'applied', appliedAt: now(), detail: r.detail });
-        if (jobStatus(rec.task)) setStatus(rec.task, { held: null, acked: false, detail: `the owner approved the value of ${secretNames(rec).join(', ')} from .env in ${listFiles(namesOf(rec))} (${rec.id}): ${r.detail}` });
+        if (jobStatus(rec.task)) setStatus(rec.task, { held: null, acked: false, detail: `the owner approved ${valueWords(rec)} in ${listFiles(namesOf(rec))} (${rec.id}): ${r.detail}` });
       }
       return r;
     }
@@ -5766,6 +5781,7 @@ const USAGE_ROLES = [
   { key: 'guide', title: 'Setup guide', unit: 'session', kind: 'interactive' },
   { key: 'assistant', title: 'Advisor', unit: 'question', kind: 'headless' },
   { key: 'security', title: 'Security engineer', unit: 'scan', kind: 'headless' },
+  { key: 'tester', title: 'Tester', unit: 'run', kind: 'program' },
 ];
 // The usage ledger as the dashboard reads it: each month file's lines, read again only when that file changed (its
 // size or time), so the live feed's every look costs a stat per month and a run's end re-reads one month
@@ -6184,6 +6200,92 @@ async function stopScanForHub() {
 // A scan running in a process the hub didn't start (a hub restarted while one ran) still holds the PC's lease
 const scanBusy = () => !!scan.child || !!runningScan(DIR);
 
+// ---------- the tester's acceptance runs (src/tester.mjs, docs/design/tester.md) ----------
+// The owner asks (nextlevel tester run, into the guard's folder) or the orchestrator does (into the state folder, held
+// to tester.maxRunsPerHour per plan and environment by the hub's own record, in the guard's folder); the hub starts one
+// at a time in a child process it follows (`_accept`), never while an update holds new work, with an environment built
+// from nothing (no .env value, no sign-in: the run opens the personas' values itself) and the plan as the base branch
+// has it now. A run isn't a job: no queue, no jobs/, no round (part 3 wires runs into cards and rounds).
+const accept = { child: null, id: '' };
+function acceptContext() {
+  const secrets = activitySecrets();
+  return { root: ROOT, stateDir: DIR, config: CFG.config, secrets, log, denyPorts: dashboardPorts() };
+}
+// The ports this project's dashboard has or had: a run never reaches them on this PC
+function dashboardPorts() {
+  return [readJson(path.join(DIR, 'ui.json'))?.port, readJson(path.join(DIR, 'ui-port.json'))?.port].map(Number).filter((p) => Number.isInteger(p) && p > 0);
+}
+// What an acceptance run's process gets of the hub's environment: what finds programs and the user's home and secret
+// store, nextlevel's own switches, and nothing of the project's .env or a variable that looks secret
+function acceptEnv() {
+  const keep = /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|SYSTEMDRIVE|TEMP|TMP|TMPDIR|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|PROGRAMDATA|COMPUTERNAME|USERNAME|USERDOMAIN|HOME|USER|LOGNAME|LANG|LC_ALL|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|PSModulePath|NODE_TEST_CONTEXT|NEXTLEVEL_[A-Z0-9_]+)$/i;
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (keep.test(k) && !DOTENV_KEYS.includes(k) && !SECRET_NAME.test(k)) env[k] = v;
+  return { ...env, NEXTLEVEL_ROOT: ROOT };
+}
+function testerTick() {
+  if (accept.child) return;
+  const asks = pendingRuns(ROOT, DIR);
+  if (!asks.length || updateHold) return; // (it waits for the update, as new tasks do)
+  const ask = asks[0];
+  fs.rmSync(ask.file, { force: true });
+  const t = CFG.config.tester;
+  const refuse = (why) => {
+    writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, state: 'refused', why, askedAt: ask.at, endedAt: now() });
+    log(`acceptance run ${ask.id} (${ask.plan} on ${ask.env}, asked by the ${ask.by}): not started: ${why}`);
+  };
+  if (!testerOn(CFG.config)) return refuse('the tester is off');
+  if (!t.environments[ask.env]) return refuse(`no environment ${ask.env} in nextlevel.json's tester`);
+  const cap = ask.by === 'owner' ? '' : capProblem(ROOT, { plan: ask.plan, env: ask.env, max: t.maxRunsPerHour });
+  if (cap) return refuse(cap);
+  const head = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
+  if (!/^[0-9a-f]{40}$/.test(head)) return refuse(`no ${CFG.base} branch`);
+  recordStart(ROOT, { plan: ask.plan, env: ask.env, by: ask.by, id: ask.id });
+  writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, commit: head, state: 'starting', askedAt: ask.at });
+  const what = Buffer.from(JSON.stringify({ id: ask.id, plan: ask.plan, env: ask.env, by: ask.by, commit: head })).toString('base64url');
+  const child = spawn(process.execPath, [BIN, '_accept', what], { cwd: ROOT, env: acceptEnv(), stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
+  Object.assign(accept, { child, id: ask.id });
+  log(`acceptance run ${ask.id}: starting ${ask.plan} on ${ask.env} at ${head.slice(0, 8)}, asked by the ${ask.by}`);
+  const done = () => {
+    if (accept.child !== child) return;
+    accept.child = null;
+    const r = readRun(DIR, ask.id);
+    if (r && ['starting', 'running'].includes(r.state)) for (const line of recoverRuns(DIR)) log(line);
+    const e = readRun(DIR, ask.id) || {};
+    addUsage('tester', 'none', { runs: 1, minutes: e.minutes || 0, reason: ask.by });
+    log(`acceptance run ${ask.id}: ${e.state || 'ended'}${e.why ? ` (${e.why})` : ''}`);
+    try {
+      pruneRuns(DIR, t.keepRuns);
+    } catch (err) {
+      log(`couldn't remove old acceptance runs: ${err.message}`);
+    }
+  };
+  child.once('exit', done);
+  child.once('error', (err) => {
+    log(`acceptance run ${ask.id} didn't start: ${err.message}`);
+    done();
+  });
+}
+async function stopAcceptForHub() {
+  const child = accept.child;
+  if (!child) return;
+  log(`stopping: acceptance run ${accept.id} is asked to stop`);
+  try {
+    fs.mkdirSync(path.join(DIR, 'evidence', accept.id), { recursive: true });
+    fs.writeFileSync(path.join(DIR, 'evidence', accept.id, 'stop.json'), `${JSON.stringify({ at: now(), by: 'hub' })}\n`);
+  } catch (err) {
+    log(`couldn't ask the run to stop: ${err.message}`);
+  }
+  await new Promise((resolve) => {
+    const t = setTimeout(resolve, 45_000);
+    child.once('exit', () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+}
+const acceptBusy = () => !!accept.child || !!runningRun(DIR);
+
 // ---------- releases (safe updates, lib/update.mjs) ----------
 // The hub learns of a new release by fetching the tool's repository at its start and every 6 hours, in a child process
 // (a fetch can take a minute; the tick must go on), through the PC-wide update/available.json: a hub, or a dashboard,
@@ -6341,6 +6443,12 @@ async function cmdRun(argv) {
   } catch (err) {
     log(`couldn't look for security scans the last hub left: ${err.message}`);
   }
+  // (an acceptance run the last hub started whose process is gone: ended as stopped)
+  try {
+    for (const line of recoverRuns(DIR, runningRun(DIR)?.id)) log(line);
+  } catch (err) {
+    log(`couldn't look for acceptance runs the last hub left: ${err.message}`);
+  }
   let ports = '';
   try {
     ports = ` · slot port offsets ${[...Array(CFG.slots).keys()].map((i) => portOffset(i + 1)).join(', ')}`;
@@ -6374,6 +6482,7 @@ async function cmdRun(argv) {
       await pollJobs();
       await flushOutbox();
       securityTick();
+      testerTick();
       if (tick % 12 === 0) {
         gitGuard(); // git's own hooks and settings: a change gets its card now, not at the next git work
         closedWindowsTick(); // before a round: it would take orchestrator.json's place
@@ -6389,7 +6498,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !acceptBusy() && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -6398,6 +6507,7 @@ async function cmdRun(argv) {
   }
   while (busy.size) await Promise.allSettled([...busy.values()]);
   await stopScanForHub();
+  await stopAcceptForHub();
   await Promise.allSettled([...cleaning.values()]); // (a listing in progress ends: held slots say where they are)
   if (fixing) await fixing;
   await flushOutbox();
@@ -7921,6 +8031,14 @@ const COMMAND_TABLE = {
   _trial: (rest) => cmdTrialProcess(rest[0]),
   security: (rest) => cmdSecurity(rest, { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive, envKeys: DOTENV_KEYS }).then((code) => (process.exitCode = code)),
   _scan: (rest) => cmdScanProcess(rest[0], scanContext()).then((code) => (process.exitCode = code)),
+  tester: (rest) => cmdTester(rest, { root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, hubAlive, git: (args) => git(args, { allowFail: true }).out }).then((code) => (process.exitCode = code)),
+  _accept: (rest) => {
+    // (setup() loaded the project's .env into this process: the run reads it only to redact with, so what it starts gets
+    // none of it; acceptContext reads .env from its file)
+    const ctx = acceptContext();
+    for (const k of DOTENV_KEYS) delete process.env[k];
+    return cmdAcceptProcess(rest[0], ctx).then((code) => (process.exitCode = code));
+  },
   _locktest: (rest) => cmdLockTestProcess(rest[0]),
   _locktry: (rest) => cmdLockTryProcess(rest[0]),
   'lock-test': (rest) => cmdLockTest(rest).then((ok) => (process.exitCode = ok ? 0 : 1)),

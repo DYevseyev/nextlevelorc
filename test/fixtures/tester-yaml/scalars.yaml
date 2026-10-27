@@ -1,0 +1,13 @@
+plain: a plain value with spaces
+hash: "a # inside quotes"
+comment: value # a comment after it
+single: 'it''s single'
+double: "tab\there \"quoted\" é \\ end"
+empty: ""
+colon: "a: b"
+url: /path?x=1&y=2
+number: 0042
+bool: yes
+null_word: null
+tilde: ~
+dash: -1

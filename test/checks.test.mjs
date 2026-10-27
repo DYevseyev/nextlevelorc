@@ -2104,6 +2104,53 @@ test("security.probe and security.daybreak: Codex's sandbox inside the scanner, 
   assert.match(standard.detail, /^standard safeguards on gpt-6-astra: OpenAI's cyber screening may block parts of a scan/);
 });
 
+// The tester's checks (src/checks/tester.mjs): skipped while it is off; the personas the plans need, the secret store,
+// the plans, each environment's answer
+test('tester.config, tester.vault, tester.plans, tester.reach: off, then what the plans need on the fake PC (docs/CHECKS.md)', async () => {
+  const TESTER = { tester: { enabled: true, environments: { staging: { url: 'https://staging.example.com' }, prod: { url: 'https://app.example.com', production: true } }, allowMutations: ['staging'], personas: ['member', 'admin'] } };
+  const plan = 'plan: notes\nenv: [staging]\nsteps:\n  - as: member\n    do: { request: "GET /notes/42" }\n    expect: { status: 200 }\n';
+  const off = await check('tester.config', {});
+  assert.equal(off.status, 'skip');
+  for (const id of ['tester.vault', 'tester.plans', 'tester.reach']) assert.equal((await check(id, {})).status, 'skip', id);
+
+  const files = { '/proj/docs/acceptance/notes.yaml': plan };
+  const unset = await check('tester.config', { config: TESTER, files });
+  assert.equal(unset.status, 'fail');
+  assert.equal(unset.severity, 'warn');
+  assert.match(unset.detail, /^member on staging isn't set/);
+  assert.doesNotMatch(unset.detail, /admin|prod/, 'only what a plan needs');
+  assert.deepEqual(unset.steps.map((s) => s.command), ['nextlevel tester persona set staging member']);
+  const vault = (origin) => JSON.stringify({ version: 1, store: 'dpapi', entries: { [`staging@${origin}/member`]: { setAt: '2026-10-27T10:00:00Z', fields: { username: {}, password: {} } } } });
+  const set = await check('tester.config', { config: TESTER, files: { ...files, '/home/me/.nextlevel/vault/proj.json': vault('https://staging.example.com') } });
+  assert.equal(set.status, 'fail', 'the vault file is named by the project key, not the folder name');
+  const { projectKey } = await import('../src/lib/guard.mjs');
+  const at = (origin) => ({ ...files, [`/home/me/.nextlevel/vault/${projectKey('/proj')}.json`]: vault(origin) });
+  const good = await check('tester.config', { config: TESTER, files: at('https://staging.example.com') });
+  assert.equal(good.status, 'ok', good.detail);
+  assert.match(good.detail, /staging https:\/\/staging\.example\.com, steps that mutate may run; prod https:\/\/app\.example\.com \(production\), read-only/);
+  const moved = await check('tester.config', { config: TESTER, files: at('https://old.example.com') });
+  assert.match(moved.detail, /member on staging isn't set \(only for an old URL\)/);
+
+  assert.equal((await check('tester.vault', { config: TESTER, platform: 'win32', commands: { 'powershell -v': '' } })).status, 'ok');
+  const noStore = await check('tester.vault', { config: TESTER });
+  assert.equal(noStore.status, 'fail');
+  assert.match(noStore.detail, /Secret Service/);
+  assert.equal((await check('tester.vault', { config: TESTER, commands: { 'secret-tool --version': '' } })).status, 'ok');
+
+  assert.equal((await check('tester.plans', { config: TESTER })).severity, 'info');
+  assert.equal((await check('tester.plans', { config: TESTER, files })).status, 'ok');
+  const badPlan = await check('tester.plans', { config: TESTER, files: { ...files, '/proj/docs/acceptance/bad.yaml': plan.replace('as: member', 'as: stranger').replace('GET /notes/42', 'POST /notes') } });
+  assert.equal(badPlan.status, 'fail');
+  assert.match(badPlan.detail, /docs\/acceptance\/bad\.yaml:\d+: step 1: POST changes data/);
+
+  const reach = await check('tester.reach', { config: TESTER, urls: { 'https://staging.example.com/': { status: 200 }, 'https://app.example.com/': { status: 302 } } });
+  assert.equal(reach.status, 'ok', reach.detail);
+  assert.ok(reach.ctx.calls.includes('GET https://staging.example.com/'));
+  const down = await check('tester.reach', { config: TESTER, urls: { 'https://staging.example.com/': { status: 503 } } });
+  assert.equal(down.status, 'fail');
+  assert.match(down.detail, /staging \(https:\/\/staging\.example\.com\) answers 503; prod \(https:\/\/app\.example\.com\): app\.example\.com doesn't resolve/);
+});
+
 test('every registered check is valid, has a unique id and a learnMore, and is covered above', () => {
   const ids = CHECKS.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length, 'ids are unique');
@@ -2135,3 +2182,4 @@ test('every step says which window to type it in, and has something to type or d
     if (s.command?.startsWith('/')) assert.ok(['codex', 'agy', 'claude'].includes(s.window), `${s.id}: slash command ${s.command} outside the tool that runs it`);
   }
 });
+

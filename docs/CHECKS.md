@@ -692,6 +692,32 @@ For a repository it is offered for: who besides you can push. Once its checks ru
 workflow can run code here, as the runner's account. Others who can: **warn**, naming them, with the repository's access
 page. Only you: **pass**.
 
+### tester.config
+The tester (`docs/design/tester.md`, `docs/acceptance.md`) can sign in every persona a plan needs: for each plan under
+`docs/acceptance/`, on each environment it runs on (its `env:` line, else every environment), each persona its steps
+name (`as:`) is set on this PC for that environment's current URL. A persona not set, or set only for an old URL:
+**warn**, with `nextlevel tester persona set <env> <persona>` to type in your own PowerShell window, in the project
+(what you type is never shown, and it stays on this PC). The detail names each environment, whether steps that mutate
+may run there, and which is production. Skipped while the tester is off, like every tester check.
+
+### tester.vault
+This PC has a safe place for the personas' sign-ins: on Windows, Windows' own protection for your account (DPAPI,
+through Windows PowerShell); on macOS, the login keychain (`security`); on Linux, the Secret Service (`secret-tool`, from
+libsecret-tools, with a keyring such as GNOME Keyring). The values are sealed in `~/.nextlevel/vault/`, outside the
+project, with a key only that store opens. Missing: **warn**, and no persona can be set.
+
+### tester.plans
+Every plan under `docs/acceptance/` reads (`nextlevel tester check` gives each problem with its line): the YAML subset,
+the step rules (a method that changes data marked `mutates: true`, paths only, no cookie or authorization header, only
+`{{run.id}}` and `{{run.stamp}}`), and the environments and personas nextlevel.json's tester names. A plan that doesn't
+read: **warn**; a run refuses it. No plan yet: **info**.
+
+### tester.reach
+Each environment's URL answers one GET, with no sign-in, by the tester's own rules (that origin only, at the address
+checked for it: a name on the internet that resolves to this PC or a private network isn't reached, and never the
+dashboard's port). No answer, or a 5xx: **warn**: a run there ends incomplete until it answers. Not run inside Codex's
+sandbox (no network there).
+
 ## A project's own checks
 
 A project adds checks for its own setup (hosting, email, keys) as `.mjs` files in `.nextlevel/checks/`.
