@@ -5,6 +5,7 @@
 //   npm test
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -15,7 +16,7 @@ import { pathOnly, safeHeaders, safeJson, safeRecord, safeText } from '../src/li
 import { personaHold, reportSecrets } from '../src/lib/redact.mjs';
 import { mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
 import { cookieJar, isSpecialAddress, reachOf, request, urlProblem } from '../src/lib/testernet.mjs';
-import { forgetCache, listPersonas, readPersona, redactionValues, setPersona, vaultFile } from '../src/lib/vault.mjs';
+import { DPAPI_OPEN, DPAPI_SEAL, forgetCache, listPersonas, readPersona, redactionValues, setPersona, systemPowerShellPath, vaultFile } from '../src/lib/vault.mjs';
 import { parseYamlSubset } from '../src/lib/yamlsub.mjs';
 import { notify } from '../src/notify.mjs';
 import { makeProject, waitUntil } from './helpers.mjs';
@@ -559,4 +560,23 @@ test('the run\'s own process holds no .env value in its environment', { skip: pr
     await app.close();
     p.cleanup();
   }
+});
+
+// The real store on Windows: the vault's own arguments, through Windows' own PowerShell (the one nextlevel starts outside
+// the tests' stubs), seal a key and open it again, the key only on stdin
+test("Windows: DPAPI seals and opens the sign-ins' key through Windows' own PowerShell", { skip: process.platform !== 'win32' }, () => {
+  const ps = systemPowerShellPath();
+  assert.ok(ps.toLowerCase().endsWith('\\system32\\windowspowershell\\v1.0\\powershell.exe'), ps);
+  assert.ok(fs.existsSync(ps), ps);
+  for (const args of [DPAPI_SEAL, DPAPI_OPEN]) assert.ok(!args.includes('Bypass') && !args.includes('-ExecutionPolicy'), args.join(' '));
+  const key = randomBytes(32).toString('base64');
+  const run = (args, input) => spawnSync(ps, args, { input, encoding: 'utf8', windowsHide: true, timeout: 60_000 });
+  const sealed = run(DPAPI_SEAL, key);
+  assert.equal(sealed.status, 0, sealed.stderr);
+  const blob = sealed.stdout.trim();
+  assert.ok(blob && blob !== key && !blob.includes(key));
+  assert.ok(!DPAPI_SEAL.join(' ').includes(key), 'the key is never on the command line');
+  const opened = run(DPAPI_OPEN, blob);
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.equal(opened.stdout.trim(), key);
 });
