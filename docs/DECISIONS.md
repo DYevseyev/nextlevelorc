@@ -2044,7 +2044,8 @@ One entry each: date, decision, why, alternatives.
   was checked. Each request resolves once, checks every address and connects to the checked one; redirects are
   followed by hand, each hop checked against the environment's origin.
 - 2026-10-27 — **Persona sign-ins: one AES key per project held by the OS store, each value sealed with it.** On
-  Windows the key is sealed with DPAPI through .NET's `ProtectedData` in Windows PowerShell (always there; the key on
+  Windows the key is sealed with DPAPI through .NET's `ProtectedData` in Windows PowerShell (always there: the one in
+  `%SystemRoot%`, never one first on PATH, and without `-ExecutionPolicy Bypass`, which `-Command` doesn't need; the key on
   stdin), not `ConvertFrom-SecureString`, whose output and defaults differ between PowerShell 5.1 and 7. Each value is
   bound to `<env>@<origin>/<persona>#<field>` (AES-GCM's associated data), so a value moved to another environment or
   URL doesn't open. The store's program starts with only the variables it needs to find the user's store.

@@ -140,7 +140,7 @@ function readAction(d, at, line, add) {
       else {
         for (const [k, v] of Object.entries(d.headers)) {
           const name = k.toLowerCase();
-          if (!/^[a-z0-9-]{1,64}$/.test(name) || ['cookie', 'authorization', 'proxy-authorization', 'host', 'origin', 'referer', 'content-length', 'transfer-encoding', 'connection'].includes(name)) add(line, `${at}: the header "${k}" can't be set by a plan (the sign-in recipe in nextlevel.json gives the sign-in)`);
+          if (!/^[a-z0-9-]{1,64}$/.test(name) || ['cookie', 'authorization', 'proxy-authorization', 'host', 'origin', 'referer', 'content-length', 'transfer-encoding', 'connection', 'x-http-method-override', 'x-http-method', 'x-method-override'].includes(name)) add(line, `${at}: the header "${k}" can't be set by a plan (the sign-in recipe in nextlevel.json gives the sign-in)`);
           else a.headers[name] = str(v);
         }
       }

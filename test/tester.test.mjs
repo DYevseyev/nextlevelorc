@@ -4,6 +4,7 @@
 // (test/stubs/webapp.mjs) with three test accounts.
 //   npm test
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -72,6 +73,8 @@ test('plans: a step that changes data says so, never repeats, never names a host
   assert.match(problemsOf(steps('  - do: { request: "GET //other.example.com/a" }\n    expect: { status: 200 }')), /./);
   assert.match(problemsOf(steps('  - do: { request: "GET /a", headers: { Cookie: "a=b" } }\n    expect: { status: 200 }')), /"Cookie" can't be set by a plan/);
   assert.match(problemsOf(steps('  - do: { request: "GET /a", headers: { authorization: "Bearer x" } }\n    expect: { status: 200 }')), /can't be set by a plan/);
+  // (a GET that a framework would take for a DELETE never passes for a read)
+  for (const h of ['X-HTTP-Method-Override', 'x-http-method', 'X-Method-Override']) assert.match(problemsOf(steps(`  - do: { request: "GET /a", headers: { ${h}: DELETE } }\n    expect: { status: 200 }`)), /can't be set by a plan/, h);
   assert.match(problemsOf(steps('  - do: { request: "GET /a?x={{password}}" }\n    expect: { status: 200 }')), /only \{\{run\.id\}\} and \{\{run\.stamp\}\}/);
   assert.match(problemsOf('plan: x\nsteps: []\nextra: 1'), /./);
   assert.equal(planPathProblem('docs/acceptance/notes.yaml'), '');
@@ -96,7 +99,7 @@ test("settings: the tester runs no model, reaches https origins, never mutates p
   assert.match(bad.errors, /"environments\.prod\.url": https:\/\//);
   assert.match(bad.errors, /"environments\.s\.url": the origin alone \(https:\/\/s\.example\.com\)/);
   assert.match(bad.errors, /a step that mutates never runs on production/);
-  assert.match(errorsOf({ enabled: true, environments: { s: { url: 'https://user:pw@s.example.com' } } }).errors, /no login in it/);
+  assert.match(errorsOf({ enabled: true, environments: { s: { url: 'https://user:pw@example.com' } } }).errors, /no login in it/);
   assert.match(errorsOf({ enabled: true, environments: {} }).errors, /no environment is named/);
   const { value, errors } = errorsOf({ enabled: true, environments: { staging: { url: 'https://staging.example.com' } }, personas: ['member'], signIn: { http: { request: 'POST /api/session', json: { email: '{{username}}', password: '{{password}}' } } } });
   assert.equal(errors, '');
@@ -122,7 +125,7 @@ test("the HTTP client: special addresses, the environment's origin only, every a
   assert.equal(urlProblem('https://auth.example.com/a', reach), '');
   assert.match(urlProblem('https://other.example.com/a', reach), /isn't the environment's origin/);
   assert.match(urlProblem('http://staging.example.com/a', reach), /isn't the environment's origin/);
-  assert.match(urlProblem('https://x:y@staging.example.com/a', reach), /login/);
+  assert.match(urlProblem('https://x:y@example.com/a', reach), /login/);
   assert.match(urlProblem('file:///etc/passwd', reach), /isn't reached/);
   const local = reachOf('http://127.0.0.1:5000', [], { denyPorts: [5000] });
   assert.match(urlProblem('http://127.0.0.1:5000/api/state', local), /nextlevel's own dashboard/);
@@ -496,6 +499,64 @@ test('the tester off: the hub, status and the doctor are as before; a commit wit
       await waitUntil('the hub to stop', () => bg.exitCode !== null);
     }
   } finally {
+    p.cleanup();
+  }
+});
+
+test('a 307 never carries a body to another origin; to its own origin it does', async () => {
+  const other = await startWebApp();
+  const app = await startWebApp({ moveTo: `${other.url}/api/session` });
+  const p = testerProject(app, { extra: { alsoAllow: [other.url] } });
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'moved.yaml', `plan: moved
+steps:
+  - as: member
+    mutates: true
+    do: { request: "POST /moved", json: { note: carried } }
+    expect: { status: 200 }
+  - as: admin
+    mutates: true
+    do: { request: "POST /moved-here", json: { note: kept } }
+    expect: { json: { path: "$.got", contains: kept } }
+`);
+    const { run, shown } = runPlan(p, 'moved.yaml');
+    assert.deepEqual(run.steps.map((s) => s.status), ['refused', 'passed'], shown);
+    assert.match(shown, /redirected with its body to 127\.0\.0\.1:\d+: a request's body only goes to the origin it was sent to/);
+    assert.ok(!(await other.state()).requests.some((r) => r.body.includes('carried')), 'the other origin never saw the body');
+  } finally {
+    await app.close();
+    await other.close();
+    p.cleanup();
+  }
+});
+
+// (a stub git first on PATH, which notes the environment it got when a run's process starts it: POSIX only, a shell
+// script; Windows runs the same code)
+test('the run\'s own process holds no .env value in its environment', { skip: process.platform === 'win32' }, async () => {
+  const app = await startWebApp();
+  const p = testerProject(app);
+  try {
+    const PLANTED = 'testerenv-5d2a91c7-planted';
+    fs.writeFileSync(path.join(p.repo, '.env'), `APP_SETTING=${PLANTED}\n`);
+    setAll(p, app.url);
+    commitPlan(p, 'one.yaml', 'plan: one\nsteps:\n  - as: member\n    do: { request: "GET /notes/42" }\n    expect: { status: 200 }\n');
+    const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+    const bin = path.join(p.tmp, 'envgit');
+    const seen = path.join(p.tmp, 'git-env.txt');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nif [ "$NEXTLEVEL_AGENT" = tester ]; then env >> '${seen}'; fi\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const extraEnv = { ...vaultEnv(p), PATH: `${bin}${path.delimiter}${p.env.PATH}` };
+    const ask = p.hub(['tester', 'run', 'docs/acceptance/one.yaml', '--env', 'staging'], { extraEnv });
+    assert.equal(ask.code, 0, ask.out);
+    const hub = p.runUntilIdle([], { extraEnv });
+    assert.match(hub.out, /acceptance run acc-[\d-]+[0-9a-f]{4}: passed/, hub.out);
+    const env = fs.readFileSync(seen, 'utf8');
+    assert.match(env, /NEXTLEVEL_AGENT=tester/, 'the stub git saw the run');
+    assert.ok(!env.includes(PLANTED), 'no .env value');
+    assert.doesNotMatch(env, /^APP_SETTING=/m);
+  } finally {
+    await app.close();
     p.cleanup();
   }
 });

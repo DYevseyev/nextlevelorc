@@ -8032,7 +8032,13 @@ const COMMAND_TABLE = {
   security: (rest) => cmdSecurity(rest, { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive, envKeys: DOTENV_KEYS }).then((code) => (process.exitCode = code)),
   _scan: (rest) => cmdScanProcess(rest[0], scanContext()).then((code) => (process.exitCode = code)),
   tester: (rest) => cmdTester(rest, { root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, hubAlive, git: (args) => git(args, { allowFail: true }).out }).then((code) => (process.exitCode = code)),
-  _accept: (rest) => cmdAcceptProcess(rest[0], acceptContext()).then((code) => (process.exitCode = code)),
+  _accept: (rest) => {
+    // (setup() loaded the project's .env into this process: the run reads it only to redact with, so what it starts gets
+    // none of it; acceptContext reads .env from its file)
+    const ctx = acceptContext();
+    for (const k of DOTENV_KEYS) delete process.env[k];
+    return cmdAcceptProcess(rest[0], ctx).then((code) => (process.exitCode = code));
+  },
   _locktest: (rest) => cmdLockTestProcess(rest[0]),
   _locktry: (rest) => cmdLockTryProcess(rest[0]),
   'lock-test': (rest) => cmdLockTest(rest).then((ok) => (process.exitCode = ok ? 0 : 1)),

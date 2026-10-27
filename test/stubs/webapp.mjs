@@ -1,7 +1,8 @@
 // A stand-in web app for the tester's tests (docs/design/tester.md §11): a small notes app on 127.0.0.1 with three
 // test accounts, a sign-in with a CSRF token, a page and an API each may or may not reach, an audit log that fills in
 // after a moment, a page that prints a planted password, an endpoint that echoes the session, a redirect to another
-// host, a GET with a side effect and a version endpoint. Harmless: it answers only the test that started it.
+// host, 307s that send a body on (to another origin and to this one), a GET with a side effect and a version
+// endpoint. Harmless: it answers only the test that started it.
 // It runs in a process of its own (the tests drive the hub with spawnSync, which would stop a server in their own
 // process): `startWebApp()` starts it and reads its port; `state()` reads what it saw over /__test/state.
 import { spawn } from 'node:child_process';
@@ -10,12 +11,12 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export const USERS = {
-  admin: { email: 'admin@example.com', password: 'admin-pass-0001', role: 'admin' },
+  admin: { email: 'chief@example.com', password: 'admin-pass-0001', role: 'admin' },
   member: { email: 'member@example.com', password: 'member-pass-0002', role: 'member' },
   outsider: { email: 'outsider@example.com', password: 'outsider-pass-0003', role: 'outsider' },
 };
 
-function serve({ auditDelayMs = 1200, commit = '' } = {}) {
+function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
   const sessions = new Map(); // sid -> user name
   const csrf = new Set();
   const audit = [];
@@ -100,6 +101,12 @@ function serve({ auditDelayMs = 1200, commit = '' } = {}) {
         return json(res, 200, { n: sideEffects });
       }
       if (p === '/version') return json(res, 200, { commit });
+      // a 307 that sends the body on: to another origin (moveTo), or to this one
+      if (p === '/moved' || p === '/moved-here') {
+        res.writeHead(307, { location: p === '/moved' ? moveTo : '/echo-body' });
+        return res.end();
+      }
+      if (p === '/echo-body') return json(res, 200, { got: body });
       return json(res, 404, { error: 'no such page' });
     });
   });

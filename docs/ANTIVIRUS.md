@@ -32,7 +32,8 @@ PowerShell, not the whole project, and never turn the antivirus or Advanced Thre
 
 ## The tester's sign-ins (Windows PowerShell)
 
-With the tester on, nextlevel starts Windows PowerShell (`powershell.exe -NoProfile -NonInteractive`, hidden) to seal or
+With the tester on, nextlevel starts Windows' own PowerShell (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe
+-NoProfile -NonInteractive`, hidden, never one a PATH entry puts first) to seal or
 open the key that protects the test accounts' sign-ins with Windows' own protection for your account (DPAPI,
 `System.Security.Cryptography.ProtectedData`): when you set a persona, and once per run and per process that redacts.
 The key goes in on stdin, never on its command line. A behaviour-based antivirus may note a hidden PowerShell reading

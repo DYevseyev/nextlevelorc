@@ -67,15 +67,17 @@ function writeFile(root, v) {
 }
 
 // ---------- the project's key, through the store ----------
+// (Windows PowerShell from Windows' own folder, never one a PATH entry puts first: the key goes through it)
+const systemPowerShell = () => (process.platform === 'win32' && process.env.SYSTEMROOT && testStubs() === null ? { file: path.join(process.env.SYSTEMROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') } : null);
 const run = (cmd, args, input) => {
-  const bin = resolveBinQuiet(cmd);
+  const bin = (cmd === 'powershell' && systemPowerShell()) || resolveBinQuiet(cmd);
   if (!bin) return { ok: false, out: '', err: `${cmd} isn't reachable` };
   const r = spawnSync(bin.file, args, { input, encoding: 'utf8', windowsHide: true, timeout: 60_000, env: storeEnv() });
   return { ok: r.status === 0, out: (r.stdout || '').trim(), err: ((r.stderr || '').trim() || r.error?.message || `exit ${r.status}`).split(/\r?\n/)[0].slice(0, 200) };
 };
 // The store's programs get nothing of the project's .env (only what they need to find the user's store)
 const storeEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|SYSTEMDRIVE|TEMP|TMP|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|COMPUTERNAME|USERNAME|USERDOMAIN|HOME|USER|LOGNAME|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|DISPLAY|WAYLAND_DISPLAY|PSModulePath)$/i.test(k)));
-const PS = (body) => ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()); ${body}`];
+const PS = (body) => ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $d=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()); ${body}`];
 const DPAPI_SEAL = PS("[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($d,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))");
 const DPAPI_OPEN = PS("[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect($d,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))");
 const testKeyFile = (pk) => path.join(process.env.NEXTLEVEL_TEST_VAULT, `${pk}.key`);

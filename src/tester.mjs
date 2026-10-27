@@ -547,6 +547,8 @@ export async function cmdAcceptProcess(what, ctx) {
         const next = new URL(loc, url);
         const bad = urlProblem(next.href, reach);
         if (bad) throw Object.assign(new Error(`redirected to ${next.host}: ${bad}`), { refused: true });
+        // (a 307 or 308 sends the body again: a sign-in's password never goes to another origin that way)
+        if (body !== null && (res.status === 307 || res.status === 308) && next.origin !== u.origin) throw Object.assign(new Error(`redirected with its body to ${next.host}: a request's body only goes to the origin it was sent to`), { refused: true });
         hops.push({ status: res.status, location: next.origin === reach.envOrigin ? `${next.pathname}${next.search}` : `${next.origin}${next.pathname}` });
         if (res.status === 303 || ((res.status === 301 || res.status === 302) && m !== 'GET' && m !== 'HEAD')) {
           m = 'GET';
