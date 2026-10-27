@@ -47,6 +47,9 @@ Write what you want built in `BRIEF.md`. Then double-click `START.cmd` for the m
 orchestrator, autopilot, the bridge test) and press **d** for the dashboard, which shows what runs, what needs you and
 the next action.
 
+An optional **security engineer** scans your code for security problems when you ask, in OpenAI's Codex Security
+scanner in Docker, and never changes the code (`docs/GUIDE.md`, "The security engineer").
+
 ## How safe is it
 
 What nextlevel does for you:

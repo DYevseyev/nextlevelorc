@@ -84,6 +84,16 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   length. `src/lib/ghrepo.mjs` — a repository's facts with the owner's gh (GETs), their cache, `offer()` (never a public,
   internal or organization's repository) and the Team card's view (`checksView`; `githubChecksView` in `hub.mjs`, Check
   again in `src/dashboard.mjs`). `src/checks/runner.mjs` — `runner.visibility`, `runner.forks`, `runner.collaborators`.
+- `src/security.mjs` — the security engineer (`docs/design/security-engineer.md`): `nextlevel security scan|stop|login`
+  (the owner's) and `status` (a look), the owner's request in the guard's folder, and `_scan`, the hub's child process
+  that runs one scan (the lease, the stop rules, the dry run, the scan, the copy-out, the findings and their record in the
+  guard's folder). `src/lib/securityimage.mjs` — the scanner pinned by digest and its vendored seccomp profile
+  (`docker/codex-security-seccomp.json`); `src/lib/securityspec.mjs` — every `docker` command a scan runs (pure);
+  `src/lib/securityrun.mjs` — running them (the volumes' owner, the probe, the sign-in by its files' names, the models,
+  the copy-out); `src/lib/securityscan.mjs` — the scan's checkout (steering files aside, links out, tracked secrets
+  files), the PC's one-scan lease and the scans' records; `src/lib/findings.mjs` — the manifest's seal and the findings,
+  made safe (pure); `src/checks/security.mjs` — `security.docker`, `.image`, `.login`, `.probe`, `.daybreak`. The hub's
+  side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans, scanBusy).
 - `src/lib/usage.mjs` — the usage ledger (`docs/design/token-usage.md`): one line per ended run in
   `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
   today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
@@ -230,6 +240,10 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   clock change, the import once and after a Go back, a worker's line end to end, `nextlevel usage` and `--all-projects`
   refused in agents' sessions, the dashboard's Usage card's data: Today from the ledger, `/api/usage` by range, field and
   project, a task's tokens on the Build page; the rounds' lines in `test/autopilot.test.mjs`);
+  `test/security.test.mjs` covers the security engineer with the stub Docker (`test/stubs/fake-docker.mjs`, its
+  `STUB_DOCKER_*` and `STUB_SCAN` knobs, what each run saw in `~/.fake-docker/seen.jsonl`): the pinned image, every
+  `docker` line, the findings' shapes, a scan end to end with no job or round, output that doesn't hold, each stop rule,
+  a scanner error, a stop, a planted `.env` value, the seccomp fallback, and who may scan;
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),

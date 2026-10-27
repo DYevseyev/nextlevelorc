@@ -214,6 +214,21 @@ it; closing it stops the dashboard. Choosing d again while it runs just shows th
 Only this PC can reach it (it listens on 127.0.0.1), and its link has a key in it: without the key it
 shows nothing. `.env` values never appear on it (except in a note you wrote yourself).
 
+### The security engineer (scans of your code)
+Off until you turn it on. It finds and confirms security problems in the project's code, in a checkout of its own, and
+never changes the code. Its scans run in OpenAI's Codex Security scanner, in Docker, signed in with your ChatGPT
+account in a Docker volume of its own. In PowerShell, in the project's folder:
+1. Docker Desktop running, with Linux containers. `nextlevel doctor` says what is missing.
+2. `docker pull` of the scanner, exactly as the doctor's `security.image` row shows it (about 1.4 GB).
+3. `nextlevel security login`: open the page it names in your browser and type the code it shows there.
+4. Turn the role on: the Team page, or `nextlevel team set security --engine codex --daybreak on`. Without a model it
+   picks the first one Daybreak Blue works on.
+5. `nextlevel security scan` (or `--deep`), then `nextlevel security status` for how it goes and its findings;
+   `nextlevel security stop` stops it. A 41-file scan used about 6% of a week's allowance; a larger project uses more.
+
+Nothing starts a scan by itself, and a scan isn't a task: autopilot doesn't see it. Anything on your PC that can run
+`docker` can read the scanner's sign-in (`docs/KNOWN_ISSUES.md`).
+
 ### When a check won't pass: report it, and have it fixed
 If a check's steps don't fix it, nextlevel's developers get a field report, and Claude Code fixes it:
 
@@ -262,6 +277,8 @@ Created by `nextlevel init` with these defaults:
 | `roles.<role>.effort` | `""` | the reasoning effort (`low`, `medium`, `high`...; `""`: the engine's own). Codex gets it in `codex exec` only (its interactive window keeps Codex's own); Antigravity never (the level is in its model's name) |
 | `roles.guide` | `{ "engine": "" }` | the setup guide: no engine means the orchestrator's; or an engine, model and effort of its own |
 | `roles.assistant` | `{ "engine": "" }` | the advisor (Ask): no engine means automatic: Advise on the first of Claude Code or Codex that isn't the orchestrator's engine and is installed, on its own default model (else the orchestrator's engine), and Quick on a light model on the first of Claude Code (haiku) or Codex (its smallest listed model, low effort) the roles use; or `claude`, `codex` or, after its lock test, `agy` with a model and effort of its own (Quick then uses that engine's light model) |
+| `roles.security` | `{ "engine": "", "daybreak": false }` | the security engineer: off with no engine; `codex` with a model, effort, profile and `daybreak` (OpenAI's Daybreak Blue, on the models it covers). Its scans run in OpenAI's Codex Security container, never with your own Codex (`docs/design/security-engineer.md`) |
+| `security.scanMinutes`, `security.deepScanMinutes` | `90`, `240` | a scan's and a deep scan's time limit (5–1440 minutes) |
 | `roles.<role>.fallback` | `codex` for workers, none for the orchestrator | a profile or engine the role falls back to (below), or `{ "engine", "model", "effort" }` of its own |
 | `roles.worker.second` | none | a second worker in the same slots: `{ "engine", "model", "effort", "takes" }` or `{ "profile", "takes" }`; `takes` is `no-docker`, `any` or `asked` (only when the spec asks). A task reaches it with `--profile second` or a spec's `Profile: second` line. The Team page sets it |
 | `profiles.<name>` | none | `{ "engine": "codex", "account": "work", "model": "", "effort": "" }`: an engine, the account it's signed into, a model and effort |

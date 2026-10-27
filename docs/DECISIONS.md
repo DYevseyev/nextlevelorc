@@ -2000,3 +2000,30 @@ One entry each: date, decision, why, alternatives.
   them, in lowercase, so `docs/security.md` is protected too: a project that keeps its security notes under that name
   gets a card for each change to them, which is the price of one rule for every engine. A project can take either out
   with `"protected": { "remove": [...] }`.
+- 2026-10-27 — **The security engineer's scans run in OpenAI's scanner container, and nothing falls back.** On Windows
+  Codex's sandbox doesn't stop reads (FR-023) and 0.164.0 doesn't enforce a permission-profile deny there (Step 0b), so
+  a scan can't run with the owner's Codex or its plugin. The container's own Codex sandbox held in the model-free probe
+  (the sign-in denied and unlisted, the network closed), so that one path is pinned by digest with its seccomp profile
+  vendored, and a scan that can't have it doesn't run. Its volumes are named with the guard's hashed project key
+  (`projectKey` in `src/lib/guard.mjs`), not the version folders' key, which carries the folder's name: Docker lists
+  volume names to anything that asks. The sign-in volume is named by the account (a hash of the profile's name), not the
+  project, since one sign-in serves every project. Output comes out file by file with `docker cp` from a container that
+  never starts, so no host folder is ever writable by the scanner.
+- 2026-10-27 — **The probe's verdict is kept for the image only when the probe answered.** A volume that couldn't be
+  owned or a Docker hiccup on the way says nothing about the image, and keeping it would stop every later scan with a
+  stale reason; Codex's sandbox failing to start, or the four answers, are about the image and are kept for its digest
+  (a fresh doctor run asks again).
+- 2026-10-27 — **`nextlevel security login` works while the role is off.** Turning the role on runs its checks first,
+  the sign-in among them, so a sign-in that needed the role on could never be made. Off, it signs in the account an
+  unnamed profile gets, the one `team set security --engine codex` without `--profile` saves.
+- 2026-10-27 — **The role doc reaches the scanner as `--scan-prompt-file`.** The guard's list sets `AGENTS.md`-like
+  files aside in the scan's checkout (a repository mustn't steer its own scan), so the role doc can't be one of them; it
+  goes in the read-only knowledge-base folder beside the checkout. Step 0b didn't run that flag: the manual check does.
+- 2026-10-27 — **Status trusts a scan only while its findings file matches the hub's record.** `.nextlevel/` is in the
+  project, where agents write; the hash of the findings the hub sealed is kept in the guard's folder, outside it, and a
+  file that no longer matches is shown as not trusted, with no findings.
+- 2026-10-27 — **Docker reading the sign-in is said, with layers, not walled.** Anything that can run `docker` can mount
+  the sign-in volume, a Codex worker out of its sandbox included; that is no worse than its reading `~\.codex\auth.json`
+  today. A Claude Code worker gets a deny rule for commands naming `nextlevel-sec-` (Claude Code's wildcard rules are
+  documented; agy's deny-list isn't enforced and a new rule there would fail every existing `agy.deny-list` check), and
+  every worker's log is read for one after its attempt.
