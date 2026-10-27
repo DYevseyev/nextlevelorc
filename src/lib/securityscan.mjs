@@ -137,3 +137,82 @@ export function releaseLease(home, { pid, start }) {
   }
 }
 
+
+// ---------- the checkout: a standalone clone (delta 1 D1) ----------
+// A worktree's .git file names a Windows path the container can't see, so the scan's checkout is a clone of its own:
+// made once with no hard links and nothing checked out, its origin removed, hooks and git's automatic housekeeping off;
+// before each scan the base branch's head is fetched from the project by path, the folder cleaned and that commit
+// checked out detached. Every git command here runs with an empty hooks folder. git(args, cwd) -> { ok, out, err }.
+export const NO_HOOKS = '.git/nextlevel-no-hooks';
+export function refreshCheckout({ root, slot, base, head, git }) {
+  const g = (args) => git(['-c', `core.hooksPath=${path.join(slot, NO_HOOKS)}`, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], slot);
+  if (!fs.existsSync(path.join(slot, '.git'))) {
+    fs.rmSync(slot, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(slot), { recursive: true });
+    const c = git(['-c', 'core.hooksPath=', 'clone', '--no-hardlinks', '--no-checkout', '--quiet', root, slot], path.dirname(slot));
+    if (!c.ok) return `the scan's checkout couldn't be made (git clone: ${(c.err || c.out).split('\n')[0]})`;
+    fs.mkdirSync(path.join(slot, NO_HOOKS), { recursive: true });
+    g(['remote', 'remove', 'origin']);
+    for (const [k, v] of [['core.hooksPath', path.join(slot, NO_HOOKS)], ['maintenance.auto', 'false'], ['gc.auto', '0']]) g(['config', k, v]);
+  }
+  fs.mkdirSync(path.join(slot, NO_HOOKS), { recursive: true });
+  const f = g(['fetch', '--quiet', '--no-tags', root, `+refs/heads/${base}:refs/nextlevel/scan-base`]);
+  if (!f.ok) return `the base branch couldn't be fetched into the scan's checkout (${(f.err || f.out).split('\n')[0]})`;
+  const tip = g(['rev-parse', 'refs/nextlevel/scan-base']).out.trim();
+  if (tip !== head) return `the base branch moved while the scan started (${tip.slice(0, 8)}, not ${head.slice(0, 8)}): start it again`;
+  g(['clean', '-fdxq']);
+  const c = g(['checkout', '--quiet', '--force', '--detach', head]);
+  if (!c.ok) return `the scan's checkout couldn't be set to ${head.slice(0, 8)} (${(c.err || c.out).split('\n')[0]})`;
+  g(['clean', '-fdxq']);
+  return '';
+}
+
+// A tracked file the scan would send to OpenAI that looks like a secrets file (delta 2 V6, stop rule 5): its name only,
+// never opened. -> [rel]
+export const isEnvLike = (rel) => {
+  const name = String(rel).split('/').pop().toLowerCase();
+  return name === '.env' || (name.startsWith('.env.') && !/^\.env\.(example|sample|template|dist|defaults)$/.test(name)) || name.endsWith('.env');
+};
+export function trackedSecrets({ slot, git }) {
+  const r = git(['-c', 'core.quotePath=false', 'ls-files', '-z'], slot);
+  return r.ok ? r.out.split('\0').filter(Boolean).filter(isEnvLike) : [];
+}
+
+// ---------- the scans' records ----------
+export const scansDir = (stateDir) => path.join(stateDir, 'security', 'scans');
+export const scanDir = (stateDir, id) => path.join(scansDir(stateDir), id);
+export const SCAN_ID = /^sec-\d{8}-\d{6}-[0-9a-f]{4}$/;
+export const newScanId = (at = new Date()) => `sec-${at.toISOString().replace(/[-:T]/g, '').slice(0, 14).replace(/^(\d{8})/, '$1-')}-${randomBytes(2).toString('hex')}`;
+export function readScan(stateDir, id) {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(scanDir(stateDir, id), 'scan.json'), 'utf8'));
+    return s && typeof s === 'object' && s.id === id ? s : null;
+  } catch {
+    return null;
+  }
+}
+export function writeScan(stateDir, id, change) {
+  const dir = scanDir(stateDir, id);
+  fs.mkdirSync(dir, { recursive: true });
+  const next = { ...(readScan(stateDir, id) || { id }), ...change, id };
+  const tmp = path.join(dir, `scan.json.${process.pid}.tmp`);
+  fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+  fs.renameSync(tmp, path.join(dir, 'scan.json'));
+  return next;
+}
+export function listScans(stateDir) {
+  let ids = [];
+  try {
+    ids = fs.readdirSync(scansDir(stateDir)).filter((n) => SCAN_ID.test(n));
+  } catch {
+    // none yet
+  }
+  return ids.sort().reverse().map((id) => readScan(stateDir, id)).filter(Boolean);
+}
+// A scan whose process still runs (its pid with its start time), for the hub's exit-when-idle and the update's wait
+export function runningScan(stateDir, { startOf = processStartSync } = {}) {
+  return listScans(stateDir).find((s) => ['starting', 'waiting', 'running'].includes(s.state) && Number.isInteger(s.pid) && typeof s.pidStart === 'number' && (() => {
+    const now = startOf(s.pid);
+    return now !== null && Math.abs(now - s.pidStart) <= START_SLACK_MS;
+  })()) || null;
+}

@@ -12,9 +12,10 @@ const LOOK = {
   doctor: (rest) => rest.includes('--json') && !rest.some((a) => a.startsWith('--fix')),
   help: () => true,
   version: () => true,
+  security: (rest) => !rest.length || rest[0] === 'status', // (the scans and findings' titles; never a scan)
   usage: (rest) => !rest.some((a) => a === '--all-projects' || a.startsWith('--all-projects=')), // (other projects' are the owner's)
 };
-export const LOOK_ONLY = 'nextlevel status [--json], nextlevel result <job-id> --peek, nextlevel team [--json], nextlevel team models <engine>, nextlevel doctor --json, nextlevel usage [--range ...] [--by ...] [--json]';
+export const LOOK_ONLY = 'nextlevel status [--json], nextlevel result <job-id> --peek, nextlevel team [--json], nextlevel team models <engine>, nextlevel doctor --json, nextlevel usage [--range ...] [--by ...] [--json], nextlevel security status [--json]';
 
 // Why `nextlevel <cmd> <rest>` can't run in a read-only session, or '' when it may.
 export function readOnlyRefusal(cmd, rest = []) {

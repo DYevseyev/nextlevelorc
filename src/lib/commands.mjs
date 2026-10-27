@@ -112,6 +112,18 @@ export const COMMANDS = {
     dashdash: 'mark',
     args: [0, ANY],
   },
+  security: {
+    group: 'owner',
+    lines: [
+      ['nextlevel security scan [--deep]', "ask for a security scan of the base branch's head (the hub starts it; the security engineer must be on)"],
+      ['nextlevel security status [--json]', "the scans, and the last trusted scan's findings (ids, severities, titles)"],
+      ['nextlevel security stop [<id>]', 'stop the scan that runs'],
+      ['nextlevel security login', "sign the scanner in, in this window (OpenAI's device page; once)"],
+    ],
+    text: "A scan runs in OpenAI's Codex Security container with only the scan's checkout and its output: it never changes the code, and nothing starts one by itself.",
+    options: { deep: B('scan: a deep scan (longer, more of the plan)'), json: JSON_OPT },
+    subs: { '': { options: ['json'], args: [0, 0] }, status: { options: ['json'], args: [0, 0] }, scan: { options: ['deep'], args: [0, 0] }, stop: { options: [], args: [0, 1] }, login: { options: [], args: [0, 0] } },
+  },
   'bridge-test': {
     group: 'owner',
     lines: [['nextlevel bridge-test [--profile P]', "prove hub -> workers works and workers can't push"]],
@@ -401,6 +413,7 @@ export const COMMANDS = {
   _cycle: { group: 'internal', lines: [['nextlevel _cycle [--fallback]', 'one autopilot round (the hub starts it)']], options: { fallback: B("on the orchestrator role's fallback") }, args: [0, 0] },
   _guide: { group: 'internal', lines: [['nextlevel _guide [<engine>|<profile>]', 'the setup guide, in the window nextlevel guide opened']], args: [0, 1] },
   _trial: { group: 'internal', lines: [['nextlevel _trial <what>', "the model check's trial before tasks start on Antigravity (the hub starts it, FR-022)"]], args: [1, 1] },
+  _scan: { group: 'internal', lines: [['nextlevel _scan <what>', "one security scan, in OpenAI's scanner container (the hub starts it)"]], args: [1, 1] },
   _locktest: { group: 'internal', lines: [['nextlevel _locktest <what>', "the lock test of a role on Antigravity (the hub starts it)"]], args: [1, 1] },
   _locktry: { group: 'internal', lines: [['nextlevel _locktry <what>', "one session of the lock test, in its own throwaway project (the lock test starts it)"]], args: [1, 1] },
   _update: { group: 'internal', lines: [['nextlevel _update <id>', 'the one-click update itself (the dashboard or nextlevel update starts it)']], args: [1, 1] },
