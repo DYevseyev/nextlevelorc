@@ -445,7 +445,10 @@ Where part 2 differs from §2 and §6, and why (`docs/DECISIONS.md` has each):
 - **Masks from the page's elements.** Before a screenshot, a function in the page marks every element that has text of
   its own or a value (`data-nextlevel-i`) and returns those texts; one holding a kept value outside the masks gets a
   mask of its own. A kept value only in the page's whole text keeps the picture out, as does a mask selector the browser
-  can't read.
+  can't read. Each child frame's text and fields are read the same way (`frame.evaluate`, across origins): a kept value
+  in a frame, or a frame that can't be read, keeps the picture out.
+- **Storage joins the redaction.** After the sign-in and each step, the context's cookies and the local-storage values
+  of the run's origins (16 characters or longer: a single-page app's token) join the run's kept values.
 - **Sign-ins across HTTP and the browser.** Each persona has one sign-in per kind of step, made once: a browser step
   after an HTTP recipe gets its cookies (`addCookies`) and its bearer token (added by `route()` for the environment's
   origin only); an HTTP step after a browser recipe gets the browser's cookies.

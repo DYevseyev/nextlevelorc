@@ -10,6 +10,9 @@ import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+// What a single-page app keeps in the browser's storage after its sign-in (the stand-in Playwright's "storage" knob)
+// and shows on /spa
+export const SPA_TOKEN = 'spa-token-7f3a9c2e5b1d4e6f8a0b';
 export const USERS = {
   admin: { email: 'chief@example.com', password: 'admin-pass-0001', role: 'admin' },
   member: { email: 'member@example.com', password: 'member-pass-0002', role: 'member' },
@@ -115,6 +118,8 @@ function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
         return json(res, 201, { ok: true });
       }
       if (p === '/echo-session') return json(res, 200, { cookie: req.headers.cookie || '', auth: req.headers.authorization || '', you: user });
+      if (p === '/spa') return html(res, 200, `<p id="tok">token: ${SPA_TOKEN}</p>`);
+      if (p === '/framed' || p === '/framed-closed') return html(res, 200, '<p id="host">A page with a frame</p>');
       if (p === '/leak') return html(res, 200, `<p id="debug">debug: password=${USERS.member.password}</p>`);
       if (p === '/off-site') {
         res.writeHead(302, { location: 'http://other.test/collect' });

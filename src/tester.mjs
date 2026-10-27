@@ -591,6 +591,8 @@ export async function cmdAcceptProcess(what, ctx) {
   };
   const keepCookies = async (p) => {
     for (const [, v] of await p.session.cookies()) addSecret(v);
+    // (and what its pages keep in local storage: long values only, as a token is; a short word stays readable)
+    for (const v of await p.session.storageValues()) if (v.length >= 16) addSecret(v);
   };
   const send = async (p, method, rel, { json, form, headers = {} } = {}, { signIn = false } = {}) => {
     // (a step that changes data only where nextlevel.json allows mutations: the sign-in recipe's own requests aside)

@@ -278,6 +278,18 @@ async function newSession(browser, reach, blocks, { cookies = [], bearer = () =>
         }
       }
       const seen = await read(usable);
+      // (frames: collect() reads the page's own document only; a kept value in a frame's text or fields keeps the picture
+      // out, and so does a frame that can't be read)
+      for (const f of page.frames()) {
+        if (f === page.mainFrame()) continue;
+        let t = '';
+        try {
+          t = await f.evaluate(() => `${document.body ? document.body.innerText : ''}\n${[...document.querySelectorAll('input, textarea')].map((e) => e.value).join('\n')}`);
+        } catch {
+          return { png: null, why: "a frame on the page couldn't be read: the screenshot isn't kept" };
+        }
+        if (secrets.some((s) => s && t.includes(s))) return { png: null, why: "a value the run keeps out is in a frame on the page: the screenshot isn't kept" };
+      }
       const extra = new Set();
       for (const s of secrets) {
         if (!s) continue;
@@ -296,6 +308,16 @@ async function newSession(browser, reach, blocks, { cookies = [], bearer = () =>
     async cookies() {
       try {
         return (await context.cookies(reach.envOrigin)).map((c) => [c.name, c.value]);
+      } catch {
+        return [];
+      }
+    },
+    // What the session's pages keep in their storage for the environment and "alsoAllow" origins (a token a single-page
+    // app keeps there): its values, which the run keeps out of everything it writes like the cookies' -> [value]
+    async storageValues() {
+      try {
+        const st = await context.storageState();
+        return (st.origins || []).filter((o) => reach.origins.has(o.origin)).flatMap((o) => (o.localStorage || []).map((x) => String(x.value ?? '')));
       } catch {
         return [];
       }

@@ -23,7 +23,7 @@ import { DPAPI_OPEN, DPAPI_SEAL, forgetCache, listPersonas, readPersona, redacti
 import { parseYamlSubset } from '../src/lib/yamlsub.mjs';
 import { notify } from '../src/notify.mjs';
 import { makeProject, waitUntil } from './helpers.mjs';
-import { startWebApp, USERS } from './stubs/webapp.mjs';
+import { SPA_TOKEN, startWebApp, USERS } from './stubs/webapp.mjs';
 
 const steps = (body) => `plan: x\nsteps:\n${body}`;
 const problemsOf = (text) => readPlan(text).problems.map((p) => p.message).join('\n');
@@ -843,6 +843,56 @@ steps:
     const split = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-6.json'), 'utf8'));
     assert.match(split.screenshot, /not in one element: the screenshot isn't kept/);
     assert.ok(!fs.existsSync(p.state('evidence', id, 'step-6.png')));
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("a token a single-page app keeps in the browser's storage is kept out of everything; a frame that shows a password, or can't be read, keeps the picture out", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { extra: { signIn: BROWSER_SIGN_IN } });
+  try {
+    installBrowserFor(p);
+    setAll(p, app.url);
+    fs.writeFileSync(
+      path.join(p.env.HOME, '.fake-playwright', 'knobs.json'),
+      JSON.stringify({
+        storage: { [new URL(app.url).origin]: { token: SPA_TOKEN, theme: 'dark' }, 'http://other.test': { theirs: 'other-origin-value-0123456789' } },
+        frames: [
+          { on: '/framed-closed', unreadable: true },
+          { on: '/framed', html: `<p>a widget</p><input id="pw" value="${USERS.member.password}">` },
+        ],
+      }),
+    );
+    commitPlan(p, 'spa.yaml', `plan: single-page-app
+steps:
+  - as: member
+    do: { open: /spa }
+    expect: { text: "token:" }
+  - as: member
+    do: { open: /framed }
+    expect: { text: A page with a frame }
+  - as: admin
+    do: { open: /framed-closed }
+    expect: { text: A page with a frame }
+`);
+    const { id, run, evidence, shown, hub } = runPlan(p, 'spa.yaml');
+    assert.equal(run.state, 'passed', shown);
+    const files = fs.readdirSync(p.state('evidence', id));
+    const pictures = files.filter((f) => f.endsWith('.png')).map((f) => fs.readFileSync(p.state('evidence', id, f), 'latin1')).join('\n');
+    const kept = [evidence, pictures, shown, hub.out, fs.readFileSync(p.state('logs', 'hub.log'), 'utf8'), JSON.stringify(run)].join('\n');
+    assert.ok(!kept.includes(SPA_TOKEN), "the app's token from its storage");
+    assert.ok(!kept.includes(USERS.member.password));
+    const spa = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-1.json'), 'utf8'));
+    assert.match(spa.text, /token: \*\*\*/);
+    assert.equal(spa.screenshot, 'step-1.png', 'the token masked where the page shows it');
+    const framed = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-2.json'), 'utf8'));
+    assert.match(framed.screenshot, /a value the run keeps out is in a frame on the page: the screenshot isn't kept/);
+    assert.ok(!files.includes('step-2.png'));
+    const closed = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-3.json'), 'utf8'));
+    assert.match(closed.screenshot, /a frame on the page couldn't be read: the screenshot isn't kept/);
+    assert.ok(!files.includes('step-3.png'));
   } finally {
     await app.close();
     p.cleanup();

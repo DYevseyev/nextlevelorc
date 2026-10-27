@@ -94,6 +94,18 @@ class Element {
     return out.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '');
   }
 }
+// fn(arg) run with `document` as the given one, its answer passed as Playwright passes it (JSON)
+function inDocument(doc, fn, arg) {
+  const before = globalThis.document;
+  globalThis.document = doc;
+  try {
+    return JSON.parse(JSON.stringify(fn(arg)));
+  } finally {
+    if (before === undefined) delete globalThis.document;
+    else globalThis.document = before;
+  }
+}
+
 function parseHtml(html) {
   const root = new Element('#root', [], null);
   let cur = root;
@@ -243,6 +255,11 @@ class Context extends EventEmitter {
   async cookies() {
     return [...this.jar].map(([name, value]) => ({ name, value }));
   }
+  // (local storage: what knobs.json's "storage" says, { "<origin>": { "<key>": "<value>" } })
+  async storageState() {
+    const s = knobs().storage || {};
+    return { cookies: [], origins: Object.entries(s).map(([origin, kv]) => ({ origin, localStorage: Object.entries(kv).map(([name, value]) => ({ name, value })) })) };
+  }
   async newPage() {
     const page = new Page(this);
     this.emit('page', page);
@@ -302,6 +319,18 @@ class Page extends EventEmitter {
   }
   mainFrame() {
     return this.frame;
+  }
+  // (the page's own frame, and a child frame for each of knobs.json's "frames" whose "on" is in the page's address:
+  // { on, html } read through evaluate() as the page is, { on, unreadable: true } one that can't be read)
+  frames() {
+    const kids = (knobs().frames || []).filter((f) => this.href.includes(f.on)).map((f) => ({
+      parentFrame: () => this.frame,
+      evaluate: async (fn, arg) => {
+        if (f.unreadable) throw new Error('frame.evaluate: Execution context was destroyed');
+        return inDocument(parseHtml(f.html || ''), fn, arg);
+      },
+    }));
+    return [this.frame, ...kids];
   }
   async close() {
     log({ kind: 'page-closed', url: this.href });
@@ -376,14 +405,7 @@ class Page extends EventEmitter {
   }
   async waitForLoadState() {}
   async evaluate(fn, arg) {
-    const before = globalThis.document;
-    globalThis.document = this.doc;
-    try {
-      return JSON.parse(JSON.stringify(fn(arg)));
-    } finally {
-      if (before === undefined) delete globalThis.document;
-      else globalThis.document = before;
-    }
+    return inDocument(this.doc, fn, arg);
   }
   locator(sel) {
     return { selector: sel, count: async () => this.doc.querySelectorAll(sel).length };
