@@ -2055,3 +2055,22 @@ One entry each: date, decision, why, alternatives.
 - 2026-10-27 — **A store that can't be opened holds phone messages and reports back** rather than send a text that may
   hold a password (`personaHold`): the project keeps a sign-in, so redaction without it isn't redaction. A username
   isn't redacted (an `admin` username would blank every "admin"); a password or token under 8 characters is refused.
+- 2026-10-27 — **The tester's browser goes out only through a proxy of its own** (`src/lib/testerproxy.mjs`), loopback
+  included. Playwright's `route()` sees a navigation's first request, not the redirects after it (its own documentation
+  says so, and a real Chromium followed a redirect to another host and to another port on this PC past it), so route()
+  alone can't keep the browser on the environment's origin. The proxy checks every connection by origin and connects to
+  the address it checked; route() keeps the method rule (a request that changes data only in a step marked `mutates`)
+  and refuses early; `--host-resolver-rules` maps the allowed hosts and sends every other name nowhere (`EXCLUDE
+  127.0.0.1`: the rule would otherwise send the proxy's own address nowhere too).
+- 2026-10-27 — **`playwright-core` 1.63.0 and its headless shell**, not the `playwright` package: the core has no
+  dependencies and no install script, so the lock file nextlevel ships names one package by its integrity, and
+  Playwright's own installer fetches only `chromium-headless-shell` into the tools folder. Updating means a new
+  nextlevel release with a new pin and integrity, and the owner installs again.
+- 2026-10-27 — **What a page loads from another host is refused without failing the step**; a navigation of the page
+  itself there, or a request that changes data in a step that isn't marked `mutates`, fails it (`refused`). The design's
+  first text failed the step for any request elsewhere; nothing leaves either way, and a page with a font from a CDN
+  would never pass. The step's evidence lists what was refused.
+- 2026-10-27 — **A screenshot's masks come from the page's own elements:** every element whose own text or value holds
+  a kept value gets a mask of its own (marked `data-nextlevel-i`), besides the password fields, the fields the sign-in
+  and the steps filled, and the plan's and environment's masks. A value found only across elements keeps the picture
+  out. A mask the browser can't read as a selector keeps it out too, rather than a picture without that mask.

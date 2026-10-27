@@ -11,6 +11,7 @@
 //   config    merged over the defaults, like nextlevel.json
 //   env       environment variables (Codex's sandbox shows in them); gitWritable: false for a .git it can't write
 //   urls      { 'https://staging.example.com': { status: 200 } | { problem } }: what getUrl answers (else it doesn't resolve)
+//   browser   { state: { ok, problem, record }, probe: '' | why, install: '' | why }: the tester's browser (else not installed)
 import path from 'node:path';
 import { defaults, engineUse, profilesInUse } from '../src/lib/config.mjs';
 import { detectSandbox } from '../src/lib/sandbox.mjs';
@@ -102,6 +103,17 @@ export function fakeContext(o = {}) {
     getUrl: async (url) => {
       calls.push(`GET ${url}`);
       return (o.urls || {})[url] || { problem: `${new URL(url).host} doesn't resolve (ENOTFOUND)` };
+    },
+    browser: {
+      state: () => o.browser?.state || { ok: false, installed: false, record: null, problem: "the browser isn't installed" },
+      probe: async () => {
+        calls.push('browser probe');
+        return o.browser?.probe || '';
+      },
+      install: async () => {
+        calls.push('browser install');
+        return o.browser?.install || '';
+      },
     },
     uses: (engine) => !!engineUse(config, engine),
     usage: (engine) => engineUse(config, engine),

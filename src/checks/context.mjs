@@ -23,6 +23,8 @@
 //   tcpOpen(ports)     -> the first of these ports on 127.0.0.1 that answers, or 0 (lib/securityrun.mjs apiPortOpen)
 //   getUrl(url)        -> { status } | { problem, refused }: one GET of an environment's URL by the tester's rules
 //                      (lib/testernet.mjs: that origin only, its checked address, never the dashboard), no sign-in
+//   browser            the tester's browser (lib/browsertools.mjs): state({ quick }) -> { ok, problem, record },
+//                      probe() -> '' or why it opens no page, install() -> '' or what went wrong (the owner's window)
 //   git(args, { cwd }) -> { ok, out, err }  (cwd defaults to root)
 //   read(file) -> text | null, exists(file), write(file, text), list(dir) -> names, copy(from, to)
 //   cache              get(id) / set(id, value): results worth keeping between runs (.nextlevel/check-cache.json)
@@ -37,6 +39,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { browserState, installBrowser } from '../lib/browsertools.mjs';
 import { defaults, engineUse, profilesInUse } from '../lib/config.mjs';
 import { homeDir, jsonStore, userState } from '../lib/home.mjs';
 import { TOOL_ROOT } from '../lib/project.mjs';
@@ -46,6 +49,7 @@ import { recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
 import { apiPortOpen } from '../lib/securityrun.mjs';
+import { probeBrowser } from '../lib/testerbrowser.mjs';
 import { reachOf, request } from '../lib/testernet.mjs';
 import { parseEnvFile } from '../notify.mjs';
 
@@ -103,6 +107,11 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
       } catch (err) {
         return { problem: err.message, refused: !!err.refused };
       }
+    },
+    browser: {
+      state: (opts) => browserState(undefined, opts),
+      probe: () => probeBrowser(),
+      install: () => installBrowser(),
     },
     // Without git's optional locks: a check's `git status` never holds index.lock while the hub commits (lib/gitlock.mjs)
     git(args, { cwd: dir = root || cwd } = {}) {

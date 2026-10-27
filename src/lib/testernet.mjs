@@ -77,12 +77,10 @@ export function urlProblem(url, reach) {
   return '';
 }
 
-// One request, to the checked address: { status, headers: { lowercase: value | [values] }, body: Buffer, truncated,
-// address } or throws (with .refused when the rules refused it)
-export async function request(url, { method = 'GET', headers = {}, body = null, reach, timeoutMs = REQUEST_MS, maxBytes = MAX_BODY } = {}) {
-  const bad = urlProblem(url, reach);
-  if (bad) throw Object.assign(new Error(bad), { refused: true });
-  const u = new URL(url);
+// The one address a URL's host is reached at in this run: resolved once, every address it gives checked (the
+// environment's own origin on this PC: loopback only; anywhere else: no special address). -> { address, family } or
+// throws (with .refused when the rules refused it). The browser's proxy (lib/testerproxy.mjs) connects through it too.
+export async function checkedAddress(u, reach) {
   const host = u.hostname.replace(/^\[|\]$/g, '');
   const local = reach.local && u.origin === reach.envOrigin;
   let addrs;
@@ -97,7 +95,17 @@ export async function request(url, { method = 'GET', headers = {}, body = null, 
       throw Object.assign(new Error(`${u.host} resolves to ${a.address}, ${local ? 'not this PC' : 'an address on this PC or a private network'}: not reached`), { refused: true });
     }
   }
-  const pinned = addrs[0];
+  return addrs[0];
+}
+
+// One request, to the checked address: { status, headers: { lowercase: value | [values] }, body: Buffer, truncated,
+// address } or throws (with .refused when the rules refused it)
+export async function request(url, { method = 'GET', headers = {}, body = null, reach, timeoutMs = REQUEST_MS, maxBytes = MAX_BODY } = {}) {
+  const bad = urlProblem(url, reach);
+  if (bad) throw Object.assign(new Error(bad), { refused: true });
+  const u = new URL(url);
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const pinned = await checkedAddress(u, reach);
   const mod = u.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
     const req = mod.request(
@@ -173,6 +181,8 @@ export function cookieJar() {
       const m = jar.get(host);
       return m && m.size ? [...m].map(([k, v]) => `${k}=${v}`).join('; ') : '';
     },
+    // a host's cookies as [name, value] (the browser's context takes them after an HTTP sign-in)
+    entries: (host) => [...(jar.get(host) || new Map())],
     // every value it holds (the run redacts them from what it keeps)
     values: () => [...jar.values()].flatMap((m) => [...m.values()]),
   };

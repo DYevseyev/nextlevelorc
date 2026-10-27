@@ -196,7 +196,7 @@ function placeholders(v, captures, where, err) {
 
 // The recipe for an environment: its own, else the section's
 export const signInFor = (t, env) => t?.environments?.[env]?.signIn || t?.signIn || null;
-// Which recipe values a persona needs: the placeholders the HTTP recipe uses
+// Which recipe values a persona needs: the placeholders the recipe uses (its HTTP requests and its browser steps)
 export function recipeFields(recipe) {
   const out = new Set();
   const walk = (x) => {
@@ -205,6 +205,7 @@ export function recipeFields(recipe) {
     else if (isObj(x)) Object.values(x).forEach(walk);
   };
   walk(recipe?.http || []);
+  walk(recipe?.browser || []);
   return [...out];
 }
 

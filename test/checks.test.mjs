@@ -2151,6 +2151,38 @@ test('tester.config, tester.vault, tester.plans, tester.reach: off, then what th
   assert.match(down.detail, /staging \(https:\/\/staging\.example\.com\) answers 503; prod \(https:\/\/app\.example\.com\): app\.example\.com doesn't resolve/);
 });
 
+// The tester's browser (part 2): installed as recorded, and a page opens; warn only when something needs it
+test('tester.browser: skipped while the tester is off; not installed, changed, no page; the fix only in the owner\'s window (docs/CHECKS.md)', async () => {
+  const TESTER = { tester: { enabled: true, environments: { staging: { url: 'https://staging.example.com' } }, personas: ['member'] } };
+  assert.equal((await check('tester.browser', {})).status, 'skip');
+  const none = await check('tester.browser', { config: TESTER });
+  assert.deepEqual([none.status, none.severity], ['fail', 'info'], 'no plan needs it yet');
+  assert.match(none.detail, /^the browser isn't installed \(no plan needs it yet\)/);
+  assert.deepEqual(none.steps.map((s) => s.command), ['nextlevel tester browser install']);
+  const plan = 'plan: notes\nsteps:\n  - as: member\n    do: { open: /notes/42 }\n    expect: { text: Quarterly plan }\n';
+  const files = { '/proj/docs/acceptance/notes.yaml': plan };
+  const needed = await check('tester.browser', { config: TESTER, files });
+  assert.deepEqual([needed.status, needed.severity], ['fail', 'warn']);
+  assert.match(needed.detail, /docs\/acceptance\/notes\.yaml needs it/);
+  const viaSignIn = await check('tester.browser', { config: { tester: { ...TESTER.tester, signIn: { browser: [{ open: '/sign-in' }, { fill: ['#password', '{{password}}'] }] } } } });
+  assert.equal(viaSignIn.severity, 'warn');
+  assert.match(viaSignIn.detail, /staging's sign-in needs it/);
+  const record = { at: '2026-10-27T10:00:00.000Z', files: {} };
+  const ok = await check('tester.browser', { config: TESTER, files, browser: { state: { ok: true, record } } });
+  assert.equal(ok.status, 'ok', ok.detail);
+  assert.ok(ok.ctx.calls.includes('browser probe'));
+  const noPage = await check('tester.browser', { config: TESTER, files, browser: { state: { ok: true, record }, probe: 'the browser didn\'t start (spawn EPERM)' } });
+  assert.equal(noPage.status, 'fail');
+  assert.match(noPage.detail, /doesn't open a page: the browser didn't start \(spawn EPERM\)/);
+  assert.match(noPage.next, /ANTIVIRUS/);
+  const changed = await check('tester.browser', { config: TESTER, files, browser: { state: { ok: false, record, problem: "the browser's files differ from what was installed (x changed)" } } });
+  assert.match(changed.detail, /files differ/);
+  // the fix: in the owner's own window only
+  const c = CHECKS.find((x) => x.id === 'tester.browser');
+  assert.equal(c.fixInWindow, true);
+  assert.match(c.fixPrompt(), /120 MB.*antivirus/s);
+});
+
 test('every registered check is valid, has a unique id and a learnMore, and is covered above', () => {
   const ids = CHECKS.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length, 'ids are unique');

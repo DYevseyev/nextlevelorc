@@ -133,9 +133,10 @@ export const COMMANDS = {
       ['nextlevel tester wait <run> [--timeout-min N] | show <run> [--from N]', "a run's table: each step, what was expected and what came back", 'orchestrator'],
       ['nextlevel tester stop [<run>]', 'stop the run that runs'],
       ['nextlevel tester persona set <env> <persona> | list | forget <env> <persona>', "a persona's sign-in, typed in this window and kept in this PC's secret store (never in the project)"],
+      ['nextlevel tester browser [status] | install [--yes]', "the browser the tester's browser steps run in: Playwright's headless Chromium at nextlevel's pinned version, in ~/.nextlevel/tools (install: in your own window)"],
     ],
     text: 'The tester runs no AI model: it walks each step of a plan itself, only on the environments and as the personas nextlevel.json names, and keeps evidence with every secret taken out (docs/acceptance.md).',
-    options: { env: S('<env>', 'run: the environment, as nextlevel.json names it'), from: S('<line>', 'show: from this line of the table'), 'timeout-min': S('<minutes>', 'wait: how long to wait (default 30)'), json: JSON_OPT },
+    options: { env: S('<env>', 'run: the environment, as nextlevel.json names it'), from: S('<line>', 'show: from this line of the table'), 'timeout-min': S('<minutes>', 'wait: how long to wait (default 30)'), yes: B("browser install: don't ask first"), json: JSON_OPT },
     subs: {
       '': { options: ['json'], args: [0, 0] },
       status: { options: ['json'], args: [0, 0] },
@@ -145,8 +146,9 @@ export const COMMANDS = {
       show: { options: ['from'], args: [1, 1] },
       stop: { options: [], args: [0, 1] },
       persona: { options: [], args: [0, 3] },
+      browser: { options: ['yes'], args: [0, 1] },
     },
-    check: (a) => (a._[0] === 'persona' && a._[1] && !['set', 'list', 'forget'].includes(a._[1]) ? `persona ${a._[1]}: set, list or forget` : a._[0] === 'persona' && ['set', 'forget'].includes(a._[1]) && a._.length !== 4 ? `persona ${a._[1]} <env> <persona>` : a._[0] === 'persona' && a._[1] === 'list' && a._.length > 2 ? 'persona list takes nothing more' : ''),
+    check: (a) => (a._[0] === 'browser' && a._[1] && !['status', 'install'].includes(a._[1]) ? `browser ${a._[1]}: status or install` : a._[0] === 'browser' && a.yes && a._[1] !== 'install' ? '--yes goes with browser install' : a._[0] === 'persona' && a._[1] && !['set', 'list', 'forget'].includes(a._[1]) ? `persona ${a._[1]}: set, list or forget` : a._[0] === 'persona' && ['set', 'forget'].includes(a._[1]) && a._.length !== 4 ? `persona ${a._[1]} <env> <persona>` : a._[0] === 'persona' && a._[1] === 'list' && a._.length > 2 ? 'persona list takes nothing more' : ''),
   },
   'bridge-test': {
     group: 'owner',
