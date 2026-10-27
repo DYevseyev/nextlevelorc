@@ -857,10 +857,27 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), w
 - **Redaction is by value and by shape.** A password the app shows encoded another way (URL-encoded, base64 under 40
   characters, split across fields) isn't recognised; JWTs, long base64 strings and secret-looking JSON keys are blanked
   whatever they hold. The evidence keeps a body's first 2 KB and headers on an allow-list only.
-- **HTTP only, simply.** One cookie jar per host, without cookies' Domain and Path rules; no proxy (the run's
-  environment is built from nothing); a body read up to 2 MB. Browser steps end incomplete until part 2.
+- **HTTP, simply.** One cookie jar per host, without cookies' Domain and Path rules; no proxy (the run's
+  environment is built from nothing); a body read up to 2 MB.
 - **The app under test sees the passwords** it signs the personas in with, as it would any user's: an environment
   that logs request bodies keeps them. That is the app's to fix.
+
+## The tester's browser (part 2)
+- **`~/.nextlevel/tools` is yours, not walled.** An agent running as you can write it as easily as a project's
+  `node_modules`. What the folder gains: the guard isn't fooled by a project diff, and the hashes recorded at the
+  install catch an ordinary change (an update, a half-finished install, a planted file) before a run starts the
+  browser. The doctor compares names and sizes only (it runs often); a run reads every byte.
+- **A page can still show a secret in a picture.** The screenshot check reads the page's text and fields: a value drawn
+  in a canvas or an image, put there by CSS, or spread over several elements isn't found in one element (the last case
+  keeps the picture out). The page's own scripts see the `data-nextlevel-i` marks the check puts on elements, and could
+  change what the check reads; the app under test is trusted that far.
+- **What a page loads from elsewhere isn't loaded**, and the step says so (`blocked` in its evidence) without failing:
+  a page that needs a script from another host behaves differently in the tester than for a user. Add that origin to
+  `alsoAllow` if the page needs it (your approval, like any change of `nextlevel.json`).
+- **WebSockets** go through `routeWebSocket()` and the run's proxy; they are covered by the stand-in browser only, not
+  yet by a test against a real WebSocket server.
+- **A request a page sends after a click comes a moment later:** the step's leave to write lasts until the next action,
+  and a click waits for the network to be quiet for half a second (up to 5 s) before the page is read.
 
 ## What the guard doesn't cover (yet)
 The guard (`src/lib/guard.mjs`, `docs/CHECKS.md#guardheld`) holds changes to protected files that go through git

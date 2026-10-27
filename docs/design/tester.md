@@ -417,3 +417,38 @@ Where part 1 differs from the text above, and why (`docs/DECISIONS.md` has each)
   evidence (`step-<n>.json`); there is no separate `.nextlevel/tester/runs/`.
 - **The YAML fixtures.** `test/fixtures/tester-yaml/*.expected.json` were made with PyYAML's `BaseLoader`, which leaves
   every scalar a string as the subset's reader does before a plan's shape types it.
+
+## 16. As built: part 2
+
+Where part 2 differs from §2 and §6, and why (`docs/DECISIONS.md` has each):
+
+- **A proxy of the run's own.** Playwright's `route()` is called for a navigation's first request only, not for the
+  redirects after it (its documentation says so, and a real Chromium 153 followed a redirect to another host and to the
+  dashboard's port past it in a trial). So the browser starts with `--proxy-server` pointing at a proxy in the run's own
+  process (`src/lib/testerproxy.mjs`, loopback included: `<-loopback>`), which checks every connection by origin and
+  connects to the address it checked (`checkedAddress`, shared with the HTTP client). `route()` keeps the method rule
+  and refuses early; `--host-resolver-rules` maps each allowed host to its checked address and every other name to
+  nothing, with `EXCLUDE 127.0.0.1` so the proxy's own address stays reachable.
+- **What a page loads from elsewhere doesn't fail the step.** A navigation of the page itself to a place the run may
+  not reach fails it (`refused`); a picture, script, style sheet or frame from elsewhere is refused and listed in the
+  step's evidence (`blocked`). Nothing reaches the other host either way.
+- **A request that changes data, in the browser,** goes out only while a sign-in recipe or a step marked `mutates` runs,
+  in every environment (where mutations aren't allowed, such a step isn't run at all). A step that isn't marked and
+  whose click sends one is `refused`. The leave lasts until the next action, since a click's request can come a moment
+  after it.
+- **The package and the install.** `playwright-core` 1.63.0 (no dependencies, no install script) from a two-file lock
+  nextlevel generates with the package's integrity, `npm ci --ignore-scripts`, then Playwright's installer for
+  `chromium-headless-shell` into the tools folder (`PLAYWRIGHT_BROWSERS_PATH`). The record is
+  `playwright@<version>.json` beside its folder in `~/.nextlevel/tools/` (every file's hash and size). The doctor compares names and sizes and opens
+  a page once a day; a run compares every hash. The install is `nextlevel tester browser install` (the owner's, asking
+  first), which the doctor's fix runs in the owner's window only.
+- **Masks from the page's elements.** Before a screenshot, a function in the page marks every element that has text of
+  its own or a value (`data-nextlevel-i`) and returns those texts; one holding a kept value outside the masks gets a
+  mask of its own. A kept value only in the page's whole text keeps the picture out, as does a mask selector the browser
+  can't read.
+- **Sign-ins across HTTP and the browser.** Each persona has one sign-in per kind of step, made once: a browser step
+  after an HTTP recipe gets its cookies (`addCookies`) and its bearer token (added by `route()` for the environment's
+  origin only); an HTTP step after a browser recipe gets the browser's cookies.
+- **The stand-in browser** (`test/stubs/playwright`) is the part of Playwright's API the runner uses, over a small DOM,
+  with every request through the run's proxy; the stand-in npm installs it. The runner was also tried against the real
+  Playwright 1.63.0 and Chromium on Linux (a whole run through the hub); the manual check covers Windows.

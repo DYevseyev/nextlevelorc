@@ -1,0 +1,6 @@
+{
+  "name": "playwright-core",
+  "version": "1.63.0",
+  "description": "A stand-in for Playwright in nextlevel's tests: the small part of its API the tester uses (test/stubs/playwright/index.mjs)",
+  "private": true
+}

@@ -718,6 +718,17 @@ checked for it: a name on the internet that resolves to this PC or a private net
 dashboard's port). No answer, or a 5xx: **warn**: a run there ends incomplete until it answers. Not run inside Codex's
 sandbox (no network there).
 
+### tester.browser
+The browser the tester's browser steps run in (part 2): Playwright at nextlevel's pinned version and its headless
+Chromium, in `~/.nextlevel/tools/` (never the project's own Playwright, which a worker can change). Installed: its files'
+names and sizes are as the install recorded them (a run compares every file's hash before the browser starts), and it
+opens a page from a server of its own on this PC (asked again once a day, or after an install). Not installed, changed,
+or no page: **warn** when a plan has browser steps or an environment signs in through the browser, else **info**; the
+fix is `nextlevel tester browser install` in your own PowerShell window, in the project folder (about 120 MB to
+download, from the lock file nextlevel ships, with no install scripts). The doctor's fix does the same, only in your
+own window, never from the dashboard. An antivirus may look at the new browser (`docs/ANTIVIRUS.md`). Not run inside
+Codex's sandbox.
+
 ## A project's own checks
 
 A project adds checks for its own setup (hosting, email, keys) as `.mjs` files in `.nextlevel/checks/`.

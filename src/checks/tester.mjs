@@ -2,7 +2,8 @@
 // store on this PC, every plan under docs/acceptance/ reading, and each environment answering a GET (no sign-in). All
 // skipped while the tester is off: with it off nothing changes.
 import { PLAN_DIR, planPathProblem, readPlan } from '../lib/acceptance.mjs';
-import { originOf, testerOn } from '../lib/testerconfig.mjs';
+import { PLAYWRIGHT } from '../lib/browsertools.mjs';
+import { originOf, signInFor, testerOn } from '../lib/testerconfig.mjs';
 import { personasOf, storeKind, vaultFile, vaultFromText } from '../lib/vault.mjs';
 import { planFitProblems } from '../tester.mjs';
 import { fail, inProject, pass, step } from './lib.mjs';
@@ -120,4 +121,55 @@ export const testerReachCheck = {
   },
 };
 
-export const testerChecks = [testerConfigCheck, testerVaultCheck, testerPlansCheck, testerReachCheck];
+// What needs the browser: plans with browser steps, an environment that signs in through it -> [words]
+function browserNeeds(ctx) {
+  const out = [];
+  for (const { rel, text } of plansOf(ctx)) if (readPlan(text ?? '').plan?.steps.some((s) => s.action && s.action.kind !== 'request')) out.push(rel);
+  for (const name of Object.keys(ctx.config.tester.environments || {})) if (signInFor(ctx.config.tester, name)?.browser?.length) out.push(`${name}'s sign-in`);
+  return out;
+}
+
+export const testerBrowserCheck = {
+  id: 'tester.browser',
+  title: "The tester's browser",
+  severity: 'warn',
+  sandbox: 'skip',
+  learnMore: 'docs/CHECKS.md#testerbrowser',
+  skipIf: off,
+  fixInWindow: true, // (a download and a new browser: the owner's own window)
+  fixPrompt: () => `Install Playwright ${PLAYWRIGHT.version} and its headless Chromium (${PLAYWRIGHT.download} to download, ${PLAYWRIGHT.disk} on disk) into ~/.nextlevel/tools, from the lock file nextlevel ships? An antivirus may look at the new browser.`,
+  canFix: (r) => !!r.install,
+  async fix(ctx) {
+    const problem = await ctx.browser.install();
+    if (problem) throw new Error(problem);
+  },
+  async run(ctx) {
+    const need = browserNeeds(ctx);
+    const needWords = need.length ? `${need.slice(0, 3).join(', ')}${need.length > 3 ? ` and ${need.length - 3} more` : ''} ${need.length > 1 ? 'need' : 'needs'} it` : 'no plan needs it yet';
+    const s = ctx.browser.state({ quick: true });
+    const install = [inProject(ctx, 'nextlevel tester browser install')];
+    if (!s.ok) {
+      return fail(`${s.problem} (${needWords})`, {
+        install: true,
+        severity: need.length ? 'warn' : 'info',
+        next: `browser steps end incomplete until it is installed: ${PLAYWRIGHT.download}, from the lock file nextlevel ships, into ~/.nextlevel/tools (never the project's own Playwright)`,
+        steps: install,
+      });
+    }
+    const kept = ctx.cache.get('tester.browser');
+    if (kept?.at === s.record.at && Date.now() - (kept.checked || 0) < 24 * 3600_000) return pass(`Playwright ${PLAYWRIGHT.version} and its headless Chromium, as installed; it opened a page ${new Date(kept.checked).toISOString().slice(0, 16).replace('T', ' ')} (${needWords})`);
+    const probe = await ctx.browser.probe();
+    if (probe) {
+      return fail(`the browser is installed but doesn't open a page: ${probe}`, {
+        install: true,
+        severity: need.length ? 'warn' : 'info',
+        next: 'if an antivirus stopped it, docs/ANTIVIRUS.md says what to do; else install it again',
+        steps: install,
+      });
+    }
+    ctx.cache.set('tester.browser', { at: s.record.at, checked: Date.now() });
+    return pass(`Playwright ${PLAYWRIGHT.version} and its headless Chromium, as installed; it opens a page (${needWords})`);
+  },
+};
+
+export const testerChecks = [testerConfigCheck, testerVaultCheck, testerPlansCheck, testerReachCheck, testerBrowserCheck];

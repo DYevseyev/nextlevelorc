@@ -35,9 +35,8 @@ role, its checks and `nextlevel security scan|status|stop|login`, is done.
 ## The tester
 Acceptance runs of plans in `docs/acceptance/` against a running copy of the app, as test accounts you name
 (`docs/design/tester.md`, `docs/acceptance.md`). Part 1, plans and HTTP runs from PowerShell with the sign-ins sealed on
-this PC, is done.
-- **2, the browser:** Playwright installed by you at a pinned version, a fresh browser per persona, screenshots with
-  masks.
+this PC, is done; part 2, the browser (Playwright installed by you at a pinned version, a fresh context per persona,
+screenshots with masks), is built.
 - **3, closing the loop:** cards with plans close on a passing run, a failing one drafts a fix task for the orchestrator,
   runs after a deploy.
 - **4, on the dashboard:** the Team row, the evidence table, the sign-ins form.

@@ -39,4 +39,13 @@ open the key that protects the test accounts' sign-ins with Windows' own protect
 The key goes in on stdin, never on its command line. A behaviour-based antivirus may note a hidden PowerShell reading
 protected data; it is that, and nothing else runs in it. With the tester off it never starts.
 
+## The tester's browser (Chromium)
+
+`nextlevel tester browser install` (or the doctor's fix for `tester.browser`, in your own window) downloads Playwright's
+headless Chromium into `~/.nextlevel/tools/playwright@<version>/browsers/`, and an acceptance run with browser steps
+starts it hidden, with no window. A new browser in your home folder that a background process starts is what an
+antivirus looks at: it may scan it, ask, or quarantine a file. If it quarantines one, `tester.browser` says the files
+differ from what was installed; restore it or allow the folder, then run `nextlevel tester browser install` again. With
+the tester off, or with no browser steps, it is never downloaded or started.
+
 **Checks:** `tool.files` (files a quarantine took), `workers.addons` (what of your own add-ons still reaches a worker).

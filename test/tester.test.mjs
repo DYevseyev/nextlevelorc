@@ -1,7 +1,8 @@
-// The tester, part 1 (docs/design/tester.md): acceptance plans read in a strict YAML subset, the tester's settings and
-// the guard's words for them, the HTTP client's reach, what evidence keeps, the personas' sign-ins sealed on this PC and
-// kept out of everything that leaves it, and whole runs through the hub against a stand-in web app
-// (test/stubs/webapp.mjs) with three test accounts.
+// The tester (docs/design/tester.md): acceptance plans read in a strict YAML subset, the tester's settings and the
+// guard's words for them, the HTTP client's reach, what evidence keeps, the personas' sign-ins sealed on this PC and kept
+// out of everything that leaves it, and whole runs through the hub against a stand-in web app (test/stubs/webapp.mjs)
+// with three test accounts; part 2, the browser: its install, its proxy, and runs in the stand-in Playwright
+// (test/stubs/playwright), which does with the network what a browser does and reads pages without drawing them.
 //   npm test
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -15,7 +16,9 @@ import { DEFAULT_DENIED, judge, planPathProblem, readPlan } from '../src/lib/acc
 import { pathOnly, safeHeaders, safeJson, safeRecord, safeText } from '../src/lib/evidence.mjs';
 import { personaHold, reportSecrets } from '../src/lib/redact.mjs';
 import { mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
+import { resolverRules } from '../src/lib/testerbrowser.mjs';
 import { cookieJar, isSpecialAddress, reachOf, request, urlProblem } from '../src/lib/testernet.mjs';
+import { startProxy } from '../src/lib/testerproxy.mjs';
 import { DPAPI_OPEN, DPAPI_SEAL, forgetCache, listPersonas, readPersona, redactionValues, setPersona, systemPowerShellPath, vaultFile } from '../src/lib/vault.mjs';
 import { parseYamlSubset } from '../src/lib/yamlsub.mjs';
 import { notify } from '../src/notify.mjs';
@@ -579,4 +582,305 @@ test("Windows: DPAPI seals and opens the sign-ins' key through Windows' own Powe
   const opened = run(DPAPI_OPEN, blob);
   assert.equal(opened.status, 0, opened.stderr);
   assert.equal(opened.stdout.trim(), key);
+});
+
+// ---------- part 2: the browser ----------
+// What the stand-in Playwright (test/stubs/playwright) saw: launches, route() decisions, requests, screenshots
+const pwLog = (p) => {
+  try {
+    return fs.readFileSync(path.join(p.env.HOME, '.fake-playwright', 'log.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+};
+// The owner's install, as `nextlevel tester browser install --yes` does it, with the stand-in npm and Playwright
+function installBrowserFor(p) {
+  const r = p.hub(['tester', 'browser', 'install', '--yes']);
+  assert.equal(r.code, 0, r.out);
+  return r;
+}
+const BROWSER_SIGN_IN = { browser: [{ open: '/sign-in' }, { fill: ['#email', '{{username}}'] }, { fill: ['#password', '{{password}}'] }, { click: '#go' }] };
+
+test("the browser's proxy: only the run's origins, at their checked addresses; never another port on this PC; a tunnel checked by host and port", async () => {
+  const app = await startWebApp();
+  const dash = http.createServer((req, res) => res.end('the dashboard'));
+  await new Promise((r) => dash.listen(0, '127.0.0.1', r));
+  const reach = reachOf(app.url, [], { denyPorts: [dash.address().port] });
+  const blocks = [];
+  const proxy = await startProxy({ reach, onBlock: (b) => blocks.push(b) });
+  const through = (url, method = 'GET') =>
+    new Promise((resolve, reject) => {
+      const u = new URL(url);
+      http.request({ host: '127.0.0.1', port: proxy.port, method, path: url, headers: { host: u.host } }, (res) => {
+        let b = '';
+        res.on('data', (d) => (b += d));
+        res.on('end', () => resolve({ status: res.statusCode, refused: !!res.headers['x-nextlevel-refused'], body: b }));
+      }).on('error', reject).end();
+    });
+  const tunnel = (target) =>
+    new Promise((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: proxy.port, method: 'CONNECT', path: target });
+      req.on('connect', (res, socket) => {
+        if (res.statusCode !== 200) {
+          socket.destroy();
+          return resolve({ status: res.statusCode });
+        }
+        socket.write(`GET /notes/42 HTTP/1.1\r\nHost: ${target}\r\nConnection: close\r\n\r\n`);
+        let b = '';
+        socket.on('data', (d) => (b += d));
+        socket.on('end', () => resolve({ status: 200, body: b }));
+      });
+      req.on('error', () => resolve({ status: 0 }));
+      req.end();
+    });
+  try {
+    const ok = await through(`${app.url}/notes/42`);
+    assert.equal(ok.status, 302, 'the app answered');
+    assert.equal(ok.refused, false);
+    for (const url of ['http://other.test/collect', `http://127.0.0.1:${dash.address().port}/`, `http://localhost:${app.port}/notes/42`]) {
+      const r = await through(url);
+      assert.deepEqual([r.status, r.refused], [403, true], url);
+    }
+    assert.equal((await through(`${app.url}/__test/state`)).status, 200);
+    assert.ok(!(await app.state()).requests.some((r) => r.path === '/collect'));
+    assert.equal(blocks.length, 3);
+    assert.match(blocks[1].why, /127\.0\.0\.1:\d+ isn't the environment's origin/);
+    // CONNECT: the app's own host and port pass (a WebSocket on its http origin), anything else doesn't
+    const t = await tunnel(`127.0.0.1:${app.port}`);
+    assert.equal(t.status, 200);
+    assert.match(t.body, /^HTTP\/1\.1 302/);
+    assert.equal((await tunnel(`127.0.0.1:${dash.address().port}`)).status, 403);
+    assert.equal((await tunnel('other.test:443')).status, 403);
+  } finally {
+    await proxy.close();
+    await app.close();
+    dash.close();
+  }
+  // a name whose address moves to this PC is never reached through the proxy either (one lookup, checked)
+  const keep = process.env.NEXTLEVEL_TEST_RESOLVE;
+  process.env.NEXTLEVEL_TEST_RESOLVE = JSON.stringify({ 'staging.example.com': ['127.0.0.1'] });
+  const p2 = await startProxy({ reach: reachOf('https://staging.example.com'), onBlock: (b) => blocks.push(b) });
+  try {
+    const t = await new Promise((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port: p2.port, method: 'CONNECT', path: 'staging.example.com:443' });
+      req.on('connect', (res, socket) => {
+        socket.destroy();
+        resolve(res.statusCode);
+      });
+      req.end();
+    });
+    assert.equal(t, 403);
+    assert.match(blocks.at(-1).why, /resolves to 127\.0\.0\.1, an address on this PC or a private network/);
+  } finally {
+    if (keep === undefined) delete process.env.NEXTLEVEL_TEST_RESOLVE;
+    else process.env.NEXTLEVEL_TEST_RESOLVE = keep;
+    await p2.close();
+  }
+  assert.equal(resolverRules([['staging.example.com', '93.184.216.34'], ['127.0.0.1', '127.0.0.1'], ['v6.example.com', '2001:4860::1']]), 'MAP staging.example.com 93.184.216.34, MAP v6.example.com [2001:4860::1], MAP * ~NOTFOUND, EXCLUDE 127.0.0.1');
+});
+
+test("the browser's install: the owner's, from the lock file with no scripts, every file recorded; a changed file is caught; never in an agent's session", async () => {
+  const p = makeProject();
+  try {
+    const orch = { NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_SESSION: 'interactive' };
+    const refused = p.hub(['tester', 'browser', 'install', '--yes'], { extraEnv: orch });
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /owner/i);
+    assert.match(p.hub(['tester', 'browser']).out, /^The browser isn't installed\. .*nextlevel tester browser install, in your own PowerShell window/m);
+    assert.equal(p.hub(['tester', 'browser', 'install']).code, 1, 'no window to ask in, no --yes: nothing installed');
+    const calls = path.join(p.tmp, 'calls.jsonl');
+    const r = p.hub(['tester', 'browser', 'install', '--yes'], { extraEnv: { STUB_CALLS: calls } });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /Playwright 1\.63\.0 and its headless Chromium \(about 120 MB to download/);
+    assert.match(r.out, /The browser opens pages/);
+    assert.match(fs.readFileSync(calls, 'utf8'), /\["npm","ci","--ignore-scripts","--no-audit","--no-fund"\]/);
+    const dir = path.join(p.env.HOME, '.nextlevel', 'tools', 'playwright@1.63.0');
+    const lock = JSON.parse(fs.readFileSync(path.join(dir, 'package-lock.json'), 'utf8'));
+    assert.match(lock.packages['node_modules/playwright-core'].integrity, /^sha512-/);
+    const record = JSON.parse(fs.readFileSync(`${dir}.json`, 'utf8'));
+    assert.ok(record.files['node_modules/playwright-core/index.mjs'], 'every file recorded');
+    assert.ok(Object.keys(record.files).some((f) => f.startsWith('browsers/')), 'the browser too');
+    assert.ok(pwLog(p).some((x) => x.kind === 'cli' && x.args.includes('chromium-headless-shell') && x.browsersPath === path.join(dir, 'browsers')));
+    assert.match(p.hub(['tester', 'browser']).out, /^The browser is installed: Playwright 1\.63\.0/);
+    assert.equal(p.hub(['tester', 'browser'], { extraEnv: { NEXTLEVEL_READ_ONLY: '1' } }).code, 0, 'the assistant may look');
+    // a file changed after the install: said, and a run won't start the browser
+    fs.appendFileSync(path.join(dir, 'node_modules', 'playwright-core', 'index.mjs'), '\n// changed\n');
+    assert.match(p.hub(['tester', 'browser']).out, /files differ from what was installed \(node_modules\/playwright-core\/index\.mjs changed\): install it again/);
+  } finally {
+    p.cleanup();
+  }
+});
+
+test('a run in the browser: each persona in its own context, signed in through the browser; a mutating click once; the password masked in every screenshot and kept out of everything', async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { extra: { signIn: BROWSER_SIGN_IN } });
+  try {
+    const PLANTED = 'browserenv-71c2e0aa-planted';
+    fs.writeFileSync(path.join(p.repo, '.env'), `APP_SETTING=${PLANTED}\n`);
+    installBrowserFor(p);
+    setAll(p, app.url);
+    commitPlan(p, 'browser.yaml', `plan: notes-in-the-browser
+steps:
+  - as: member
+    do: { open: /notes/42 }
+    expect: { text: Quarterly plan }
+  - as: member
+    do: { fill: ["#comment", "acceptance check {{run.stamp}}"] }
+    expect: { url: /notes/42 }
+  - as: member
+    mutates: true
+    do: { click: "#save" }
+    expect: { text: acceptance check }
+  - as: outsider
+    do: { open: /notes/42 }
+    expect: { denied: true }
+  - do: { open: /notes/42 }
+    expect: { redirect: /sign-in }
+  - as: member
+    do: { open: /leak }
+    expect: { text: debug }
+  - as: member
+    do: { open: /with-pixel }
+    expect: { text: A page with a pixel }
+  - as: admin
+    do: { request: "GET /api/audit?note=42" }
+    expect: { json: { path: "$.entries[*].action", contains: access-denied }, within: 20s }
+`);
+    fs.rmSync(path.join(p.env.HOME, '.fake-playwright', 'log.jsonl'), { force: true }); // (the install's own check aside)
+    const { id, run, evidence, shown, hub } = runPlan(p, 'browser.yaml');
+    assert.equal(run.state, 'passed', shown);
+    assert.deepEqual(run.steps.map((s) => s.status), Array(8).fill('passed'));
+    const seen = await app.state();
+    assert.equal(seen.comments.length, 1, 'the click that mutates sent its form once');
+    assert.equal(seen.sessions.length, 3, 'member and outsider through the browser, admin for its HTTP step through it too');
+    assert.deepEqual(run.mutations, ['POST /notes/42/comments'], 'the sign-ins are not mutations');
+    // each browser step has its picture; the password masked, the session never kept
+    const files = fs.readdirSync(p.state('evidence', id));
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) assert.ok(files.includes(`step-${n}.png`), `step ${n}'s screenshot`);
+    const pictures = files.filter((f) => f.endsWith('.png')).map((f) => fs.readFileSync(p.state('evidence', id, f), 'latin1')).join('\n');
+    const kept = [evidence, pictures, shown, hub.out, fs.readFileSync(p.state('logs', 'hub.log'), 'utf8'), JSON.stringify(run)].join('\n');
+    for (const n of Object.keys(USERS)) assert.ok(!kept.includes(USERS[n].password), `${n}'s password`);
+    for (const sid of seen.sessions) assert.ok(!kept.includes(sid), 'a session value');
+    assert.ok(!kept.includes(PLANTED));
+    const leak = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-6.json'), 'utf8'));
+    assert.match(leak.text, /password=\*\*\*/);
+    assert.equal(leak.screenshot, 'step-6.png');
+    const pixel = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-7.json'), 'utf8'));
+    assert.deepEqual(pixel.blocked.map((b) => [b.method, b.where]), [['GET', 'http://other.test/pixel.gif']], "another host's picture: not loaded, said, and the step still passes");
+    // what the browser was started with: through the run's proxy only, every other name to nothing, no .env value
+    const log = pwLog(p);
+    const launch = log.find((x) => x.kind === 'launch');
+    assert.match(launch.proxy.server, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.equal(launch.proxy.bypass, '<-loopback>');
+    assert.ok(launch.args.includes('--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'), launch.args.join(' '));
+    assert.equal(launch.headless, true);
+    assert.ok(!JSON.stringify(launch.env).includes(PLANTED));
+    assert.ok(!Object.keys(launch.env).some((k) => /^NEXTLEVEL_|^APP_SETTING$/.test(k)), Object.keys(launch.env).join(' '));
+    assert.equal(log.filter((x) => x.kind === 'launch').length, 1, 'one browser for the run');
+    assert.equal(log.filter((x) => x.kind === 'context').length, 4, "member, outsider, signed out, and the admin's sign-in for its HTTP step");
+    for (const c of log.filter((x) => x.kind === 'context')) assert.deepEqual([c.opts.acceptDownloads, c.opts.serviceWorkers], [false, 'block']);
+    assert.equal(log.filter((x) => x.kind === 'context-closed').length, 0, 'closed with the browser');
+    assert.ok(log.some((x) => x.kind === 'browser-closed'));
+    // every screenshot had the password fields and the filled fields masked
+    const shots = log.filter((x) => x.kind === 'screenshot');
+    for (const s of shots) assert.ok(s.masks.includes('input[type=password]'), s.masks.join(' '));
+    for (const s of shots.filter((x) => x.masks.includes('#email'))) assert.ok(s.masks.includes('#password'), 'the fields its sign-in filled');
+    assert.ok(shots.filter((x) => x.masks.includes('#comment')).length >= 4, 'the field a step filled, from then on');
+    const leakShot = log.find((x) => x.kind === 'screenshot' && x.url.endsWith('/leak'));
+    assert.ok(leakShot.masks.some((m) => m.startsWith('[data-nextlevel-i=')), 'the element that shows the password got a mask of its own');
+    assert.deepEqual(leakShot.shown, []);
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("the browser on a read-only environment: a click that would write is stopped and fails the step; redirects off the origin and to the dashboard refused; a password across two elements keeps the picture out", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { signIn: BROWSER_SIGN_IN } });
+  try {
+    installBrowserFor(p);
+    setAll(p, app.url);
+    fs.mkdirSync(p.state(), { recursive: true });
+    fs.writeFileSync(p.state('ui.json'), JSON.stringify({ port: 47123 }));
+    commitPlan(p, 'readonly.yaml', `plan: read-only
+steps:
+  - as: member
+    do: { fill: ["#comment", "x"] }
+    expect: { url: /notes/42 }
+  - as: member
+    do: { click: "#save" }
+    expect: { text: Quarterly plan }
+  - as: admin
+    mutates: true
+    do: { click: "#save" }
+    expect: { text: Quarterly plan }
+  - do: { open: /off-site }
+    expect: { status: 200 }
+  - as: outsider
+    do: { open: "/to-port?port=47123" }
+    expect: { status: 200 }
+  - as: admin
+    do: { open: /split-leak }
+    expect: { text: debug }
+  - as: admin
+    do: { wait: "#not-there" }
+    expect: { text: debug }
+`);
+    const { id, run, shown } = runPlan(p, 'readonly.yaml');
+    assert.equal(run.state, 'failed', shown);
+    assert.deepEqual(run.steps.map((s) => s.status), ['passed', 'refused', 'incomplete', 'refused', 'refused', 'passed', 'failed'], shown);
+    assert.match(shown, /the page sent POST \/notes\/42\/comments, and the step isn't marked "mutates": not sent/);
+    assert.match(shown, /it mutates, and nextlevel\.json doesn't allow mutations on staging: not sent/);
+    assert.match(shown, /http:\/\/other\.test\/collect: other\.test isn't the environment's origin/);
+    assert.match(shown, /http:\/\/127\.0\.0\.1:47123\/: (port 47123 on this PC is nextlevel's own dashboard|127\.0\.0\.1:47123 isn't the environment's origin)/);
+    assert.match(shown, /expected an element #not-there shown; got none in 30 s/);
+    const seen = await app.state();
+    assert.equal(seen.comments.length, 0, 'nothing written');
+    assert.ok(!seen.requests.some((r) => r.method === 'POST' && r.path.includes('comments')), 'never sent');
+    assert.ok(seen.requests.some((r) => r.method === 'POST' && r.path === '/sign-in'), "the sign-in's own POST is let through");
+    assert.deepEqual(run.mutations, []);
+    const split = JSON.parse(fs.readFileSync(p.state('evidence', id, 'step-6.json'), 'utf8'));
+    assert.match(split.screenshot, /not in one element: the screenshot isn't kept/);
+    assert.ok(!fs.existsSync(p.state('evidence', id, 'step-6.png')));
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("without the browser: browser steps end incomplete, saying how to install it, and HTTP steps run; an HTTP sign-in's cookies carry into the browser; a browser that doesn't start says so", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app);
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'mixed.yaml', `plan: mixed
+steps:
+  - as: member
+    do: { request: "GET /notes/42" }
+    expect: { status: 200 }
+  - as: member
+    do: { open: /notes/42 }
+    expect: { text: Signed in as member@example.com }
+  - as: admin
+    do: { request: "GET /api/notes/42" }
+    expect: { status: 200 }
+`);
+    const none = runPlan(p, 'mixed.yaml');
+    assert.equal(none.run.state, 'incomplete', none.shown);
+    assert.deepEqual(none.run.steps.map((s) => s.status), ['passed', 'incomplete', 'passed']);
+    assert.match(none.shown, /it needs the browser, and the browser isn't installed/);
+    installBrowserFor(p);
+    const ok = runPlan(p, 'mixed.yaml');
+    assert.equal(ok.run.state, 'passed', ok.shown);
+    assert.equal((await app.state()).sessions.length, 4, "one HTTP sign-in each, the browser used the member's");
+    fs.mkdirSync(path.join(p.env.HOME, '.fake-playwright'), { recursive: true });
+    fs.writeFileSync(path.join(p.env.HOME, '.fake-playwright', 'knobs.json'), JSON.stringify({ launchFails: true }));
+    const broken = runPlan(p, 'mixed.yaml');
+    assert.deepEqual(broken.run.steps.map((s) => s.status), ['passed', 'incomplete', 'passed']);
+    assert.match(broken.shown, /the browser didn't start \(browserType\.launch: Executable doesn't exist/);
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
 });

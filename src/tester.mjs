@@ -24,6 +24,8 @@ import { OUTPUT_BUDGET, byteLength, head } from './lib/reports.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { PERSONA_FIELDS, originOf, recipeFields, signInFor, testerOn } from './lib/testerconfig.mjs';
+import { PLAYWRIGHT, browserState, installBrowser, loadPlaywright, playwrightDir } from './lib/browsertools.mjs';
+import { probeBrowser, startBrowser } from './lib/testerbrowser.mjs';
 import { cookieJar, reachOf, request, urlProblem } from './lib/testernet.mjs';
 import { forgetPersona, listPersonas, readPersona, setPersona, storeKind, valueProblem } from './lib/vault.mjs';
 
@@ -79,6 +81,7 @@ export async function cmdTester(argv, ctx) {
   if (sub === 'status') return status(a, ctx);
   if (sub === 'check') return check(a, ctx);
   if (sub === 'show') return show(a, ctx);
+  if (sub === 'browser' && (a._[1] || 'status') === 'status') return browserStatus();
   if (readOnly()) {
     console.error(`nextlevel tester ${sub} doesn't run in the assistant's read-only session: nothing was done.`);
     return 1;
@@ -99,7 +102,8 @@ export async function cmdTester(argv, ctx) {
   }
   if (sub === 'stop') return stopRun(a, ctx);
   if (sub === 'persona') return persona(a, ctx);
-  console.error(`nextlevel tester: no "${sub}" (status, check, run, wait, show, stop, persona)`);
+  if (sub === 'browser') return browserInstall(a);
+  console.error(`nextlevel tester: no "${sub}" (status, check, run, wait, show, stop, persona, browser)`);
   return 1;
 }
 
@@ -295,6 +299,42 @@ function show(a, { stateDir }) {
   if (part.more) console.log(`… lines ${part.last + 1} to ${part.total} left out (${byteLength(text)} bytes in all): nextlevel tester show ${id} --from ${part.last + 1}`);
   // (show answers 0 when it showed the run; wait answers whether the run passed)
   return a._[0] === 'wait' && r.state !== 'passed' ? 1 : 0;
+}
+
+// ---------- the browser (part 2): the owner installs it, in their own window ----------
+function browserStatus() {
+  const s = browserState();
+  if (s.ok) console.log(`The browser is installed: Playwright ${PLAYWRIGHT.version} and its headless Chromium, in ${playwrightDir()}, every file as installed (${Object.keys(s.record.files).length} files, ${new Date(s.record.at).toISOString().slice(0, 10)}).`);
+  else console.log(`${s.problem[0].toUpperCase()}${s.problem.slice(1)}. Browser steps (open, click, fill, press, wait) end incomplete until then; HTTP steps don't need it.${s.problem.includes('install it again') ? '' : ' To install it: nextlevel tester browser install, in your own PowerShell window, in the project folder.'}`);
+  return 0;
+}
+async function browserInstall(a) {
+  const words = `Playwright ${PLAYWRIGHT.version} and its headless Chromium (${PLAYWRIGHT.download} to download, ${PLAYWRIGHT.disk} on disk) into ${playwrightDir()}, from the lock file nextlevel ships, with no install scripts. An antivirus may look at the new browser`;
+  if (!a.yes) {
+    if (!process.stdin.isTTY) {
+      console.error(`nextlevel tester browser install asks first, so it runs in your own window (PowerShell); --yes installs without asking. Nothing was installed.`);
+      return 1;
+    }
+    const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await rl.question(`Install ${words}. Install it? [y/N] `);
+    rl.close();
+    if (!/^y(es)?$/i.test(answer.trim())) {
+      console.log('Nothing was installed.');
+      return 0;
+    }
+  } else console.log(`Installing ${words}.`);
+  const problem = await installBrowser();
+  if (problem) {
+    console.error(`The browser isn't installed: ${problem}.`);
+    return 1;
+  }
+  const probe = await probeBrowser();
+  if (probe) {
+    console.error(`Installed, but the browser doesn't open a page: ${probe}. If an antivirus stopped it, docs/ANTIVIRUS.md says what to do.`);
+    return 1;
+  }
+  console.log('The browser opens pages: browser steps can run.');
+  return 0;
 }
 
 // ---------- the personas' sign-ins (the owner's) ----------
@@ -517,11 +557,40 @@ export async function cmdAcceptProcess(what, ctx) {
   save();
   say(`started: ${ask.plan} on ${ask.env} at ${ask.commit.slice(0, 8)}, asked by ${ask.by}`);
 
-  // each persona: its values (opened here, once), its cookie jar, its bearer token, whether it stopped
+  // each persona: its values (opened here, once), its cookie jar and bearer token for HTTP steps, its browser session,
+  // the fields filled in its pages (masked in every screenshot), whether it stopped
   const people = new Map();
   const personOf = (name) => {
-    if (!people.has(name)) people.set(name, { name, jar: cookieJar(), bearer: '', signedIn: !name, stopped: '', values: null });
+    if (!people.has(name)) people.set(name, { name, jar: cookieJar(), bearer: '', httpIn: !name, session: null, browserIn: !name, stopped: '', values: null, masks: [] });
     return people.get(name);
+  };
+  // the browser, started at the first step that needs it (part 2): the pinned Playwright, its files as installed
+  let browser = null;
+  let browserProblem = '';
+  const needBrowser = async () => {
+    if (browser || browserProblem) return browserProblem;
+    const pw = await loadPlaywright();
+    if (pw.problem) {
+      browserProblem = `it needs the browser, and ${pw.problem}`;
+      return browserProblem;
+    }
+    try {
+      browser = await startBrowser({ chromium: pw.chromium, reach });
+      say('the browser started');
+    } catch (err) {
+      browserProblem = safeText(err.message, secrets, 300);
+    }
+    return browserProblem;
+  };
+  const sessionOf = async (p) => {
+    if (!p.session) {
+      const host = new URL(reach.envOrigin).host;
+      p.session = await browser.newSession({ cookies: p.jar.entries(host), bearer: () => p.bearer, onWrite: (m, where) => record.mutations.push(`${m} ${where}`) });
+    }
+    return p.session;
+  };
+  const keepCookies = async (p) => {
+    for (const [, v] of await p.session.cookies()) addSecret(v);
   };
   const send = async (p, method, rel, { json, form, headers = {} } = {}, { signIn = false } = {}) => {
     // (a step that changes data only where nextlevel.json allows mutations: the sign-in recipe's own requests aside)
@@ -572,18 +641,32 @@ export async function cmdAcceptProcess(what, ctx) {
       return { status: res.status, url: fu.origin === reach.envOrigin ? `${fu.pathname}${fu.search}` : `${fu.origin}${fu.pathname}`, hops, headers: Object.fromEntries(Object.entries(res.headers).map(([k, v]) => [k.toLowerCase(), Array.isArray(v) ? v.join(', ') : String(v)])), rawHeaders: res.headers, text, json: parsed, isJson, truncated: res.truncated };
     }
   };
-  const signIn = async (p) => {
-    if (p.signedIn) return '';
-    p.signedIn = true;
+  // A persona's values, opened once -> '' or why not
+  const open = (p) => {
+    if (p.values) return '';
     if (!record.personas.includes(p.name)) record.personas.push(p.name);
     const got = readPersona(root, { env: ask.env, origin: originOf(env.url), persona: p.name });
     if (got.problem) return got.problem;
     p.values = got.values;
-    const recipe = signInFor(t, ask.env);
+    return '';
+  };
+  const recipe = signInFor(t, ask.env);
+  // Signed in for HTTP steps: the HTTP recipe, a token alone, or the browser's recipe whose cookies the jar then takes
+  const signInHttp = async (p) => {
+    if (p.httpIn) return '';
+    p.httpIn = true;
+    const bad = open(p);
+    if (bad) return bad;
     if (!recipe?.http?.length) {
-      if (recipe?.browser?.length && !p.values.token) return 'signs in through the browser (part 2 of the tester): not yet';
       if (p.values.token) {
         p.bearer = p.values.token;
+        return '';
+      }
+      if (recipe?.browser?.length) {
+        const why = await signInBrowser(p);
+        if (why) return why;
+        const host = new URL(reach.envOrigin).host;
+        p.jar.take(host, (await p.session.cookies()).map(([k, v]) => `${k}=${v}`));
         return '';
       }
       return "nextlevel.json's tester has no sign-in recipe, and the persona has no token";
@@ -613,66 +696,155 @@ export async function cmdAcceptProcess(what, ctx) {
     }
     return '';
   };
+  // Signed in for browser steps: the browser's recipe in the persona's own context, or the HTTP sign-in's cookies and
+  // token handed to it
+  const signInBrowser = async (p) => {
+    const needs = await needBrowser();
+    if (needs) return needs;
+    if (p.browserIn) {
+      if (!p.session) await sessionOf(p);
+      return '';
+    }
+    p.browserIn = true;
+    const bad = open(p);
+    if (bad) return bad;
+    if (!recipe?.browser?.length) {
+      const why = await signInHttp(p);
+      if (why) return why;
+      await sessionOf(p);
+      return '';
+    }
+    const s = await sessionOf(p);
+    const vars = { ...p.values };
+    for (const [i, b] of recipe.browser.entries()) {
+      const [kind] = Object.keys(b);
+      const a = kind === 'open' ? { kind, path: b.open } : kind === 'fill' ? { kind, selector: b.fill[0], value: fillVars(b.fill[1], vars) } : kind === 'press' ? { kind, key: b.press } : { kind, selector: b[kind] };
+      if (kind === 'fill') p.masks.push(b.fill[0]);
+      const r = await s.act(a, { mayWrite: true, signIn: true });
+      const why = r.refused || r.incomplete || (r.failed ? `${r.failed.expected}: ${r.failed.actual}` : '');
+      if (why) return `sign-in step ${i + 1} (${kind}): ${why}`;
+    }
+    await keepCookies(p);
+    return '';
+  };
 
-  for (const s of r.plan.steps) {
-    if (stopAsked()) return finish('stopped', 'stopped by the owner');
-    if (Date.now() > deadline) return finish('stopped', `stopped at its time limit (${t.runMinutes} min)`);
-    const p = personOf(s.as);
-    const entry = { n: s.n, as: s.as, what: stepWords(s), status: '', checks: [], why: '' };
-    steps.push(entry);
+  try {
+    for (const s of r.plan.steps) {
+      if (stopAsked()) return finish('stopped', 'stopped by the owner');
+      if (Date.now() > deadline) return finish('stopped', `stopped at its time limit (${t.runMinutes} min)`);
+      const p = personOf(s.as);
+      const entry = { n: s.n, as: s.as, what: stepWords(s), status: '', checks: [], why: '' };
+      steps.push(entry);
+      const a = s.action;
+      if (p.stopped) {
+        Object.assign(entry, { status: 'not run', why: `an earlier step as ${s.as} ${p.stopped}` });
+        continue;
+      }
+      if (s.mutates && !mayMutate) {
+        Object.assign(entry, { status: 'incomplete', why: `it mutates, and ${env.production ? `${ask.env} is production` : `nextlevel.json doesn't allow mutations on ${ask.env}`}: not sent` });
+        continue;
+      }
+      if (a.kind !== 'request') {
+        await browserStep(s, p, entry);
+        save();
+        continue;
+      }
+      const signProblem = await signInHttp(p);
+      if (signProblem) {
+        Object.assign(entry, { status: 'incomplete', why: `couldn't sign in as ${s.as}: ${safeText(signProblem, secrets, 300)}` });
+        p.stopped = "couldn't sign in";
+        continue;
+      }
+      const t0 = Date.now();
+      const until = t0 + s.within * 1000;
+      let res = null;
+      let checks = [];
+      let error = null;
+      for (;;) {
+        try {
+          res = await send(p, a.method, fillRun(a.path, run), { json: a.json === undefined ? undefined : fillRun(a.json, run), form: a.form === undefined ? undefined : fillRun(a.form, run), headers: fillRun(a.headers, run) });
+          error = null;
+          checks = judge(s.expect, res, { denied: env.denied?.length ? env.denied : DEFAULT_DENIED });
+        } catch (err) {
+          error = err;
+        }
+        const ok = !error && checks.every((c) => c.ok);
+        if (ok || !s.within || Date.now() + 2000 > until || stopAsked() || error?.refused) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+      entry.ms = Date.now() - t0;
+      if (error) {
+        Object.assign(entry, { status: error.refused ? 'refused' : 'incomplete', why: safeText(error.message, secrets, 300) });
+        p.stopped = error.refused ? 'was refused' : "couldn't run";
+        continue;
+      }
+      entry.checks = checks.map((c) => ({ ...c, expected: safeText(c.expected, secrets, 300), actual: safeText(c.actual, secrets, 300) }));
+      entry.status = checks.every((c) => c.ok) ? 'passed' : 'failed';
+      if (entry.status === 'failed') p.stopped = 'failed';
+      // the step's evidence: what was asked, what came back, made safe
+      writeJson(path.join(evidenceDir(stateDir, id), `step-${s.n}.json`), safeRecord({ n: s.n, as: s.as, request: `${a.method} ${pathOnly(a.path)}`, status: res.status, url: pathOnly(res.url), hops: res.hops.map((h) => ({ status: h.status, location: pathOnly(h.location) })), headers: safeHeaders(res.rawHeaders, secrets), body: safeBody(res.text, res.isJson, res.json, secrets), truncated: !!res.truncated, ms: entry.ms, checks: entry.checks }, secrets));
+      save();
+    }
+    return finish();
+  } finally {
+    if (browser) await browser.close();
+  }
+
+  // One browser step: the persona's session, the action, what the page shows judged, a screenshot made safe
+  async function browserStep(s, p, entry) {
     const a = s.action;
-    if (p.stopped) {
-      Object.assign(entry, { status: 'not run', why: `an earlier step as ${s.as} ${p.stopped}` });
-      continue;
-    }
-    if (a.kind !== 'request') {
-      Object.assign(entry, { status: 'incomplete', why: 'a browser step: it needs the browser (part 2 of the tester)' });
-      p.stopped = 'needed the browser';
-      continue;
-    }
-    if (s.mutates && !mayMutate) {
-      Object.assign(entry, { status: 'incomplete', why: `it mutates, and ${env.production ? `${ask.env} is production` : `nextlevel.json doesn't allow mutations on ${ask.env}`}: not sent` });
-      continue;
-    }
-    const signProblem = await signIn(p);
+    const signProblem = await signInBrowser(p);
     if (signProblem) {
-      Object.assign(entry, { status: 'incomplete', why: `couldn't sign in as ${s.as}: ${safeText(signProblem, secrets, 300)}` });
-      p.stopped = "couldn't sign in";
-      continue;
+      const needs = signProblem === browserProblem;
+      Object.assign(entry, { status: 'incomplete', why: needs ? signProblem : `couldn't sign in as ${s.as}: ${safeText(signProblem, secrets, 300)}` });
+      p.stopped = needs ? 'needed the browser' : "couldn't sign in";
+      return;
     }
+    const session = p.session;
     const t0 = Date.now();
-    const until = t0 + s.within * 1000;
+    const seenBefore = session.refusedCount();
+    const act = { ...a, ...(a.kind === 'fill' ? { value: fillRun(a.value, run) } : {}) };
+    if (a.kind === 'fill') p.masks.push(a.selector);
+    let r = await session.act(act, { mayWrite: s.mutates });
     let res = null;
     let checks = [];
-    let error = null;
+    const until = t0 + s.within * 1000;
     for (;;) {
-      try {
-        res = await send(p, a.method, fillRun(a.path, run), { json: a.json === undefined ? undefined : fillRun(a.json, run), form: a.form === undefined ? undefined : fillRun(a.form, run), headers: fillRun(a.headers, run) });
-        error = null;
-        checks = judge(s.expect, res, { denied: env.denied?.length ? env.denied : DEFAULT_DENIED });
-      } catch (err) {
-        error = err;
-      }
-      const ok = !error && checks.every((c) => c.ok);
-      if (ok || !s.within || Date.now() + 2000 > until || stopAsked() || error?.refused) break;
+      if (r.refused || r.incomplete || r.failed) break;
+      res = await session.look();
+      checks = judge(s.expect, res, { denied: env.denied?.length ? env.denied : DEFAULT_DENIED });
+      if (checks.every((c) => c.ok) || !s.within || Date.now() + 2000 > until || stopAsked()) break;
       await new Promise((resolve) => setTimeout(resolve, 2000));
+      // (an "open" is asked again; any other action is done once and the page read again)
+      if (a.kind === 'open') r = await session.act(act);
     }
     entry.ms = Date.now() - t0;
-    if (error) {
-      Object.assign(entry, { status: error.refused ? 'refused' : 'incomplete', why: safeText(error.message, secrets, 300) });
-      p.stopped = error.refused ? 'was refused' : "couldn't run";
-      continue;
+    await keepCookies(p);
+    const blocked = session.refusedSince(seenBefore).slice(0, 20).map((b) => ({ method: b.method, where: pathOnly(b.where), why: b.why }));
+    if (r.refused || r.incomplete) {
+      Object.assign(entry, { status: r.refused ? 'refused' : 'incomplete', why: safeText(r.refused || r.incomplete, secrets, 300) });
+      p.stopped = r.refused ? 'was refused' : "couldn't run";
+    } else {
+      if (r.failed) checks = [{ what: r.failed.what, ok: false, expected: r.failed.expected, actual: r.failed.actual }];
+      entry.checks = checks.map((c) => ({ ...c, expected: safeText(c.expected, secrets, 300), actual: safeText(c.actual, secrets, 300) }));
+      entry.status = checks.every((c) => c.ok) ? 'passed' : 'failed';
+      if (entry.status === 'failed') p.stopped = 'failed';
     }
-    entry.checks = checks.map((c) => ({ ...c, expected: safeText(c.expected, secrets, 300), actual: safeText(c.actual, secrets, 300) }));
-    entry.status = checks.every((c) => c.ok) ? 'passed' : 'failed';
-    if (entry.status === 'failed') p.stopped = 'failed';
-    // the step's evidence: what was asked, what came back, made safe
-    writeJson(path.join(evidenceDir(stateDir, id), `step-${s.n}.json`), safeRecord({ n: s.n, as: s.as, request: `${a.method} ${pathOnly(a.path)}`, status: res.status, url: pathOnly(res.url), hops: res.hops.map((h) => ({ status: h.status, location: pathOnly(h.location) })), headers: safeHeaders(res.rawHeaders, secrets), body: safeBody(res.text, res.isJson, res.json, secrets), truncated: !!res.truncated, ms: entry.ms, checks: entry.checks }, secrets));
-    save();
+    // the step's evidence: the page as the step left it, made safe, and its screenshot with every kept value masked
+    const masks = ['input[type=password]', ...p.masks, ...s.mask, ...(env.mask || [])];
+    const shot = await session.shot({ masks, secrets: secrets.values });
+    let picture = shot.why || '';
+    if (shot.png) {
+      fs.writeFileSync(path.join(evidenceDir(stateDir, id), `step-${s.n}.png`), shot.png);
+      picture = `step-${s.n}.png`;
+    }
+    if (!res && !r.refused && !r.incomplete) res = await session.look().catch(() => null);
+    writeJson(path.join(evidenceDir(stateDir, id), `step-${s.n}.json`), safeRecord({ n: s.n, as: s.as, action: entry.what, status: res?.status ?? 0, url: pathOnly(res?.url || ''), hops: (res?.hops || []).map((h) => ({ status: h.status, location: pathOnly(h.location) })), headers: safeHeaders(res?.rawHeaders || {}, secrets), text: res ? safeBody(res.text, res.isJson, res.json, secrets) : '', blocked, screenshot: picture, ms: entry.ms, checks: entry.checks }, secrets));
   }
-  return finish();
 
   function finish(stopState = '', stopWhy = '') {
+    // (the hosts the browser's proxy reached, with the HTTP steps')
+    for (const h of browser?.hosts || []) if (!record.hosts.includes(h)) record.hosts.push(h);
     if (stopState) return end(stopState, stopWhy);
     const failed = steps.filter((x) => x.status === 'failed' || x.status === 'refused');
     const open = steps.filter((x) => x.status === 'incomplete');

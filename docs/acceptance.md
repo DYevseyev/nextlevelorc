@@ -4,8 +4,8 @@ The tester (`docs/design/tester.md`) walks an acceptance plan against a running 
 ("personas") the owner named, and keeps what it saw as evidence. It is a program, not a model: a plan names every step,
 so no AI reads a page or holds a password. This page is the plan format, the YAML it is written in, and the settings.
 
-Part 1 runs HTTP steps. Browser steps (`open`, `click`, `fill`, `press`, `wait`) are read and checked already, and a
-run ends **incomplete** at the first one until part 2 brings the browser.
+A step is an HTTP request or a browser action. Browser steps (`open`, `click`, `fill`, `press`, `wait`) need the browser,
+installed once on this PC (below); without it they end **incomplete** and HTTP steps still run.
 
 ## Turning it on
 
@@ -34,14 +34,18 @@ password to POST /api/session"). With it off, nothing changes anywhere.
 - **environments:** each one's `url` is an origin alone (`https://host[:port]`, no path): https, or plain http only
   for a stand-in app on this PC (`localhost`, `127.0.0.1`). `denied` is what counts as "not allowed" there (statuses,
   and `redirect:/path` for an app that sends a stranger to its sign-in page; by default 401, 403 and 404).
-  `"production": true` marks one a step that mutates never runs on.
+  `"production": true` marks one a step that mutates never runs on. `mask` lists selectors blacked out in every
+  screenshot taken there.
 - **allowMutations:** the environments where steps marked `mutates: true` run. Anywhere else they are not sent, and
   the run ends incomplete. A production environment can't be listed.
 - **alsoAllow:** other origins a run may reach (a separate sign-in host). Nothing else is ever reached: a redirect
   anywhere else is refused, and a name on the internet that resolves to this PC or a private network isn't reached.
 - **personas:** the test accounts' names, as plans use them in `as:`. Use accounts made for testing, never a real
   person's.
-- **signIn:** how a persona signs in, as HTTP requests (an environment may have its own). `{{username}}`,
+- **signIn:** how a persona signs in, as HTTP requests (`http`) or browser steps (`browser`: `open`, `fill`, `click`,
+  `press`, `wait`, with `{{username}}` and `{{password}}` only in a `fill`'s value), or both (an environment may have
+  its own). A browser step after an HTTP sign-in takes its cookies and token; an HTTP step after a browser sign-in
+  takes the browser's cookies. `{{username}}`,
   `{{password}}` and `{{token}}` are the persona's values; `capture` takes a value from a JSON answer for the next
   request; `keep` is `cookie` (the default: the session cookie) or `bearer:$.path` (a token sent as
   `Authorization: Bearer`). The values go only where the recipe puts them, never into a path.
@@ -109,12 +113,44 @@ steps:
   exists }`, with a JSON path like `$.entries[*].action`), `header` (`{ name, equals | contains }`, a header that
   isn't a cookie or a sign-in). **within:** asks again every 2 seconds until the checks pass, up to that long (at
   most 2 minutes); a step that mutates is never sent twice, so it can't have one.
+- **mask:** selectors blacked out in this step's screenshot (browser steps).
 - `{{run.id}}` and `{{run.stamp}}` are the only placeholders in a plan, to make what a run writes its own.
 
 A step that fails ends that persona's later steps ("not run"); the other personas go on. A run ends **passed**,
 **failed** (a step failed, or was refused: a redirect off the origin), **incomplete** (a step couldn't run: a persona
 not set, a browser step, a step that mutates on a read-only environment), **stopped** or **refused** (the hub didn't
 start it, and says why).
+
+## The browser
+
+Browser steps run in Playwright's headless Chromium, at the one version this nextlevel pins, installed by you once:
+
+```
+nextlevel tester browser install
+```
+
+in your own PowerShell window, in the project folder (about 120 MB to download; it asks first, and an antivirus may look
+at the new browser: `docs/ANTIVIRUS.md`). It goes into `~/.nextlevel/tools/`, never the project, from the lock file
+nextlevel ships, with no install scripts, and every file's hash is recorded: a run compares them before it starts the
+browser, and `nextlevel tester browser` (or the doctor's `tester.browser`) says whether it is ready.
+
+- Each persona gets a fresh browser context for the run (its own cookies and storage, nothing kept after), signed in at
+  its first step. Downloads are off, service workers blocked, popups closed.
+- **open** loads a path and waits for the page; **click** clicks the first element the selector finds and waits for
+  what it started; **fill** types a value into a field; **press** presses a key (`Enter` sends a form); **wait** waits
+  until an element shows. Each waits up to 30 seconds; an element that isn't there fails the step.
+- What a step expects is judged on the page as the step leaves it: `text` / `noText` on its visible text, `status`,
+  `redirect`, `denied` / `allowed` and `header` on the page's last load, `url` on where it is. With `within`, an `open`
+  is done again every 2 seconds; any other action is done once and the page read again.
+- The browser reaches only the environment's origin and `alsoAllow`, through a proxy of the run's own that checks every
+  connection, redirects included. A page sent to another host, or to another port on this PC, fails its step
+  (**refused**); a picture, script or style from elsewhere isn't loaded, and the step's evidence lists it.
+- A request that changes data (anything but GET, HEAD and OPTIONS) goes out only while the sign-in or a step marked
+  `mutates: true` runs. A click that sends a form in any other step is stopped, and the step is **refused**.
+- Each browser step keeps a screenshot (`step-<n>.png`) with password fields, every field the sign-in or a step filled,
+  and the step's and environment's `mask` blacked out. Before it is kept, the page's text and fields are read for a
+  password, a token, a `.env` value or the run's session values: one found gets a mask of its own; one that can't be
+  found in one element keeps the screenshot out, and the step says so.
 
 ## The YAML subset
 
@@ -142,8 +178,9 @@ and anything else is a string.
 | `nextlevel tester wait <run id>` / `show <run id>` | the owner, the orchestrator | how it ended, step by step |
 | `nextlevel tester stop [<run id>]` | the owner | stops a run at its next step |
 | `nextlevel tester persona set\|list\|forget` | the owner, in their own window | the personas' sign-ins |
+| `nextlevel tester browser [status]` / `browser install` | anyone / the owner, in their own window | whether the browser is ready; installing it |
 
 A worker, a verify command and the assistant can't start a run. Each run is in `.nextlevel/evidence/<run id>/`
-(`run.json` and a `step-<n>.json` per step: status, headers on an allow-list, the body's first 2 KB, every kept value
-replaced by `***`), and one line per run is kept in the guard's folder (`~/.nextlevel/guard/<project>/tester.jsonl`),
+(`run.json` and a `step-<n>.json` per step: status, headers on an allow-list, the body's or page's first 2 KB, every
+kept value replaced by `***`; a `step-<n>.png` per browser step), and one line per run is kept in the guard's folder (`~/.nextlevel/guard/<project>/tester.jsonl`),
 which agents can't write.

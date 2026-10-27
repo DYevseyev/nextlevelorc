@@ -78,9 +78,33 @@ function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
           denyLater(user, 42);
           return api ? json(res, 403, { error: 'denied' }) : html(res, 403, 'You have no access to this note.');
         }
-        return api ? json(res, 200, { id: 42, title: 'Quarterly plan' }) : html(res, 200, '<h1>Quarterly plan</h1>');
+        return api ? json(res, 200, { id: 42, title: 'Quarterly plan' }) : html(res, 200, `<h1>Quarterly plan</h1><p id="who">Signed in as ${USERS[user].email}</p><form method="post" action="/notes/42/comments"><input id="comment" name="text"><button id="save" type="submit">Save</button></form><ul>${comments.map((c) => `<li>${new URLSearchParams(c).get('text') || 'a comment'}</li>`).join('')}</ul>`);
       }
-      if (p === '/sign-in') return html(res, 200, 'Sign in');
+      // the browser's sign-in: a form, and a session cookie for a right one
+      if (p === '/sign-in' && req.method === 'POST') {
+        const f = new URLSearchParams(body);
+        const name = Object.keys(USERS).find((k) => USERS[k].email === f.get('email') && USERS[k].password === f.get('password'));
+        if (!name) return html(res, 200, '<p id="wrong">Wrong sign-in</p>');
+        const sid = randomBytes(24).toString('hex');
+        sessions.set(sid, name);
+        res.writeHead(303, { location: '/notes/42', 'set-cookie': `sid=${sid}; Path=/; HttpOnly` });
+        return res.end();
+      }
+      if (p === '/sign-in') return html(res, 200, '<h1>Sign in</h1><form method="post" action="/sign-in"><input id="email" name="email"><input id="password" name="password" type="password"><button id="go" type="submit">Sign in</button></form>');
+      if (p === '/notes/42/comments' && req.method === 'POST') {
+        if (!user || user === 'outsider') return html(res, 403, 'You have no access to this note.');
+        comments.push(body);
+        res.writeHead(303, { location: '/notes/42' });
+        return res.end();
+      }
+      // a page that loads a picture from another host, one that spells a password across two elements, a redirect to
+      // another port on this PC
+      if (p === '/with-pixel') return html(res, 200, '<p>A page with a pixel</p><img src="http://other.test/pixel.gif">');
+      if (p === '/split-leak') return html(res, 200, `<p id="split">debug: <span>${USERS.member.password.slice(0, 7)}</span><span>${USERS.member.password.slice(7)}</span></p>`);
+      if (p === '/to-port') {
+        res.writeHead(302, { location: `http://127.0.0.1:${url.searchParams.get('port')}/` });
+        return res.end();
+      }
       if (p === '/api/audit') {
         if (USERS[user]?.role !== 'admin') return json(res, 403, { error: 'admins only' });
         return json(res, 200, { entries: audit.filter((e) => String(e.note) === url.searchParams.get('note')) });
@@ -91,7 +115,7 @@ function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
         return json(res, 201, { ok: true });
       }
       if (p === '/echo-session') return json(res, 200, { cookie: req.headers.cookie || '', auth: req.headers.authorization || '', you: user });
-      if (p === '/leak') return html(res, 200, `debug: password=${USERS.member.password}`);
+      if (p === '/leak') return html(res, 200, `<p id="debug">debug: password=${USERS.member.password}</p>`);
       if (p === '/off-site') {
         res.writeHead(302, { location: 'http://other.test/collect' });
         return res.end();
