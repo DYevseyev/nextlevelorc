@@ -320,7 +320,7 @@ async function scan(o) {
         ruleId: 'uncaught-filesystem-error.http',
         identity: { anchor: 'b' },
         fingerprints: { algorithm: 'codex-security/v1', primary: 'fp-crash' },
-        title: 'A missing file request can stop the HTTP server‮',
+        title: `A missing file request can stop the HTTP server${String.fromCodePoint(0x202e)}`, // (a bidi character the findings drop)
         summary: 'An error is not caught.',
         severity: { level: 'low' },
         confidence: { level: 'medium', rationale: 'r' },

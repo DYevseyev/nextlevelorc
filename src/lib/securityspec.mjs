@@ -95,7 +95,8 @@ export function scanCommand({ model, effort, deep = false, daybreak = false, max
   return [
     'scan', REPO_AT,
     '--output-dir', OUT_AT,
-    '--headless',
+    // (the scanner's own flag, inside the container: no console, nothing to do with conhost's, FR-013)
+    "--headless",
     '--auth', 'chatgpt',
     '--mode', deep ? 'deep' : 'standard',
     ...(model ? ['--model', model] : []),

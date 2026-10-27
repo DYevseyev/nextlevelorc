@@ -116,7 +116,7 @@ async function login({ root, config, envKeys }) {
   console.log("Sign in to Codex Security for the security engineer: open the page below in your browser and enter the code. nextlevel keeps none of it; the sign-in stays in the scanner's own Docker volume.");
   const bin = resolveBin('docker');
   const code = await new Promise((resolve) => {
-    const child = spawn(bin.file, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys) });
+    const child = spawn(bin.file, loginArgs(vols, { seccomp: SECCOMP_FILE }), { stdio: 'inherit', env: dockerEnv(envKeys), windowsHide: false }); // (the owner's own window: the device code shows there)
     child.on('exit', (c) => resolve(c ?? 1));
     child.on('error', () => resolve(1));
   });
