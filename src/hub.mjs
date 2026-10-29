@@ -31,7 +31,8 @@
 //                                                  the assistant: a read-only side chat about the project (src/ask.mjs)
 //               nextlevel security scan [--deep] | status [--json] | stop [<id>] | login
 //                                                  the security engineer's scans, in OpenAI's scanner container; the hub
-//                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs)
+//                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs),
+//                                                  and while the role is on the Daybreak model watch's look once a day (_daybreak)
 //               nextlevel tester status | check [<plan>] | run <plan> --env <env> | wait <run> | show <run> | stop | persona ...
 //                                                  acceptance plans run against the environments nextlevel.json names; the
 //                                                  hub starts an asked-for run (_accept), one at a time (src/tester.mjs)
@@ -110,9 +111,11 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
-import { approvedPolicy, changePolicy, cmdScanProcess, cmdSecurity, draftSource, pendingRequests, readPolicy, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage } from './security.mjs';
+import { approvedPolicy, changePolicy, cmdDaybreakProcess, cmdScanProcess, cmdSecurity, daybreakSeen, draftSource, pendingRequests, readPolicy, readWatchFile, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage, watchOf } from './security.mjs';
+import { DIGEST as SCANNER_DIGEST } from './lib/securityimage.mjs';
+import { droppedModel, untold, watchDue, watchWords, withTold } from './lib/daybreakwatch.mjs';
 import { DRAFT_WARNING, POLICY_MAX, POLICY_WHY, mayDraft, policyText, policyWhat } from './lib/securitypolicy.mjs';
-import { listScans, readScan, runningScan } from './lib/securityscan.mjs';
+import { leaseHolder, listScans, readScan, runningScan } from './lib/securityscan.mjs';
 import { capProblem, cmdAcceptProcess, cmdTester, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runningRun, writeRun } from './tester.mjs';
 import { testerOn } from './lib/testerconfig.mjs';
 import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
@@ -6192,6 +6195,57 @@ function securityTick() {
     done();
   });
 }
+// ---------- the Daybreak model watch (1b-1, lib/daybreakwatch.mjs; `_daybreak` in src/security.mjs) ----------
+// While the security engineer is on, once a day and when the scanner's image changes, a child of the hub asks the
+// scanner which models the role's sign-in covers with Daybreak Blue. Never beside a scan (asked for or running), another
+// holder of the PC's lease or an update's hold; not a job, and no round. Its news reaches the phone once per PC, and a
+// project whose chosen model is no longer covered is told once too; nextlevel never switches a model by itself.
+const watch = { child: null };
+function daybreakWatchTick() {
+  const w = watchOf(CFG.config);
+  if (!w) return;
+  tellWatch(w);
+  if (watch.child || updateHold || scanBusy() || pendingRequests(ROOT).length) return;
+  if (!watchDue(readJsonFile(w.file, {}), { now: clockNow(), digest: SCANNER_DIGEST })) return;
+  if (leaseHolder(os.homedir())) return; // (a scan, a sign-in or a check elsewhere uses the sign-in: the next look)
+  const child = spawn(process.execPath, [BIN, '_daybreak'], { cwd: ROOT, env: { ...process.env, NEXTLEVEL_ROOT: ROOT }, stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
+  watch.child = child;
+  const done = () => {
+    if (watch.child !== child) return;
+    watch.child = null;
+    const r = readWatchFile(w.file);
+    log(r.ok ? `Daybreak watch: Blue covers ${r.covered.join(', ') || 'no model'}${r.news.length ? ` (new: ${r.news.map((n) => n.model).join(', ')})` : ''}` : `Daybreak watch: couldn't ask (${r.why || 'no answer'}), try ${r.fails}`);
+    tellWatch(w);
+  };
+  child.once('exit', done);
+  child.once('error', (err) => {
+    log(`Daybreak watch didn't start: ${err.message}`);
+    done();
+  });
+}
+// The phone: each piece of news once per PC, under the record's lock (of two hubs, one tells)
+function tellWatch(w) {
+  let list = [];
+  try {
+    const rec = readJsonFile(w.file, null);
+    if (!rec || !untold(rec, { account: w.account, dropped: droppedModel(rec, w.role) }).length) return;
+    updateJsonFile(
+      w.file,
+      (r) => {
+        list = untold(r, { account: w.account, dropped: droppedModel(r, w.role), project: NAME });
+        return withTold(r, list.map((x) => x.key));
+      },
+      {},
+    );
+  } catch (err) {
+    log(`Daybreak watch: couldn't read its record: ${err.message}`);
+    return;
+  }
+  for (const x of list) {
+    queueNotify(`${NAME}: security engineer`, x.text);
+    log(`Daybreak watch: told the phone (${x.key.split(':')[0]} ${x.key.split(':').slice(2).join(':')})`);
+  }
+}
 // ---------- the security engineer's policy (lib/securitypolicy.mjs): a text the owner approves on a card ----------
 // The text is kept in the guard's blobs and held by its hash (the safe text alone: where it came from is the record's,
 // P1); the card shows that blob, never a file the team can write. Nothing reaches the phone: the card is under Needs you.
@@ -6293,14 +6347,19 @@ function securitySummary() {
   const trusted = t ? { id: t.id, counts: t.counts || '', high: /\b\d+ (critical|high)\b/.test(t.counts || ''), at: t.endedAt || t.startedAt || '', daybreak: t.daybreak || '', partial: !!t.partial } : null;
   const st = readPolicy(ROOT);
   const policy = st.approved;
+  const w = watchOf(CFG.config);
+  const daybreak = w ? watchWords(readWatchFile(w.file), w.role, { now: clockNow() }) : null;
   return {
     on: !!p,
+    daybreak,
+    model: p?.model || '',
+    effort: p?.effort || '',
     deepMinutes: CFG.config.security?.deepScanMinutes || 0,
     last,
     trusted,
     pending,
     policy: policy ? { from: policy.from, at: policy.at, hash: policy.hash.slice(0, 12) } : null,
-    version: JSON.stringify([last?.id, last?.state, trusted?.id, pending.map((x) => x.id), policy?.hash, st.draftAgain, st.rejectedDraftAt]),
+    version: JSON.stringify([last?.id, last?.state, trusted?.id, pending.map((x) => x.id), policy?.hash, st.draftAgain, st.rejectedDraftAt, daybreak?.at, daybreak?.ok, daybreak?.news, daybreak?.dropped]),
   };
 }
 // The Security page's data and its buttons (the owner's, through the dashboard's key; refused in an agent's session as
@@ -6313,7 +6372,9 @@ function securityAct(b) {
   if (action === 'scan' || action === 'deep') return requestScan(ctx, { deep: action === 'deep' });
   if (action === 'stop') return requestStop(ctx, typeof b.id === 'string' ? b.id : '');
   if (action === 'draft') return requestDraft(ctx);
-  throw new Error('action must be scan, deep, stop or draft');
+  // (Seen, on a piece of the Daybreak watch's news: the model stays as it is)
+  if (action === 'daybreak-seen') return daybreakSeen(CFG.config, String(b.model || ''));
+  throw new Error('action must be scan, deep, stop, draft or daybreak-seen');
 }
 
 // The hub stops: a scan it runs is asked to stop (its container stopped, its partial output kept), and waited for a
@@ -6621,6 +6682,7 @@ async function cmdRun(argv) {
       await pollJobs();
       await flushOutbox();
       securityTick();
+      daybreakWatchTick();
       testerTick();
       if (tick % 12 === 0) {
         gitGuard(); // git's own hooks and settings: a change gets its card now, not at the next git work
@@ -6637,7 +6699,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !acceptBusy() && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -8173,6 +8235,7 @@ const COMMAND_TABLE = {
   _trial: (rest) => cmdTrialProcess(rest[0]),
   security: (rest) => cmdSecurity(rest, { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive, envKeys: DOTENV_KEYS }).then((code) => (process.exitCode = code)),
   _scan: (rest) => cmdScanProcess(rest[0], scanContext()).then((code) => (process.exitCode = code)),
+  _daybreak: () => (process.exitCode = cmdDaybreakProcess(scanContext())),
   tester: (rest) => cmdTester(rest, { root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, hubAlive, git: (args) => git(args, { allowFail: true }).out }).then((code) => (process.exitCode = code)),
   _accept: (rest) => {
     // (setup() loaded the project's .env into this process: the run reads it only to redact with, so what it starts gets

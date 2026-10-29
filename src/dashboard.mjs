@@ -673,9 +673,11 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         // The Security page (the security engineer, 1a-2): the role, the scans, the last trusted scan's findings, the policy
         return reply(res, [200, { ok: true, ...api.security.view() }]);
       case 'POST /api/security': {
-        // Home's and the Security page's buttons: a scan, a deep scan, stop, a new draft of the policy (the owner's)
-        if (!['scan', 'deep', 'stop', 'draft'].includes(b.action)) return reply(res, [400, { ok: false, message: 'action must be scan, deep, stop or draft' }]);
+        // Home's and the Security page's buttons: a scan, a deep scan, stop, a new draft of the policy, Seen on the Daybreak
+        // watch's news (the owner's)
+        if (!['scan', 'deep', 'stop', 'draft', 'daybreak-seen'].includes(b.action)) return reply(res, [400, { ok: false, message: 'action must be scan, deep, stop, draft or daybreak-seen' }]);
         if (b.id !== undefined && (typeof b.id !== 'string' || !/^sec-[\w-]{1,40}$/.test(b.id))) return reply(res, [400, { ok: false, message: 'which scan?' }]);
+        if (b.action === 'daybreak-seen' && (typeof b.model !== 'string' || !/^[A-Za-z0-9._:-]{1,80}$/.test(b.model))) return reply(res, [400, { ok: false, message: 'which model?' }]);
         try {
           const r = api.security.act(b);
           return reply(res, [r.ok ? 200 : 409, r]);
