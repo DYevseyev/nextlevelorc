@@ -591,6 +591,11 @@ export function guardStore({ root, home = os.homedir(), entries = () => BUILT_IN
       const hookHashes = (s) => Object.values(s?.hooks || {}).flatMap((files) => Object.values(files).map((h) => h.hash));
       for (const h of hookHashes(readJson(path.join(dir, 'git.json'), null))) keep.add(h);
       for (const x of readHeld().items) if (x.kind === 'git' && x.status === 'held') for (const h of [...hookHashes(x.before), ...hookHashes(x.after)]) keep.add(h);
+      // (the security engineer's policies: a text waiting on its card, and the approved one every scan reads, which has no
+      // file and lives in the blobs alone)
+      for (const x of readHeld().items) if (x.kind === 'policy' && ['held', 'applied'].includes(x.status) && x.hash) keep.add(x.hash);
+      const approved = readJson(path.join(dir, 'security-policy.json'), null)?.approved?.hash;
+      if (typeof approved === 'string') keep.add(approved);
       for (const name of fs.existsSync(F.blobs) ? fs.readdirSync(F.blobs) : []) if (!keep.has(name)) fs.rmSync(path.join(F.blobs, name), { force: true });
     } catch {
       // only tidying

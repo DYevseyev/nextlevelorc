@@ -745,3 +745,110 @@ test("the Security page's code puts the scanner's words in as text, never a link
   assert.ok(part.length > 2000, 'the part is there');
   assert.doesNotMatch(part, /h\(['"`]a[.'"`]|href|innerHTML|target:/);
 });
+
+// 1b-1: the approved policy into the repository, as the owner's change through the hub's own commit job
+test("the approved policy into the repository as SECURITY.md: one commit with that file only, held nowhere, pushed with no card, and no card for it afterwards; each refusal changes nothing", async () => {
+  const p = secProject();
+  let ui;
+  let bg;
+  const held = () => JSON.parse(fs.readFileSync(path.join(guardDir(p.repo, p.env.HOME), 'held.json'), 'utf8')).items;
+  try {
+    p.git('push', '-q', 'origin', 'main');
+    scanOnce(p);
+    const [draft] = policyHeld(p);
+    // The idempotent text (B-review): read back through git, CRLF on disk or not, it is the same policy
+    assert.equal(policyText(blobOf(p, draft.hash)).hash, draft.hash);
+    assert.equal(policyText(blobOf(p, draft.hash).replace(/\n/g, '\r\n')).hash, draft.hash);
+    bg = p.hubInBackground(['run', '--tick-ms', '200']);
+    const { waitUntil } = await import('./helpers.mjs');
+    await waitUntil('the hub is up', () => fs.existsSync(p.state('hub.json')), 20_000);
+    ui = await startUi(p);
+    const c = client(ui);
+    assert.equal((await c.post('/api/guard', { action: 'approve', id: draft.id })).status, 200);
+    const page = (await c.get('/api/security')).json;
+    assert.deepEqual(page.policy.repo, { same: false, exists: false, cut: false, missing: false, base: 'main' });
+    const hash = page.policy.approved.hash;
+    const add = (h = hash) => c.post('/api/security', { action: 'commit-policy', hash: h });
+    const head0 = p.git('rev-parse', 'HEAD');
+    // Refusals: each says why, and nothing is written or committed
+    assert.equal((await request(ui.port, { method: 'POST', path: '/api/security', body: { action: 'commit-policy', hash } })).status, 403, 'only with the key');
+    assert.equal((await c.post('/api/security', { action: 'commit-policy', hash: 'zz' })).status, 400);
+    assert.match((await add('0'.repeat(12))).json.message, /^Not added: the approved policy changed since the page showed it/);
+    p.git('checkout', '-q', '-b', 'side');
+    assert.match((await add()).json.message, /^Not added: the main checkout is on side, not main\./);
+    p.git('checkout', '-q', 'main');
+    fs.writeFileSync(path.join(p.repo, 'SECURITY.md'), 'my own words\n');
+    assert.match((await add()).json.message, /^Not added: SECURITY\.md has changes of its own in the project/);
+    fs.rmSync(path.join(p.repo, 'SECURITY.md'));
+    if (process.platform !== 'win32') {
+      const target = path.join(p.tmp, 'elsewhere.md');
+      fs.writeFileSync(target, 'not to be written\n');
+      fs.symlinkSync(target, path.join(p.repo, 'SECURITY.md'));
+      fs.writeFileSync(path.join(p.repo, '.git', 'info', 'exclude'), 'SECURITY.md\n'); // (so git status doesn't say it first)
+      assert.match((await add()).json.message, /^Not added: SECURITY\.md in the project is a link \(or not a file\): nextlevel doesn't write through it/);
+      assert.equal(fs.readFileSync(target, 'utf8'), 'not to be written\n');
+      fs.rmSync(path.join(p.repo, 'SECURITY.md'));
+      fs.writeFileSync(path.join(p.repo, '.git', 'info', 'exclude'), '');
+      // A tracked case twin (on Windows, one file)
+      put(p.repo, 'security.md', 'twin\n');
+      p.git('add', 'security.md');
+      p.git('commit', '-qm', 'twin');
+      assert.match((await add()).json.message, /^Not added: security\.md is tracked beside it/);
+      p.git('rm', '-q', 'security.md');
+      p.git('commit', '-qm', 'no twin');
+    }
+    // A policy that was cut when it was made
+    const file = path.join(guardDir(p.repo, p.env.HOME), 'held.json');
+    const keep = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(keep), items: JSON.parse(keep).items.map((x) => (x.id === draft.id ? { ...x, cut: 9 } : x)) }));
+    assert.match((await add()).json.message, /^Not added: this policy was cut at 64 KB/);
+    fs.writeFileSync(file, keep);
+    assert.ok(!fs.existsSync(path.join(p.repo, 'SECURITY.md')), 'no refusal wrote it');
+    const before = p.git('rev-parse', 'HEAD');
+    assert.equal(p.git('log', '--format=%s', `${head0}..HEAD`).split('\n').filter(Boolean).every((s) => s !== 'SECURITY.md: the security policy the owner approved'), true);
+
+    // Added: one commit with SECURITY.md only, while another staged change stays staged
+    put(p.repo, 'staged.txt', 'staged, not the owner\'s commit\n');
+    p.git('add', 'staged.txt');
+    const ok = await add();
+    assert.equal(ok.status, 200, ok.text);
+    assert.match(ok.json.message, /^SECURITY\.md is written; the hub commits it on main in a moment \(commit-.+\)\. Nothing is pushed/);
+    await waitUntil('the commit', () => p.git('rev-parse', 'HEAD') !== before);
+    assert.equal(p.git('log', '-1', '--format=%s'), 'SECURITY.md: the security policy the owner approved');
+    assert.deepEqual(p.git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean), ['SECURITY.md']);
+    assert.equal(p.git('show', 'HEAD:SECURITY.md'), blobOf(p, draft.hash).replace(/\n$/, ''));
+    assert.deepEqual(p.git('diff', '--cached', '--name-only').split('\n').filter(Boolean), ['staged.txt'], 'the other staged change stays staged');
+    assert.ok(!held().some((x) => x.status === 'held' && (x.files || []).some((f) => (f.path || f) === 'SECURITY.md')), 'the guard holds nothing for it');
+    assert.deepEqual((await c.get('/api/security')).json.policy.repo.same, true);
+    // (the guard's tidying after that commit's watch kept the approved policy's text: it lives in the blobs alone)
+    assert.equal((await c.get('/api/security')).json.policy.approved.missing, false);
+    assert.match((await add()).json.message, /^SECURITY\.md on main is this policy already/);
+    // A push that carries it: no card of its own for the protected file
+    p.git('reset', '-q');
+    const q = p.hub(['push', 'policy-check', '--from', 'main']);
+    assert.equal(q.code, 0, q.out);
+    const pushId = q.out.match(/queued (push-\S+):/)[1];
+    await waitUntil('the push', () => {
+      try {
+        return ['done', 'failed', 'blocked'].includes(p.status(pushId).state);
+      } catch {
+        return false;
+      }
+    });
+    assert.equal(p.status(pushId).state, 'done', p.status(pushId).detail);
+    assert.ok(!held().some((x) => x.kind === 'push' && x.status === 'held'), 'no card for the push');
+  } finally {
+    if (ui) await stopUi(ui);
+    if (bg) {
+      fs.writeFileSync(p.state('hub-stop.json'), '{}');
+      await new Promise((r) => (bg.exitCode !== null ? r() : bg.once('exit', r)));
+    }
+  }
+  try {
+    // The next scan's ask: no card for the text it already is
+    scanOnce(p);
+    assert.equal(policyHeld(p).filter((x) => x.status === 'held').length, 0);
+  } finally {
+    p.cleanup();
+  }
+});

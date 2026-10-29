@@ -130,7 +130,7 @@ import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from 
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
 import { asksToMerge, hasConflictMarkers, mergeText } from './lib/slotgit.mjs';
 import { lockNote, readEnv, retryOnLock, retryOnLockAsync } from './lib/gitlock.mjs';
-import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, shownDiff } from './lib/guard.mjs';
+import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, recordOwner, shownDiff } from './lib/guard.mjs';
 import { describeGitChange, diffGitState, folderName, readGitState, same as sameFolder, stateKey } from './lib/gitguard.mjs';
 import { describeSecretFile, findSecrets, isEnvFile, redactSecrets, secretValues } from './lib/secrets.mjs';
 import { describeChanges, isProtected, pathKey, protectedList, protectedOwned } from './lib/protect.mjs';
@@ -6275,23 +6275,91 @@ function closePolicy(x, why) {
     log(`security policy ${x.id}: couldn't close it: ${err.message}`);
   }
 }
-// The base branch's root SECURITY.md, when a scan is asked for: a regular file (mode 100644) of at most 64 KB (P6)
+// The base branch's root SECURITY.md: { buf } for a regular file (mode 100644) of at most 64 KB (P6), { none } when there
+// is none, else { problem }
+function baseSecurityFile() {
+  const ls = git(['ls-tree', '-z', `refs/heads/${CFG.base}`, '--', 'SECURITY.md'], { allowFail: true });
+  if (!ls.ok) return { problem: `couldn't read ${CFG.base}` };
+  if (!ls.out) return { none: true };
+  const m = /^(\d{6}) blob ([0-9a-f]{40,64})\tSECURITY\.md$/.exec(ls.out.replace(/\0$/, ''));
+  if (!m || m[1] !== '100644') return { problem: `SECURITY.md on ${CFG.base} isn't a regular file` };
+  const size = Number(git(['cat-file', '-s', m[2]], { allowFail: true }).out);
+  if (!(size <= POLICY_MAX)) return { problem: `SECURITY.md on ${CFG.base} is over ${POLICY_MAX / 1024} KB` };
+  const buf = gitBlob(m[2]);
+  return buf ? { buf } : { problem: `couldn't read SECURITY.md on ${CFG.base}` };
+}
+// The base branch's root SECURITY.md, when a scan is asked for (P6)
 function proposeSecurityFile() {
   try {
-    const ls = git(['ls-tree', '-z', `refs/heads/${CFG.base}`, '--', 'SECURITY.md'], { allowFail: true });
-    const m = /^(\d{6}) blob ([0-9a-f]{40,64})\tSECURITY\.md$/.exec(ls.out.replace(/\0$/, ''));
-    if (!ls.ok || !ls.out) return;
-    if (!m || m[1] !== '100644') return log(`security policy: SECURITY.md on ${CFG.base} isn't a regular file: no card`);
-    const size = Number(git(['cat-file', '-s', m[2]], { allowFail: true }).out);
-    if (!(size <= POLICY_MAX)) return log(`security policy: SECURITY.md on ${CFG.base} is over ${POLICY_MAX / 1024} KB: no card`);
-    const buf = gitBlob(m[2]);
-    if (!buf) return;
+    const f = baseSecurityFile();
+    if (f.none) return;
+    if (f.problem) return log(`security policy: ${f.problem}: no card`);
     const commit = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
-    const item = holdPolicy({ source: 'SECURITY.md', raw: buf.toString('utf8'), commit: /^[0-9a-f]{40}$/.test(commit) ? commit : '' });
+    const item = holdPolicy({ source: 'SECURITY.md', raw: f.buf.toString('utf8'), commit: /^[0-9a-f]{40}$/.test(commit) ? commit : '' });
     if (item) log(`security policy: SECURITY.md on ${CFG.base} waits for the owner (${item.id})`);
   } catch (err) {
     log(`security policy: couldn't read SECURITY.md: ${err.message}`);
   }
+}
+// ---------- the approved policy into the repository (1b-1) ----------
+// The Security page's "Add it to the repository as SECURITY.md": the approved text, read from its blob, written at the
+// project's root and committed on the base branch by the hub's own commit job with that one path, as the owner's change
+// (recordOwner, and git's form of it approved, as the update's commitAsOwner does): the guard holds nothing, and a push
+// carries it with no card of its own. Nothing is pushed. Refused: a policy that was cut, the main checkout on another
+// branch, a SECURITY.md with changes of its own, one that is a link (never written through), a tracked case twin
+// (security.md: on Windows one file), and in an agent's session (securityAct).
+const POLICY_COMMIT = 'SECURITY.md: the security policy the owner approved';
+function policyRepo() {
+  const pol = approvedPolicy(ROOT);
+  if (!pol) return null;
+  const rec = pol.guard ? guard().held.list().find((x) => x.id === pol.guard) : null;
+  let same = false;
+  let exists = false;
+  try {
+    const f = baseSecurityFile();
+    exists = !f.none;
+    same = !!f.buf && policyText(f.buf.toString('utf8'), activitySecrets()).hash === pol.hash;
+  } catch {
+    // unknown: the button shows, and its own checks decide
+  }
+  return { same, exists, cut: (rec?.cut || 0) > 0, missing: pol.text === null, base: CFG.base };
+}
+function commitPolicy(hash) {
+  const no = (message) => ({ ok: false, message: `Not added: ${message}.` });
+  const pol = approvedPolicy(ROOT);
+  if (!pol) return no('no policy is approved');
+  if (typeof hash !== 'string' || !/^[0-9a-f]{12,64}$/.test(hash) || !pol.hash.startsWith(hash)) return no('the approved policy changed since the page showed it: look again');
+  if (pol.text === null) return no("the approved policy's kept text no longer matches what was approved");
+  const repo = policyRepo();
+  if (repo.cut) return no('this policy was cut at 64 KB when it was made; a repository file would carry the cut (it stays the scans\' policy)');
+  if (repo.same) return { ok: true, message: `SECURITY.md on ${CFG.base} is this policy already.` };
+  const head = git(['symbolic-ref', '-q', 'HEAD'], { allowFail: true }).out;
+  if (head !== `refs/heads/${CFG.base}`) return no(`the main checkout is on ${head.replace(/^refs\/heads\//, '') || 'no branch'}, not ${CFG.base}`);
+  const twins = git(['ls-files', '-z', '--', ':(icase)security.md'], { allowFail: true }).out.split('\0').filter(Boolean);
+  if (twins.some((t) => t !== 'SECURITY.md')) return no(`${twins.filter((t) => t !== 'SECURITY.md').join(', ')} is tracked beside it: on Windows they are one file, and the commit would change the other name`);
+  const changed = git(['status', '--porcelain', '--', 'SECURITY.md'], { allowFail: true }).out;
+  if (changed) return no('SECURITY.md has changes of its own in the project: commit or undo them first');
+  const file = path.join(ROOT, 'SECURITY.md');
+  let st = null;
+  try {
+    st = fs.lstatSync(file);
+  } catch {
+    st = null;
+  }
+  if (st && !st.isFile()) return no("SECURITY.md in the project is a link (or not a file): nextlevel doesn't write through it");
+  // (a file of its own beside it, then one rename: a link put there in between is replaced, never followed)
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, pol.text, { flag: 'wx' });
+  fs.renameSync(tmp, file);
+  recordOwner(ROOT, ['SECURITY.md']);
+  const sha = git(['hash-object', '-w', '--path', 'SECURITY.md', '--', file], { allowFail: true }).out;
+  const blob = /^[0-9a-f]{40,64}$/.test(sha) ? gitBlob(sha) : null;
+  if (blob) guard().approveContent('SECURITY.md', contentHash({ buf: blob }));
+  log(`security policy: the owner added it to the repository as SECURITY.md (${pol.hash.slice(0, 12)})`);
+  if (!hubAlive()) return { ok: true, message: 'SECURITY.md is written in the project. The hub isn\'t running: commit it with your next change.' };
+  const id = `commit-${uniq()}`;
+  enqueue({ id, type: 'git', op: 'commit', message: POLICY_COMMIT, paths: ['SECURITY.md'], by: 'security-policy' });
+  return { ok: true, message: `SECURITY.md is written; the hub commits it on ${CFG.base} in a moment (${id}). Nothing is pushed: it goes out with your next push.`, job: id };
 }
 // After a scan that ended done: a draft from its threat model, when one may be made (P8)
 function proposeDraft(id) {
@@ -6374,7 +6442,8 @@ function securityAct(b) {
   if (action === 'draft') return requestDraft(ctx);
   // (Seen, on a piece of the Daybreak watch's news: the model stays as it is)
   if (action === 'daybreak-seen') return daybreakSeen(CFG.config, String(b.model || ''));
-  throw new Error('action must be scan, deep, stop, draft or daybreak-seen');
+  if (action === 'commit-policy') return commitPolicy(b.hash);
+  throw new Error('action must be scan, deep, stop, draft, daybreak-seen or commit-policy');
 }
 
 // The hub stops: a scan it runs is asked to stop (its container stopped, its partial output kept), and waited for a
@@ -8072,7 +8141,19 @@ function dashboardApi() {
     job: dashboardJob,
     activity: dashboardActivity,
     // the Security page and Home's buttons (src/security.mjs): its data, and the owner's scan, deep scan, stop, new draft
-    security: { view: () => { refreshConfig(); return securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) }); }, act: (b) => { refreshConfig(); return securityAct(b); } },
+    security: {
+      view: () => {
+        refreshConfig();
+        const page = securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) });
+        const w = watchOf(CFG.config);
+        // (1b-1: the approved policy against the base branch's SECURITY.md, and the Daybreak watch's answer)
+        return { ...page, policy: { ...page.policy, repo: policyRepo() }, daybreak: w ? watchWords(readWatchFile(w.file), w.role, { now: clockNow() }) : null };
+      },
+      act: (b) => {
+        refreshConfig();
+        return securityAct(b);
+      },
+    },
     usage: usageView, // Home's Usage card for a range, by a field, this project or all (the owner's: the page's key)
     startHub,
     stopHub,
