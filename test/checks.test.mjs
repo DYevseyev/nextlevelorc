@@ -514,6 +514,31 @@ test('codex.args: -c overrides make Codex run without its shared background serv
   assert.match(env.steps[0].text, /CODEX_ARGS in \.env/);
 });
 
+test('codex.daybreak: config.toml turning Daybreak on is said; a profile the pin can\'t name warns (security engineer 1b-1)', async () => {
+  const NEW = { ...CODEX, 'codex --version': 'codex-cli 0.164.0' };
+  const off = await check('codex.daybreak', { commands: NEW });
+  assert.equal(off.status, 'ok');
+  assert.equal(off.quiet, true);
+  const old = await check('codex.daybreak', { commands: CODEX, files: { '/home/me/.codex/config.toml': 'daybreak = true\n' } });
+  assert.equal(old.status, 'ok', 'Codex 0.152 has no Daybreak setting: no pin, nothing to say');
+  assert.match(old.detail, /older than 0\.163\.0/);
+  const top = await check('codex.daybreak', { commands: NEW, files: { '/home/me/.codex/config.toml': 'model = "gpt-6-sol"\ndaybreak = true # mine\n[mcp_servers.x]\ncommand = "x"\n' } });
+  assert.equal(top.status, 'fail');
+  assert.equal(top.severity, 'info');
+  assert.match(top.detail, /^\/home\/me\/\.codex\/config\.toml turns Daybreak on for every Codex run: nextlevel's Codex roles run with it off \(-c daybreak=false\)/);
+  const inProfile = await check('codex.daybreak', { commands: NEW, files: { '/home/me/.codex/config.toml': 'profile = "sec"\n[profiles.sec]\ndaybreak = true\n' } });
+  assert.equal(inProfile.severity, 'info', 'on in the profile config.toml picks');
+  assert.equal(inProfile.status, 'fail');
+  const otherProfile = await check('codex.daybreak', { commands: NEW, files: { '/home/me/.codex/config.toml': 'profile = "work"\n[profiles.sec]\ndaybreak = true\n' } });
+  assert.equal(otherProfile.status, 'ok', 'on only in a profile nothing picks');
+  const odd = await check('codex.daybreak', { commands: NEW, config: { engines: { codex: { args: ['--sandbox', 'workspace-write', '--profile', 'my work'] } } } });
+  assert.equal(odd.status, 'fail');
+  assert.equal(odd.severity, 'warn');
+  assert.match(odd.detail, /picks the Codex profile "my work", whose name the pin can't name: its own daybreak setting may win, so that run may use Daybreak \(scans are unaffected\)/);
+  const oddInFile = await check('codex.daybreak', { commands: NEW, files: { '/home/me/.codex/config.toml': 'profile = "a.b"\n' } });
+  assert.equal(oddInFile.severity, 'warn');
+});
+
 test('codex.hooks: hooks whose command can\'t run, from hooks.json, config.toml and plugins (FR-004 #4)', async () => {
   assert.deepEqual(shellWords(`node "C:\\hooks\\a b.js" --x 'y z'`), ['node', 'C:\\hooks\\a b.js', '--x', 'y z']);
   assert.deepEqual(hooksFromJson({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'a' }, { type: 'prompt', prompt: 'x' }] }], Stop: [{ hooks: [{ type: 'command', command: 'b', commandWindows: 'b.cmd' }] }] } }), [

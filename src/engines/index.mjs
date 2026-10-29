@@ -58,6 +58,9 @@
 //                       stopped when it ended), last (its last lines, about 20) }; not redacted
 //   workerEnv({ timeoutMin, platform })  optional: variables a worker's session gets on top (Claude Code's, FR-020;
 //                       Codex's PowerShell policy on Windows, FR-009)
+//   standardPin({ version, args, home, account, env, read, path })  optional (Codex): the arguments that keep OpenAI's
+//                       Daybreak off a run, for the engine's version and the profile the run picks (security engineer
+//                       1b-1), or []
 //   secretStrings({ home, read, path })  optional: strings of its own settings to redact from what it prints (agy: every
 //                       string in the args, env and headers of the owner's MCP servers)
 //   notes               { plan, orchestrator, worker, guide }: what choosing it for a role means, in plain words
@@ -65,6 +68,8 @@
 //
 // A profile is an engine plus the account it's signed into plus a model: { name, engine, account, model }
 // (lib/config.mjs resolves roles to profiles). account '' is the engine's own login, in its usual folder.
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import agy from './agy.mjs';
 import { accountDir } from './util.mjs';
@@ -113,13 +118,36 @@ export function profileEnv(base, profile, { home, path: p = path } = {}) {
 // cycle) or 'interactive' (the owner's window: the orchestrator, the setup guide). `args` are
 // engines.<name>.args, a worker's its own (lib/config.mjs workerArgsOf). An engine that doesn't read AGENTS.md by itself is told to in the prompt. `isolation`: a
 // worker's workerIsolation (FR-013), whose arguments come on top and which may mean it no longer reads AGENTS.md.
-export function sessionArgs(profile, { mode, role, prompt, timeoutMin = 60, args = [], isolation = null, extra = [] }) {
+export function sessionArgs(profile, { mode, role, prompt, timeoutMin = 60, args = [], isolation = null, extra = [], version = '' }) {
   const e = engine(profile.engine);
   const reads = isolation ? isolation.readsAgentsMd : e.readsAgentsMd;
   const text = reads ? prompt : `Read AGENTS.md first: it has the team's roles and rules. ${prompt}`;
   const build = mode === 'headless' ? e.headless : e.interactive;
-  return build({ prompt: text, model: profile.model || '', effort: profile.effort || '', args, timeoutMin, role, extra: [...(isolation?.args || []), ...extra] });
+  return build({ prompt: text, model: profile.model || '', effort: profile.effort || '', args, timeoutMin, role, extra: [...(isolation?.args || []), ...extra, ...standardPin(profile, { version, args: [...args, ...extra] })] });
 }
+
+// What keeps OpenAI's Daybreak off a session (security engineer 1b-1: Codex's `-c daybreak=false`, on a Codex that has
+// the key), from the engine's version (`version`: what `<engine> --version` printed): [] for an engine without such a
+// setting. Every session nextlevel starts gets it, last among its overrides: through sessionArgs, and the assistant's and
+// the model check's own command lines. The security engineer's scans never run the host's engine.
+// `args`: the run's own arguments (a profile they pick); `home`, `env`, `read`: where the account's settings are (this
+// PC's by default).
+export function standardPin(profile, { version = '', args = [], home = os.homedir(), env = process.env, read = readOr } = {}) {
+  const e = ADAPTERS[profile?.engine];
+  if (!e?.standardPin) return [];
+  try {
+    return e.standardPin({ version, args, home, account: profile.account || '', env, read, path });
+  } catch {
+    return e.standardPin({ version, args: [] });
+  }
+}
+const readOr = (file) => {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+};
 
 // What a session in a window of its own gets on top (windowArgs: Codex's --no-daemon, FR-011), asked of the installed
 // CLI (`run(cmd, args)` -> { ok, out }); none for an engine without them, or one whose CLI doesn't say.

@@ -20,7 +20,7 @@
 //   and `model_reasoning_effort` in its config.toml (what /model inside Codex saves; an effort left at the
 //   model's default is removed), else the account's default model and the model's default effort, from
 //   models_cache.json. `codex debug models` prints the account's models as JSON ({"models":[...]}).
-import { firstLine, tomlTop } from '../checks/lib.mjs';
+import { firstLine, parseVersion, tomlTop, versionAtLeast } from '../checks/lib.mjs';
 import { codexTokens } from '../lib/overview.mjs';
 import { accountDir, commandEvent, commandOutcome, count, inFolder, jsonLine, lastLines, oneLine, readJsonText } from './util.mjs';
 
@@ -357,6 +357,64 @@ export function codexAddons({ home, account = '', env = {}, read, list = () => [
   }
   return { mcpServers, plugins, hooks, skills, rules: [], files: { config: file, dir } };
 }
+// ---------- the standard pin (security engineer 1b-1) ----------
+// Every Codex run nextlevel starts but the security engineer's scans (the scanner's own Codex, in its container) gets
+// `-c daybreak=false`, last among its overrides (Codex takes the last one for a key): work that isn't defensive security
+// keeps OpenAI's usual safeguards, and a model Daybreak doesn't cover doesn't fail at once ("Daybreak is unavailable for
+// model ...", Codex 0.164). On Codex 0.163 or newer only, where the key exists (`version`: what `codex --version` says);
+// below it, or when the version can't be read, none. Whatever config.toml says: Daybreak can be on in ways nextlevel
+// can't read (a profile picked in the owner's arguments, a -c there, Codex's managed config, a /daybreak saved later).
+export const STANDARD_PIN = ['-c', 'daybreak=false'];
+export const PIN_FROM = '0.163.0';
+// A Codex profile's own fields win over the root's, where a -c lands: when the run picks one (its own arguments' --profile
+// or -p, which win, else config.toml's top-level `profile`), it gets `-c profiles.<name>.daybreak=false` after the root
+// pin too, for a name that is a plain TOML key (any other: the doctor's codex.daybreak warns). `read(file)`: the
+// account's config.toml, read for that one key.
+export function codexStandardPin({ version = '', args = [], read = () => '', home = '', account = '', env = {}, path: p } = {}) {
+  if (!parseVersion(version) || !versionAtLeast(version, PIN_FROM)) return [];
+  const name = codexProfileOf(args, () => (p && home ? read(p.join(codexHome({ home, account, env, path: p }), 'config.toml')) || '' : ''));
+  return [...STANDARD_PIN, ...(name && TOML_KEY.test(name) ? ['-c', `profiles.${name}.daybreak=false`] : [])];
+}
+// The Codex profile a run picks: the last --profile, -p, --profile=, or -c profile= in its arguments, else config.toml's
+// top-level `profile` (`configText()`, read only when the arguments pick none); '' for none
+export function codexProfileOf(args = [], configText = () => '') {
+  let name = '';
+  for (let i = 0; i < args.length; i++) {
+    const a = String(args[i]);
+    if ((a === '--profile' || a === '-p') && i + 1 < args.length) name = String(args[++i]);
+    else if (a.startsWith('--profile=')) name = a.slice(10);
+    else if ((a === '-c' || a === '--config') && i + 1 < args.length) {
+      const m = String(args[i + 1]).match(/^\s*profile\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/);
+      if (m) name = m[1] ?? m[2] ?? m[3];
+      i++;
+    }
+  }
+  return name || tomlTop(configText(), 'profile') || '';
+}
+// Whether a config.toml turns Daybreak on for every run (the doctor's codex.daybreak only): `daybreak = true` at its top
+// level, or in the [profiles.<name>] table its top-level `profile` names
+export function codexDaybreakOn(text) {
+  let table = null;
+  let top = false;
+  let profile = '';
+  const inProfile = {};
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const head = line.match(/^\[([^\]]*)\]\s*(?:#.*)?$/);
+    if (head) {
+      const m = head[1].trim().match(/^profiles\.(.+)$/);
+      table = m ? `profiles:${tableName(m[1]) || ''}` : 'other';
+      continue;
+    }
+    const on = /^daybreak\s*=\s*true\s*(?:#.*)?$/.test(line);
+    if (table === null) {
+      if (on) top = true;
+      const p = line.match(/^profile\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+      if (p) profile = p[1] ?? p[2];
+    } else if (on && table.startsWith('profiles:')) inProfile[table.slice(9)] = true;
+  }
+  return top || (!!profile && inProfile[profile] === true);
+}
 const TOML_KEY = /^[A-Za-z0-9_-]+$/;
 function codexWorker(keep = {}, found = {}) {
   const mcp = keep.mcpServers || [];
@@ -414,6 +472,7 @@ export default {
 
   needsRealConsole: () => false,
   addons: codexAddons, // the owner's own add-ons, and what keeps them out of a worker (FR-013)
+  standardPin: codexStandardPin, // Daybreak off for every run but the scans', on Codex 0.163 or newer (1b-1)
   workerAddons: codexWorker,
   account: {
     env: 'CODEX_HOME',

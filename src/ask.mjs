@@ -26,13 +26,13 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ADDON_KINDS, engine, engineTitle, profileEnv, workerIsolation } from './engines/index.mjs';
+import { ADDON_KINDS, engine, engineTitle, profileEnv, standardPin, workerIsolation } from './engines/index.mjs';
 import { jsonLine } from './engines/util.mjs';
 import { LIGHT_MODELS, notReadOnly, roleProfile } from './lib/config.mjs';
 import { chatStore, CHAT_ID_RE, LIMITS, titleOf } from './lib/chats.mjs';
 import { commandArgs } from './lib/commands.mjs';
 import { conversation, eventWords, noteGroups } from './lib/cards.mjs';
-import { resolveBin, runQuiet, spawnBin } from './lib/proc.mjs';
+import { engineVersion, resolveBin, runQuiet, spawnBin } from './lib/proc.mjs';
 import { redactReport } from './report.mjs';
 import { agyFailure, agyResult } from './engines/agy.mjs';
 import { QUESTION_FILE, agyAssistantRun, makeAskCopy, projectChanges, projectRelative, projectSnapshot, removeAskCopy } from './lib/askcopy.mjs';
@@ -431,7 +431,10 @@ async function askEngine(ctx, prompt, mode = 'advise') {
   // server writes a live site). Claude Code's readOnly has --strict-mcp-config already, and keeps its
   // `--setting-sources user` (the repository's settings stay out); agy answers as nextlevel-assistant (askAgy).
   const iso = profile.engine === 'codex' ? workerIsolation(profile, ADDON_KINDS, addonFilesOf(ctx)) : { args: [] };
-  const args = eng.readOnly({ model: profile.model || '', effort: profile.effort || '', extra: iso.args });
+  // (and Daybreak off, last among its overrides, as for every Codex run nextlevel starts: security engineer 1b-1)
+  const files = addonFilesOf(ctx);
+  const pin = profile.engine === 'codex' ? standardPin(profile, { version: engineVersion('codex', { cwd: ctx.root, env }), home: files.home, env: files.env, read: (f) => files.read(f) || '' }) : [];
+  const args = eng.readOnly({ model: profile.model || '', effort: profile.effort || '', extra: [...iso.args, ...pin] });
   const out = await new Promise((resolve) => {
     let text = '';
     const child = spawnBin(bin, args, { cwd: ctx.root, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });

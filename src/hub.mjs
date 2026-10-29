@@ -90,7 +90,7 @@ import { CONFIG_FILE, ENGINES, SECOND, SECOND_TAKES, describeProfile, effortFor,
 import { INSTALL_COMMAND, binDir } from './lib/install.mjs';
 import { channelOf, runningVersion, versionFor } from './lib/versions.mjs';
 import { FORMAT, formatProblem, writeFormat } from './lib/format.mjs';
-import { openWindow as openWindowAt, resolveBin, runQuiet, runQuietAsync, spawnBin, spawnDirect, windowTitle } from './lib/proc.mjs';
+import { engineVersion, openWindow as openWindowAt, resolveBin, runQuiet, runQuietAsync, spawnBin, spawnDirect, windowTitle } from './lib/proc.mjs';
 import { cachedFacts, checksView, factsComplete, repoFacts } from './lib/ghrepo.mjs';
 import { listProcesses, listWaitMs, processName, processStartSync, processTree, stopProcesses } from './lib/proctree.mjs';
 import { missingFiles, programFiles } from './lib/toolfiles.mjs';
@@ -3238,11 +3238,16 @@ function orchestratorSession(profile, { mode, prompt, timeoutMin = CYCLE_MIN }) 
   }
   const env = { ...withProfile(childEnv(), profile), NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_SESSION: mode === 'headless' ? 'autopilot' : 'interactive' };
   delete env.NEXTLEVEL_CYCLE_LOG;
-  if (mode === 'headless') return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, timeoutMin, args: CFG.args(profile.engine) }), env };
+  // (its engine's version: Codex's Daybreak pin, security engineer 1b-1)
+  const version = pinVersion(profile, env);
+  if (mode === 'headless') return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, timeoutMin, args: CFG.args(profile.engine), version }), env };
   // (on top, what keeps the commands it runs from opening windows of their own: Codex's --no-daemon, FR-011)
   const extra = windowArgs(profile, (cmd, a) => runQuiet(cmd, a, { cwd: ROOT, env }));
-  return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, args: CFG.args(profile.engine), extra }), env };
+  return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, args: CFG.args(profile.engine), extra, version }), env };
 }
+// The version of a profile's engine, where its session's arguments depend on it (Codex's Daybreak pin from 0.163,
+// security engineer 1b-1): '' for the others
+const pinVersion = (profile, env) => (profile.engine === 'codex' ? engineVersion('codex', { cwd: ROOT, env }) : '');
 // nextlevel's agent files in the main checkout (.agents/ is protected): written only where no link is on the way, kept out
 // of commits by .git/info/exclude (never the project's .gitignore), and recorded as the hub's own write for the guard
 function writeRoleFiles(files) {
@@ -6807,7 +6812,7 @@ async function cmdRunTask(id) {
   // (agy's version says whether its agent lists its tools, FR-022: after 1.3.2 an agent without the list gets none that write)
   // (the hub's, as it tried it before the task: job.resolved.version; else asked here)
   const kept = typeof job.resolved?.version === 'string' && job.resolved.version ? job.resolved.version : '';
-  const version = kept || (profile.engine === 'agy' && bin ? runQuiet(eng.command, ['--version'], { cwd: slot, env: { ...process.env, ...(eng.headlessEnv || {}) } }).out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' : '');
+  const version = kept || (profile.engine === 'agy' && bin ? runQuiet(eng.command, ['--version'], { cwd: slot, env: { ...process.env, ...(eng.headlessEnv || {}) } }).out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' : profile.engine === 'codex' && bin ? pinVersion(profile, process.env) : '');
   if (version) out.line(`${eng.title} ${version}`);
   let spec;
   try {
@@ -7050,7 +7055,7 @@ async function cmdGuideProcess(argv = []) {
   if (IS_WIN) process.title = `${NAME} setup guide (${eng.title})`;
   const env = withProfile(childEnv(), profile);
   const extra = windowArgs(profile, (cmd, a) => runQuiet(cmd, a, { cwd: ROOT, env })); // (FR-011, as the orchestrator's)
-  const args = sessionArgs(profile, { mode: 'interactive', role: 'guide', prompt: PROMPTS.guide, args: CFG.args(profile.engine), extra });
+  const args = sessionArgs(profile, { mode: 'interactive', role: 'guide', prompt: PROMPTS.guide, args: CFG.args(profile.engine), extra, version: pinVersion(profile, env) });
   writeJson(GUIDEFILE, { pid: process.pid, startedAt: now(), engine: profile.engine, profile: profile.name || '' });
   try {
     await interactiveSession('guide', profile, args, env);

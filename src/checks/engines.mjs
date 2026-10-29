@@ -7,9 +7,9 @@ import { clockIso, clockNow } from '../lib/clock.mjs';
 import { parseEnvText } from '../lib/envfile.mjs';
 import { redactReport, reportSecrets } from '../lib/redact.mjs';
 import { KEY_LIMIT, KEY_PROMPT, runKey, workerRun } from '../lib/workerspec.mjs';
-import { SANDBOX_BLOCKS, codexMcpServers as mcpServers } from '../engines/codex.mjs';
+import { PIN_FROM, SANDBOX_BLOCKS, codexDaybreakOn, codexMcpServers as mcpServers, codexProfileOf } from '../engines/codex.mjs';
 import { accessFacts } from './argon.mjs';
-import { ADAPTERS, accountDir, accountProblem, fullAccessNote, profileEnv, readJsonText, withoutOption, workerCaveat, workerIsolation } from '../engines/index.mjs';
+import { ADAPTERS, accountDir, accountProblem, fullAccessNote, profileEnv, readJsonText, standardPin, withoutOption, workerCaveat, workerIsolation } from '../engines/index.mjs';
 import { formatConfig, roleProfile, workerArgsOf } from '../lib/config.mjs';
 import { advisorIndependent } from '../lib/team.mjs';
 import { RUN_CACHE_MS } from '../lib/proc.mjs';
@@ -140,10 +140,12 @@ export const codexModelCheck = {
     const seen = ctx.cache.get('codex.model') || {};
     for (const t of targets) {
       const run = forAccount(ctx, t.p);
-      const id = `${t.model || `own:${t.own || ''}`} | ${t.p.account} | ${version} | ${firstLine(ctx.run('codex', ['login', 'status'], { cacheMs: RUN_CACHE_MS, ...run }).out)}`;
+      // (Daybreak off, as for every Codex run nextlevel starts: security engineer 1b-1)
+      const pin = standardPin(t.p, { version, home: ctx.home, env: ctx.env, read: (f) => ctx.read(f) || '' });
+      const id = `${t.model || `own:${t.own || ''}`} | ${t.p.account} | ${version} | ${firstLine(ctx.run('codex', ['login', 'status'], { cacheMs: RUN_CACHE_MS, ...run }).out)}${pin.length ? ` | ${pin.join(' ')}` : ''}`;
       let v = seen[id];
       if (!v) {
-        const r = ctx.run('codex', ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', ...(t.model ? ['-m', t.model] : []), MODEL_PROBE], {
+        const r = ctx.run('codex', ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', ...(t.model ? ['-m', t.model] : []), ...pin, MODEL_PROBE], {
           timeoutMs: 120_000,
           cwd: ctx.tmpDir || os.tmpdir(), // not the project: its AGENTS.md is for real sessions
           ...run,
@@ -296,6 +298,43 @@ export const codexChecks = [
         return fail(`sandbox is ${mode || 'not set (codex exec is read-only then)'}: the orchestrator can't write plans and task files`, { severity: 'warn', steps: how });
       }
       return pass('workspace-write (the project only)');
+    },
+  },
+  {
+    // Security engineer 1b-1: every Codex run nextlevel starts gets Daybreak off (standardPin, on Codex 0.163 or newer);
+    // only the security engineer's scans, in the scanner's own Codex, use it. This row says when the owner's config.toml
+    // turns it on for every run, and warns when a run picks a Codex profile whose name the pin can't reach.
+    id: 'codex.daybreak',
+    title: 'Daybreak for the other Codex roles',
+    severity: 'info',
+    skipIf: (ctx) => !ctx.uses('codex') && 'no role uses Codex',
+    requires: ['tool.codex'],
+    learnMore: 'docs/CHECKS.md#codexdaybreak',
+    run(ctx) {
+      const version = firstLine(ctx.run('codex', ['--version']).out);
+      if (!standardPin({ engine: 'codex' }, { version }).length) return pass(`no pin: Codex ${version || '(its version unknown)'} is older than ${PIN_FROM}, which has no Daybreak setting`, { quiet: true });
+      const said = [];
+      for (const p of accounts(ctx, 'codex')) {
+        const file = ctx.path.join(codexHome(ctx, p.account), 'config.toml');
+        const text = ctx.read(file) || '';
+        const acc = p.account ? ` (${accountLabel(p)})` : '';
+        // the profile a run picks: the arguments of every role on this account, else config.toml's
+        const argLists = [ctx.config.engines.codex.args || [], ...(ctx.config.engines.codex.workerArgs ? [ctx.config.engines.codex.workerArgs] : [])];
+        for (const args of argLists) {
+          const name = codexProfileOf(args, () => text);
+          if (name && !/^[A-Za-z0-9_-]+$/.test(name)) {
+            return fail(`a run picks the Codex profile "${name}"${acc}, whose name the pin can't name: its own daybreak setting may win, so that run may use Daybreak (scans are unaffected)`, {
+              severity: 'warn',
+              next: 'rename the profile in config.toml to letters, digits, - and _ only, and pick it by that name',
+            });
+          }
+        }
+        if (codexDaybreakOn(text)) said.push(`${file}${acc}`);
+      }
+      if (!said.length) return pass('off for every Codex run but the scans (-c daybreak=false)', { quiet: true });
+      return fail(`${said.join(', ')} turns Daybreak on for every Codex run: nextlevel's Codex roles run with it off (-c daybreak=false), so their work keeps OpenAI's usual safeguards; only the security engineer's scans use Daybreak`, {
+        next: 'nothing to do; to have it off in your own Codex sessions too, take daybreak = true out of that file',
+      });
     },
   },
   {
