@@ -20,7 +20,7 @@ import { resolveBin, runQuiet, spawnDirect } from './lib/proc.mjs';
 import { processStartSync } from './lib/proctree.mjs';
 import { DIGEST, REVISION, SECCOMP_FILE, VERSION, imageRef, seccompProblem } from './lib/securityimage.mjs';
 import { apiPortOpen, apiPortWords, copyOut, daybreakFor, accessPrograms, dockerFacts, dockerSettingsText, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
-import { newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
+import { holderWords, newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
 import { FROM, POLICY_FILE_NAME, POLICY_MAX, readPolicyState, threatModelOf } from './lib/securitypolicy.mjs';
 import { LABEL_KIND, LABEL_PROJECT, POLICY_FILE, ROLE_FILE, accountKey, containerName, loginArgs, memoryLimit, scanRunArgs, volumes } from './lib/securityspec.mjs';
 import { fileURLToPath } from 'node:url';
@@ -120,18 +120,20 @@ async function login(a, { root, config, envKeys }) {
     return 1;
   }
   const vols = volumes({ projectKey: projectKey(root), account: accountKey(p.name) });
-  const made = ensureVolume(docker, vols.state, { kind: 'state', projectKey: projectKey(root) }) || ensureVolume(docker, vols.login, { kind: 'login' });
-  const own = made ? { problem: made } : ownVolumes(docker, vols, { seccomp: SECCOMP_FILE });
-  if (own.problem) {
-    console.error(`Can't sign in: ${own.problem}`);
-    return 1;
-  }
-  // (one at a time with the scans: a scan and a sign-in never write the login volume together)
+  // (one at a time with the scans, the setup checks and the Daybreak watch: nothing else mounts the sign-in volume while
+  // it is written, its owner's helper included)
   const home = os.homedir();
   const me = { root, pid: process.pid, start: processStartSync(process.pid), scan: 'login' };
   const lease = takeLease(home, me);
   if (!lease.ok) {
-    console.error(`Can't sign in now: a security scan runs${lease.holder?.root ? ` (in ${path.basename(lease.holder.root)})` : ''}. Sign in when it ends (nextlevel security status).`);
+    console.error(`Can't sign in now: ${holderWords(lease.holder)} is using the scanner's sign-in. Sign in when it ends (nextlevel security status).`);
+    return 1;
+  }
+  const made = ensureVolume(docker, vols.state, { kind: 'state', projectKey: projectKey(root) }) || ensureVolume(docker, vols.login, { kind: 'login' });
+  const own = made ? { problem: made } : ownVolumes(docker, vols, { seccomp: SECCOMP_FILE });
+  if (own.problem) {
+    releaseLease(home, me);
+    console.error(`Can't sign in: ${own.problem}`);
     return 1;
   }
   try {

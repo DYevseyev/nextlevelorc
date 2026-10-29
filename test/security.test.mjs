@@ -458,8 +458,19 @@ test("who may scan: the owner's commands refuse in an agent's session, status is
     fs.writeFileSync(lease, JSON.stringify({ root: '/elsewhere/other-project', pid: process.pid, start: processStartSync(process.pid), scan: 'sec-20261027-070000-beef' }));
     const busy = p.hub(['security', 'login']);
     assert.equal(busy.code, 1);
-    assert.match(busy.out, /Can't sign in now: a security scan runs \(in other-project\)/);
+    assert.match(busy.out, /Can't sign in now: a security scan \(sec-20261027-070000-beef, in other-project\) is using the scanner's sign-in/);
     assert.ok(!seenRuns(p).slice(runsBefore).some((r) => r.args.includes('login')), 'no sign-in container');
+    // ...and so do the checks that mount it, and so a change of the role (1b-1, B4): nothing saved, nothing run
+    const doctor = JSON.parse(p.hub(['doctor', '--json']).out);
+    const row = (doctor.results || doctor).find((r) => r.id === 'security.login');
+    assert.deepEqual([row.status, row.severity], ['fail', 'info'], JSON.stringify(row));
+    assert.match(row.detail, /a security scan \(sec-20261027-070000-beef, in other-project\) is using the scanner's sign-in now: checked again after it/);
+    const before = p.config();
+    const change = JSON.parse(p.hub(['team', 'set', 'security', '--engine', 'codex', '--model', 'gpt-6-luna', '--json']).out);
+    assert.equal(change.saved, false, change.message);
+    assert.match(change.message, /^Not saved: .*is using the scanner's sign-in now/);
+    assert.deepEqual(p.config(), before);
+    assert.ok(!seenRuns(p).slice(runsBefore).some((r) => /^(run|create)$/.test(r.args[0]) && r.args.some((a) => /nextlevel-sec-login-/.test(a))), 'no container mounted the sign-in');
     fs.rmSync(lease);
     assert.equal(p.hub(['security', 'login']).code, 0);
     assert.ok(!fs.existsSync(lease), 'the sign-in gives the lease back');

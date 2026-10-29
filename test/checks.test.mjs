@@ -2133,6 +2133,14 @@ test("security.probe and security.daybreak: Codex's sandbox inside the scanner, 
   const standard = await check('security.daybreak', { config: { roles: { security: { engine: 'codex', model: 'gpt-6-astra', daybreak: false } } }, commands: { 'docker *': fakeDocker() } });
   assert.deepEqual([standard.status, standard.severity], ['fail', 'info']);
   assert.match(standard.detail, /^standard safeguards on gpt-6-astra: OpenAI's cyber screening may block parts of a scan/);
+  // 1b-1 (B4): while a scan, a sign-in or the Daybreak watch holds the PC's lease, the checks that mount the sign-in
+  // volume (or the state volume it sits in) say so as information and run no docker command
+  for (const id of ['security.login', 'security.daybreak', 'security.probe']) {
+    const held = await check(id, { config: SEC_ON, commands: { 'docker *': fakeDocker() }, leaseBusy: 'a security scan (sec-20261029-120000-abcd)' });
+    assert.deepEqual([held.status, held.severity, held.busy], ['fail', 'info', true], id);
+    assert.equal(held.detail, "a security scan (sec-20261029-120000-abcd) is using the scanner's sign-in now: checked again after it");
+    assert.ok(!held.ctx.calls.some((c) => /^docker (run|create)\b/.test(c)), `${id}: no container: ${held.ctx.calls.join(' | ')}`);
+  }
 });
 
 // The tester's checks (src/checks/tester.mjs): skipped while it is off; the personas the plans need, the secret store,

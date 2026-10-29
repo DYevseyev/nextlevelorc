@@ -18,6 +18,10 @@ const TCP_STEP = 'Docker Desktop: Settings, General: turn off "Expose daemon on 
 const accountOf = (ctx) => accountKey(securityProfile(ctx.config)?.name || '');
 export const securityVolumes = (ctx) => volumes({ projectKey: projectKey(ctx.root), account: accountOf(ctx) });
 
+// A check that mounts the sign-in volume while a scan, a sign-in or the Daybreak watch holds the PC's lease: information,
+// with no docker run, and asked again next time (team set refuses to save on it: src/team.mjs)
+const busy = (who) => fail(`${who} is using the scanner's sign-in now: checked again after it`, { severity: 'info', busy: true });
+
 export const PROBES = 'security.probes'; // check-cache.json: { [image digest]: { ok, problem, answer, at } }
 
 export const securityDockerCheck = {
@@ -66,7 +70,8 @@ export const securityLoginCheck = {
   skipIf: off,
   requires: ['security.image'],
   run(ctx) {
-    const s = signedIn(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE });
+    const s = ctx.signInLease(() => signedIn(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE }));
+    if (s.busy) return busy(s.busy);
     if (s.ok) return pass('signed in, in its own Docker volume (OpenAI\'s device sign-in; nextlevel never reads it)');
     return fail(`${s.why}: the scanner signs in once with your ChatGPT account, on OpenAI's own page`, {
       next: 'sign in',
@@ -84,7 +89,13 @@ export const securityProbeCheck = {
   requires: ['security.image'],
   run(ctx) {
     const kept = ctx.cache.get(PROBES)?.[DIGEST];
-    const v = kept && !ctx.fresh ? kept : { ...runProbes(docker(ctx), { seccomp: SECCOMP_FILE, account: accountOf(ctx), stateVolume: securityVolumes(ctx).state }), at: new Date().toISOString() };
+    let v = kept && !ctx.fresh ? kept : null;
+    if (!v) {
+      // (the state volume, where the sign-in's folder is mounted: under the lease too)
+      const r = ctx.signInLease(() => runProbes(docker(ctx), { seccomp: SECCOMP_FILE, account: accountOf(ctx), stateVolume: securityVolumes(ctx).state }));
+      if (r.busy) return busy(r.busy);
+      v = { ...r, at: new Date().toISOString() };
+    }
     if (v !== kept && v.kept) ctx.cache.set(PROBES, { ...(ctx.cache.get(PROBES) || {}), [DIGEST]: v });
     if (v.ok) return pass(`inside the scanner, Codex's sandbox hides the sign-in and closes the network (${(v.answer || []).join(', ')})`);
     return fail(`${v.problem}: no scan runs with this scanner`, { next: "tell nextlevel's developers", steps: [inProject(ctx, 'nextlevel report security.probe')] });
@@ -102,7 +113,8 @@ export const securityDaybreakCheck = {
   requires: ['security.login'],
   run(ctx) {
     const p = securityProfile(ctx.config);
-    const r = accessPrograms(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE });
+    const r = ctx.signInLease(() => accessPrograms(docker(ctx), securityVolumes(ctx), { seccomp: SECCOMP_FILE }));
+    if (r.busy) return busy(r.busy);
     if (!r.ok) return fail(`the scanner's Codex couldn't list its models (${r.why})`, { severity: 'warn' });
     if (!p.daybreak) {
       const model = p.model || r.models[0].id;
