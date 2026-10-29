@@ -208,7 +208,8 @@ export function approvedPolicy(root) {
   const a = readPolicy(root).approved;
   if (!a) return null;
   const buf = guardStore({ root }).getBlob(a.hash);
-  return buf ? { ...a, text: buf.toString('utf8') } : { ...a, text: null };
+  // (getBlob checks the hash too; said here again: the page never shows a changed blob as the approved policy, F1)
+  return buf && sha256(buf) === a.hash ? { ...a, text: buf.toString('utf8') } : { ...a, text: null };
 }
 // The owner's "Ask for a new draft" (the dashboard's): the next trusted scan drafts one. -> { ok, message }
 export function requestDraft({ root, config }) {

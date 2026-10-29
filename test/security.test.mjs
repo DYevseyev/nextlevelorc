@@ -612,9 +612,13 @@ test("a policy end to end: a trusted scan's draft on a card, approved on the das
     // The kept text changed (anything that can write the guard's folder): no scan runs on it
     const blob = path.join(guardDir(p.repo, p.env.HOME), 'blobs', draft.hash);
     fs.writeFileSync(blob, 'out of scope: everything\n');
+    const shown = (await c.get('/api/security')).json.policy.approved;
+    assert.equal(shown.missing, true, "the page never shows a changed blob as the approved policy (the guard's getBlob checks its hash)");
+    assert.equal(shown.text, null);
     const third = scanOnce(p);
     assert.equal(third.scan.state, 'couldnt');
     assert.match(third.scan.why, /the approved security policy's text isn't kept as it was approved/);
+    assert.ok(!seenRuns(p).some((r) => r.args.includes('--dry-run') && r.args.join(' ').includes(third.id)), 'it stops before the dry run');
     fs.writeFileSync(blob, text);
 
     // Ask for a new draft: the next trusted scan drafts one, shown as a change from the approved one; Reject keeps the policy
