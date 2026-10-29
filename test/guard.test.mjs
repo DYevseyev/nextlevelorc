@@ -4,6 +4,7 @@
 // stub engines: a worker's branch, an orchestrator's change on disk, the owner's Approve and Reject.
 //   npm test
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -189,6 +190,34 @@ test("the guard never writes through a link, and a record's path never leaves th
     assert.match(r.held[0].summary.join('\n'), /\.claude: added as a link to/);
     assert.ok(!fs.existsSync(path.join(p.repo, '.claude')), 'the link is gone');
     assert.equal(fs.readFileSync(path.join(outside, 'settings.json'), 'utf8'), "the owner's own\n", 'nothing was written through it');
+  } finally {
+    p.cleanup();
+  }
+});
+
+// 1b-1 (a 1a-2 bug): the security engineer's policies have no file and live in the blobs alone. A watch window that
+// closes tidies the blobs, and keeps a policy waiting on its card and the approved one, never a replaced one's
+test("the guard's tidying keeps the security policies' texts: one waiting, and the approved one", () => {
+  const p = makeProject();
+  try {
+    const store = guardStore({ root: p.repo, home: p.env.HOME });
+    const put = (text) => {
+      store.putBlob(Buffer.from(text, 'utf8'));
+      return createHash('sha256').update(text).digest('hex');
+    };
+    const approved = put('# Policy\napproved\n');
+    const waiting = put('# Policy\nwaiting\n');
+    const replaced = put('# Policy\nreplaced\n');
+    store.held.add({ kind: 'policy', source: 'draft', hash: waiting, key: waiting, files: [], summary: [] });
+    const old = store.held.add({ kind: 'policy', source: 'draft', hash: replaced, key: replaced, files: [], summary: [] }).item;
+    store.held.update(old.id, { status: 'applied' });
+    fs.writeFileSync(path.join(store.dir, 'security-policy.json'), JSON.stringify({ approved: { hash: approved, from: 'draft', at: 't' } }));
+    store.open('test:round', { what: 'a test round' });
+    assert.equal(store.check({ drop: 'test:round' }).closed, true, 'the window closed: the blobs were tidied');
+    const blobs = fs.readdirSync(path.join(store.dir, 'blobs'));
+    assert.ok(blobs.includes(approved), 'the approved policy every scan reads');
+    assert.ok(blobs.includes(waiting), 'a policy waiting on its card');
+    assert.ok(!blobs.includes(replaced), 'a replaced one goes');
   } finally {
     p.cleanup();
   }
