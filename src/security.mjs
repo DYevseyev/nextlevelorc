@@ -15,13 +15,14 @@ import path from 'node:path';
 import { commandArgs } from './lib/commands.mjs';
 import { securityProfile } from './lib/config.mjs';
 import { countsText, readCoverage, readFindings, sealProblem, sha256 } from './lib/findings.mjs';
-import { guardDir, projectKey } from './lib/guard.mjs';
+import { guardDir, guardStore, projectKey } from './lib/guard.mjs';
 import { resolveBin, runQuiet, spawnDirect } from './lib/proc.mjs';
 import { processStartSync } from './lib/proctree.mjs';
 import { DIGEST, REVISION, SECCOMP_FILE, VERSION, imageRef, seccompProblem } from './lib/securityimage.mjs';
 import { apiPortOpen, apiPortWords, copyOut, daybreakFor, accessPrograms, dockerFacts, dockerSettingsText, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
 import { newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
-import { LABEL_KIND, LABEL_PROJECT, ROLE_FILE, accountKey, containerName, loginArgs, memoryLimit, scanRunArgs, volumes } from './lib/securityspec.mjs';
+import { FROM, POLICY_FILE_NAME, POLICY_MAX, readPolicyState, threatModelOf } from './lib/securitypolicy.mjs';
+import { LABEL_KIND, LABEL_PROJECT, POLICY_FILE, ROLE_FILE, accountKey, containerName, loginArgs, memoryLimit, scanRunArgs, volumes } from './lib/securityspec.mjs';
 import { fileURLToPath } from 'node:url';
 
 const TEMPLATES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'project');
@@ -69,28 +70,36 @@ export async function cmdSecurity(argv, ctx) {
   return 1;
 }
 
-function askForScan(a, { root, config, hubAlive }) {
+function askForScan(a, ctx) {
+  const r = requestScan(ctx, { deep: !!a.deep });
+  (r.ok ? console.log : console.error)(r.ok ? `${r.message}; nextlevel security status shows how it goes.` : r.message);
+  return r.ok ? 0 : 1;
+}
+// The owner's ask for a scan, from the command or Home's buttons: a request in the guard's folder. -> { ok, message, id }
+export function requestScan({ root, config, hubAlive }, { deep = false } = {}) {
   const p = securityProfile(config);
-  if (!p) {
-    console.error('The security engineer is off: turn it on first (the Team page, or nextlevel team set security --engine codex --daybreak on). Nothing was asked.');
-    return 1;
-  }
+  if (!p) return { ok: false, message: 'The security engineer is off: turn it on first (the Team page, or nextlevel team set security --engine codex --daybreak on). Nothing was asked.' };
   const id = newScanId();
   fs.mkdirSync(requestsDir(root), { recursive: true });
-  fs.writeFileSync(path.join(requestsDir(root), `${id}.json`), `${JSON.stringify({ id, deep: !!a.deep, at: new Date().toISOString() })}\n`);
-  console.log(`Asked for a ${a.deep ? 'deep ' : ''}scan (${id}). ${hubAlive() ? 'The hub starts it at its next look' : 'The hub starts it when it runs (START.cmd -> 4)'}; nextlevel security status shows how it goes.`);
-  return 0;
+  fs.writeFileSync(path.join(requestsDir(root), `${id}.json`), `${JSON.stringify({ id, deep: !!deep, at: new Date().toISOString() })}\n`);
+  return { ok: true, id, message: `Asked for a ${deep ? 'deep ' : ''}scan (${id}). ${hubAlive() ? 'The hub starts it at its next look' : 'The hub starts it when it runs (START.cmd -> 4)'}` };
 }
 
-function stopScan(a, { stateDir }) {
-  const id = a._[1] || listScans(stateDir).find((s) => ['starting', 'waiting', 'running'].includes(s.state))?.id;
-  if (!id || !SCAN_ID.test(id) || !readScan(stateDir, id)) {
-    console.log('No scan runs.');
-    return 0;
-  }
-  fs.writeFileSync(path.join(scanDir(stateDir, id), STOP), `${JSON.stringify({ at: new Date().toISOString() })}\n`);
-  console.log(`Asked ${id} to stop: it stops within a minute.`);
+function stopScan(a, ctx) {
+  console.log(requestStop(ctx, a._[1]).message);
   return 0;
+}
+// The owner's stop, for a scan asked or running: a request not yet taken is taken back. -> { ok, message }
+export function requestStop({ root, stateDir }, which = '') {
+  const asked = pendingRequests(root).filter((r) => !which || r.id === which);
+  if (asked.length && !listScans(stateDir).some((s) => ['starting', 'waiting', 'running'].includes(s.state) && (!which || s.id === which))) {
+    for (const r of asked) fs.rmSync(r.file, { force: true });
+    return { ok: true, message: `Took back the ask for ${asked.map((r) => r.id).join(', ')}: it hadn't started.` };
+  }
+  const id = which || listScans(stateDir).find((s) => ['starting', 'waiting', 'running'].includes(s.state))?.id;
+  if (!id || !SCAN_ID.test(id) || !readScan(stateDir, id)) return { ok: true, message: 'No scan runs.' };
+  fs.writeFileSync(path.join(scanDir(stateDir, id), STOP), `${JSON.stringify({ at: new Date().toISOString() })}\n`);
+  return { ok: true, message: `Asked ${id} to stop: it stops within a minute.` };
 }
 
 // The sign-in, in the owner's own window: the state and login volumes made and given to the scanner, then OpenAI's
@@ -155,7 +164,7 @@ export function statusData(stateDir, root) {
     }
   }
   return {
-    scans: scans.map((s) => ({ id: s.id, state: s.state, deep: !!s.deep, at: s.startedAt || s.askedAt || '', minutes: s.minutes || 0, findings: s.counts || '', trusted: !!s.trusted, partial: !!s.partial, why: s.changed ? 'its findings file changed after the scan: not trusted' : s.why || '', daybreak: s.daybreak || '', keptOutput: s.keptOutput || '' })),
+    scans: scans.map((s) => ({ id: s.id, state: s.state, deep: !!s.deep, at: s.startedAt || s.askedAt || '', minutes: s.minutes || 0, findings: s.counts || '', trusted: !!s.trusted, partial: !!s.partial, why: s.changed ? 'its findings file changed after the scan: not trusted' : s.why || '', daybreak: s.daybreak || '', keptOutput: s.keptOutput || '', policy: s.policy || '' })),
     last: trusted ? { id: trusted.id, commit: trusted.commit || '', findings: findings.map((f) => ({ id: f.id, severity: f.severity, title: String(f.title).slice(0, 120), validation: f.validation?.state || 'none' })) } : null,
   };
 }
@@ -178,6 +187,86 @@ function status(a, { root, stateDir }) {
   }
   console.log(lines.join('\n'));
   return 0;
+}
+
+// ---------- the policy (lib/securitypolicy.mjs): kept in the guard's folder, changed under the guard's lock ----------
+const policyPath = (root) => path.join(guardDir(root), POLICY_FILE_NAME);
+export const readPolicy = (root) => readPolicyState(readText(policyPath(root)));
+export function changePolicy(root, change) {
+  return guardStore({ root }).lock(() => {
+    const next = { ...readPolicy(root), ...change(readPolicy(root)) };
+    fs.mkdirSync(guardDir(root), { recursive: true });
+    const tmp = `${policyPath(root)}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
+    fs.renameSync(tmp, policyPath(root));
+    return next;
+  });
+}
+// The approved policy's text, from the guard's blobs by its hash: { text, hash } or null (none approved, or its text
+// gone or not what was approved)
+export function approvedPolicy(root) {
+  const a = readPolicy(root).approved;
+  if (!a) return null;
+  const buf = guardStore({ root }).getBlob(a.hash);
+  return buf ? { ...a, text: buf.toString('utf8') } : { ...a, text: null };
+}
+// The owner's "Ask for a new draft" (the dashboard's): the next trusted scan drafts one. -> { ok, message }
+export function requestDraft({ root, config }) {
+  if (!securityProfile(config)) return { ok: false, message: 'The security engineer is off: turn it on first (the Team page).' };
+  changePolicy(root, () => ({ draftAgain: true }));
+  return { ok: true, message: 'The next scan that ends trusted drafts a new security policy, on a card for you to read.' };
+}
+// A trusted scan's threat model, for a draft: only the file the hub's record lists, with its hash (it isn't in the
+// scanner's seal: the record proves only that it is the file the copy-out took, P5). -> { text, scan, commit } or null
+export function draftSource(root, stateDir, id) {
+  if (!SCAN_ID.test(String(id)) || !scanTrusted(root, stateDir, id)) return null;
+  let rec;
+  try {
+    rec = JSON.parse(fs.readFileSync(path.join(recordsDir(root), `${id}.json`), 'utf8'));
+  } catch {
+    return null;
+  }
+  const name = threatModelOf(rec.files);
+  if (!name) return null;
+  let buf;
+  try {
+    buf = fs.readFileSync(path.join(scanDir(stateDir, id), 'raw', ...name.split('/')));
+  } catch {
+    return null;
+  }
+  if (buf.length > POLICY_MAX * 4 || sha256(buf) !== rec.files[name]) return null;
+  return { text: buf.toString('utf8'), scan: id, commit: /^[0-9a-f]{40}$/.test(rec.commit || '') ? rec.commit : '' };
+}
+
+// The Security page (GET /api/security): the role, the scans, the last trusted scan's findings whole (the safe fields
+// readFindings made, at most FINDINGS_SHOWN, the highest first) with its coverage, and the policy
+export const FINDINGS_SHOWN = 200;
+export function securityPage({ root, stateDir, config }, { pending = [] } = {}) {
+  const d = statusData(stateDir, root);
+  const p = securityProfile(config);
+  let findings = [];
+  let coverage = null;
+  if (d.last) {
+    try {
+      findings = JSON.parse(fs.readFileSync(path.join(scanDir(stateDir, d.last.id), 'findings.json'), 'utf8')).findings || [];
+    } catch {
+      findings = [];
+    }
+    coverage = readScan(stateDir, d.last.id)?.coverage || null;
+  }
+  const pol = approvedPolicy(root);
+  const st = readPolicy(root);
+  return {
+    role: p ? { on: true, model: p.model || '', effort: p.effort || '', daybreak: !!p.daybreak, profile: p.profile || '' } : { on: false },
+    scans: d.scans,
+    last: d.last ? { id: d.last.id, commit: d.last.commit, total: findings.length, findings: findings.slice(0, FINDINGS_SHOWN), coverage } : null,
+    policy: {
+      approved: pol ? { from: FROM[pol.from], at: pol.at, scan: pol.scan, commit: pol.commit, guard: pol.guard, card: pol.card, hash: pol.hash.slice(0, 12), text: pol.text, missing: pol.text === null } : null,
+      pending,
+      draftAgain: st.draftAgain,
+      rejectedDraftAt: st.rejectedDraftAt,
+    },
+  };
 }
 
 // ---------- the hub's side ----------
@@ -324,13 +413,20 @@ export async function cmdScanProcess(what, ctx) {
     if (own.defaultSeccomp) say("the volumes' helper ran with Docker's default seccomp profile (the pinned one refused chown)");
 
     // The scan's instructions, from outside the checkout and read-only there: the role doc (the base branch's, a
-    // protected file, else the template's). No policy until the owner approves one on the dashboard (1a-2)
+    // protected file, else the template's), and the policy the owner approved on the dashboard, if any
     const kb = kbOf(root);
     fs.rmSync(kb, { recursive: true, force: true });
     fs.mkdirSync(kb, { recursive: true });
-    fs.writeFileSync(path.join(kb, ROLE_FILE), roleDoc(root, ctx.base));
+    const role = roleDoc(root, ctx.base);
+    fs.writeFileSync(path.join(kb, ROLE_FILE), role);
+    // The approved policy, exactly the text whose hash the owner approved (1a-2), from the guard's blobs
+    const pol = approvedPolicy(root);
+    if (pol && pol.text === null) return end('couldnt', "the approved security policy's text isn't kept as it was approved: approve a policy again on the dashboard (the Security page)");
+    if (pol) fs.writeFileSync(path.join(kb, POLICY_FILE), pol.text);
+    const kbHashes = { role: sha256(role), policy: pol ? pol.hash : '' };
+    writeScan(stateDir, id, { role: kbHashes.role.slice(0, 12), policy: pol ? pol.hash.slice(0, 12) : '' });
     const minutes = deep ? config.security.deepScanMinutes : config.security.scanMinutes;
-    const spec = { id, checkout: slot, kb, policy: false, vols, seccomp, memory: memoryLimit(os.totalmem()), model: p.model, effort: p.effort, deep, daybreak: p.daybreak, maxMinutes: minutes };
+    const spec = { id, checkout: slot, kb, policy: !!pol, vols, seccomp, memory: memoryLimit(os.totalmem()), model: p.model, effort: p.effort, deep, daybreak: p.daybreak, maxMinutes: minutes };
     // Web search off and approvals never, accepted by this scanner (V4): its dry run, no model
     // (into an output volume of its own, so the scan's starts empty)
     const dryVols = { ...vols, out: `${vols.out}-dry` };
@@ -340,6 +436,9 @@ export async function cmdScanProcess(what, ctx) {
     if (!dry.ok) return end('couldnt', `the scanner refused its settings (web search off, approvals never): ${first(dry.out) || `exit ${dry.code}`}`);
 
     if (stopAsked()) return end('stopped', 'stopped before it started');
+    // (P4: the instructions as they were written and approved, checked again right before the scan starts)
+    if (sha256(readText(path.join(kb, ROLE_FILE))) !== kbHashes.role) return end('couldnt', 'the role doc changed after it was written for the scan');
+    if (pol && sha256(readText(path.join(kb, POLICY_FILE))) !== kbHashes.policy) return end('couldnt', "the approved policy's text doesn't match its approval");
     writeScan(stateDir, id, { state: 'running', why: '' });
     say(`started on ${head.slice(0, 8)} (${deep ? 'deep' : 'standard'}, at most ${minutes} min)`);
     const run = await runContainer(scanRunArgs(spec), { id, logFile, limitMs: (minutes + 5) * 60_000, stopAsked, envKeys: ctx.envKeys });

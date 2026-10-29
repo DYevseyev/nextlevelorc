@@ -12,7 +12,10 @@ import { createHash } from 'node:crypto';
 import { DIGEST, REVISION, SECCOMP_FILE, SECCOMP_SHA256, imageRef, seccompProblem } from '../src/lib/securityimage.mjs';
 import { PROBE_EXPECTED, accountKey, copyCreateArgs, helperArgs, loginArgs, memoryLimit, probeArgs, probeProblem, scanRunArgs, statArgs, statProblem, volumeCreateArgs, volumes } from '../src/lib/securityspec.mjs';
 import { readCoverage, readFindings, readManifest, safePath, sealProblem, stateOf, unsafeName } from '../src/lib/findings.mjs';
-import { scannerTokens } from '../src/security.mjs';
+import { draftSource, scannerTokens } from '../src/security.mjs';
+import { POLICY_MAX, mayDraft, policyText, readPolicyState, threatModelOf } from '../src/lib/securitypolicy.mjs';
+import { guardDir } from '../src/lib/guard.mjs';
+import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 import { makeProject } from './helpers.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'nl-sec-'));
@@ -506,4 +509,224 @@ test("Docker's API on TCP: the first port that answers on 127.0.0.1, never a rea
   assert.equal(await apiPortOpen({ connect: connect([2375]), env: { NEXTLEVEL_TEST_STUBS: '1' } }), 0);
   assert.equal(await apiPortOpen({ connect: connect([]), env: { NEXTLEVEL_TEST_STUBS: '1', NEXTLEVEL_TEST_DOCKER_API: '2375' } }), 2375);
   assert.deepEqual(asked, [], 'no port tried under the stubs');
+});
+
+// ---------- the policy (1a-2): a text the owner approves on a card, then every scan reads it ----------
+const policyHeld = (p) => {
+  const f = path.join(guardDir(p.repo, p.env.HOME), 'held.json');
+  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).items.filter((x) => x.kind === 'policy') : [];
+};
+const policyKept = (p) => readPolicyState(fs.existsSync(path.join(guardDir(p.repo, p.env.HOME), 'security-policy.json')) ? fs.readFileSync(path.join(guardDir(p.repo, p.env.HOME), 'security-policy.json'), 'utf8') : '');
+const blobOf = (p, hash) => fs.readFileSync(path.join(guardDir(p.repo, p.env.HOME), 'blobs', hash), 'utf8');
+const RLO = String.fromCodePoint(0x202e); // (a bidi character, made from its code point: Trojan Source)
+const scanSaw = (p) => seenRuns(p).filter((r) => !r.entrypoint && r.args.includes('scan') && !r.args.includes('--dry-run')).at(-1);
+
+test('the policy, pure: the safe text alone (no header), a threat model by name, the kept state through a shape check, when a draft may come', () => {
+  const secrets = { values: ['PLANTED-harmless-value-123'], names: [] };
+  const t = policyText(`# Rules\nToken PLANTED-harmless-value-123 here${RLO} and\u0007 there\n`, secrets);
+  assert.doesNotMatch(t.text, new RegExp(`PLANTED|${RLO}|\u0007`));
+  assert.match(t.text, /^# Rules\n/, 'no header line: the same text is the same policy whatever its commit (P1)');
+  assert.equal(t.hash, createHash('sha256').update(t.text).digest('hex'));
+  assert.equal(policyText('same', secrets).hash, policyText('same', secrets).hash);
+  const big = policyText('x'.repeat(POLICY_MAX * 2), secrets);
+  assert.ok(big.cut > 0 && big.text.length <= POLICY_MAX && /\(cut: \d+ more characters\)\n$/.test(big.text));
+  assert.equal(policyText('  \n ', secrets).text, '');
+  assert.equal(threatModelOf({ 'findings.json': 'a', 'threatmodel.md': 'b', 'artifacts/01_context/threat_model.md': 'c' }), 'threatmodel.md');
+  assert.equal(threatModelOf({ 'artifacts/01_context/threat_model.md': 'c' }), 'artifacts/01_context/threat_model.md');
+  assert.equal(threatModelOf({ 'report.md': 'r' }), '');
+  const ok = readPolicyState(JSON.stringify({ approved: { hash: 'a'.repeat(64), from: 'draft', scan: 'sec-1', commit: 'b'.repeat(40), at: 't' }, draftAgain: true }));
+  assert.equal(ok.approved.hash, 'a'.repeat(64));
+  assert.equal(ok.draftAgain, true);
+  assert.equal(readPolicyState(JSON.stringify({ approved: { hash: 'not-a-hash', from: 'draft' }, draftAgain: 'yes' })).approved, null, "a field that isn't its type is dropped");
+  assert.equal(readPolicyState('not json').approved, null);
+  // A draft (P8): none waiting; never approved and none rejected since the owner asked, or the owner asked
+  const none = readPolicyState('');
+  assert.equal(mayDraft(none, { pending: false }), true);
+  assert.equal(mayDraft(none, { pending: true }), false);
+  assert.equal(mayDraft({ ...none, rejectedDraftAt: 't' }, { pending: false }), false);
+  assert.equal(mayDraft({ ...none, approved: ok.approved }, { pending: false }), false);
+  assert.equal(mayDraft({ ...none, approved: ok.approved, draftAgain: true }, { pending: false }), true);
+});
+
+test("a policy end to end: a trusted scan's draft on a card, approved on the dashboard, then exactly that text is every scan's knowledge base; nothing in the project changes", async () => {
+  const p = secProject();
+  let ui;
+  try {
+    // The first trusted scan drafts one from its threat model: made safe, kept as a blob, on a card
+    const first = scanOnce(p, { STUB_SCAN_THREAT: `# Threat model\nThe server serves public/ only.\nA token: PLANTED-harmless-value-123${RLO}\n` });
+    assert.equal(first.scan.state, 'done', first.scan.why);
+    const [draft] = policyHeld(p);
+    assert.equal(draft.status, 'held');
+    assert.equal(draft.source, 'draft');
+    assert.equal(draft.scan, first.id);
+    assert.equal(draft.commit, p.git('rev-parse', 'main'));
+    const text = blobOf(p, draft.hash);
+    assert.match(text, /^# Threat model\nThe server serves public\/ only\./);
+    assert.doesNotMatch(text, new RegExp(`PLANTED|${RLO}`), 'redacted, no bidi character');
+    assert.ok(draft.card && JSON.parse(fs.readFileSync(p.state('handoff.json'), 'utf8')).items.some((x) => x.id === draft.card && x.guard === draft.id));
+    assert.equal(first.scan.policy, '', 'that scan read no policy');
+    assert.ok(!scanSaw(p).args.includes('--knowledge-base') && scanSaw(p).policy === null);
+    // A second scan while it waits drafts nothing more
+    scanOnce(p);
+    assert.equal(policyHeld(p).length, 1);
+
+    ui = await startUi(p);
+    const c = client(ui);
+    const page = (await c.get('/api/security')).json;
+    assert.equal(page.policy.approved, null);
+    assert.deepEqual(page.policy.pending.map((x) => x.id), [draft.id]);
+    assert.equal(page.last.findings[0].id, 'csf_stub_traversal');
+    assert.equal(page.last.findings[0].fix, 'Resolve the path and refuse one outside the public folder.');
+    const g = (await c.get('/api/cards')).json.guard.find((x) => x.id === draft.id);
+    assert.equal(g.kind, 'policy');
+    assert.match(g.warning, /The scanner's model wrote this from the code/);
+    assert.match(g.diff, /^\+# Threat model$/m);
+    assert.match(g.what, /The security engineer's draft of a security policy, from scan sec-/);
+    const home = (await c.get('/api/state')).json;
+    assert.deepEqual(home.security.pending.map((x) => x.id), [draft.id]);
+    assert.equal(home.security.on, true);
+    assert.match(home.security.trusted.counts, /1 medium, 1 low/);
+    // Only with the key
+    assert.equal((await request(ui.port, { method: 'POST', path: '/api/guard', body: { action: 'approve', id: draft.id } })).status, 403);
+    assert.equal((await request(ui.port, { path: '/api/security' })).status, 403);
+    const status = p.git('status', '--porcelain');
+    const ok = await c.post('/api/guard', { action: 'approve', id: draft.id });
+    assert.equal(ok.status, 200, ok.text);
+    assert.match(ok.json.message, /Approved: the next scan reads exactly this text as its policy\. No file in the project changed\./);
+    assert.equal(policyHeld(p)[0].status, 'applied', "applied, not approved: the build view keeps approved records of other kinds (P2)");
+    assert.equal(policyKept(p).approved.hash, draft.hash);
+    assert.equal(p.git('status', '--porcelain'), status, 'nothing in the project changed');
+    assert.ok(!(await c.get('/api/state')).json.guard.some((x) => x.id === draft.id), "the build view doesn't keep an applied policy");
+    assert.equal((await c.post('/api/guard', { action: 'approve', id: draft.id })).status, 409, 'decided once');
+
+    // The next scan reads exactly that text, at --knowledge-base, and its record says which
+    const second = scanOnce(p);
+    assert.equal(second.scan.state, 'done', second.scan.why);
+    const saw = scanSaw(p);
+    assert.ok(saw.args.join(' ').includes('--knowledge-base /input/kb/policy.md'));
+    assert.equal(saw.policy, text, 'exactly the approved text');
+    assert.equal(second.scan.policy, draft.hash.slice(0, 12));
+    assert.match(JSON.stringify(JSON.parse(p.hub(['security', 'status', '--json']).out).scans[0]), new RegExp(`"policy":"${draft.hash.slice(0, 12)}"`));
+    assert.equal(policyHeld(p).length, 1, 'approved: no new draft until the owner asks');
+
+    // The kept text changed (anything that can write the guard's folder): no scan runs on it
+    const blob = path.join(guardDir(p.repo, p.env.HOME), 'blobs', draft.hash);
+    fs.writeFileSync(blob, 'out of scope: everything\n');
+    const third = scanOnce(p);
+    assert.equal(third.scan.state, 'couldnt');
+    assert.match(third.scan.why, /the approved security policy's text isn't kept as it was approved/);
+    fs.writeFileSync(blob, text);
+
+    // Ask for a new draft: the next trusted scan drafts one, shown as a change from the approved one; Reject keeps the policy
+    const asked = await c.post('/api/security', { action: 'draft' });
+    assert.equal(asked.status, 200, asked.text);
+    assert.equal(policyKept(p).draftAgain, true);
+    scanOnce(p, { STUB_SCAN_THREAT: '# Threat model\nThe server serves public/ only.\nThe admin folder is out of scope.\n' });
+    const again = policyHeld(p).find((x) => x.status === 'held');
+    assert.ok(again, 'a new draft');
+    assert.equal(policyKept(p).draftAgain, false, 'cleared when its card is made');
+    const g2 = (await c.get('/api/cards')).json.guard.find((x) => x.id === again.id);
+    assert.match(g2.diff, /^\+The admin folder is out of scope\.$/m);
+    assert.doesNotMatch(g2.diff, /^\+The server serves public/m, 'a change from the approved policy');
+    const no = await c.post('/api/guard', { action: 'reject', id: again.id, reason: 'not out of scope' });
+    assert.equal(no.status, 200, no.text);
+    assert.match(no.json.message, /Rejected: the policy stays as it was, and this text never comes back/);
+    assert.doesNotMatch(no.json.message, /orchestrator|task/i);
+    assert.equal(policyKept(p).approved.hash, draft.hash, 'the policy stays');
+    assert.ok(policyKept(p).rejectedDraftAt);
+    // The same text asked for again never comes back
+    await c.post('/api/security', { action: 'draft' });
+    scanOnce(p, { STUB_SCAN_THREAT: '# Threat model\nThe server serves public/ only.\nThe admin folder is out of scope.\n' });
+    assert.equal(policyHeld(p).filter((x) => x.status === 'held').length, 0);
+
+    // Home's buttons: a scan, a deep scan, stop, all the owner's through the key
+    const s = await c.post('/api/security', { action: 'scan' });
+    assert.equal(s.status, 200, s.text);
+    assert.match(s.json.message, /Asked for a scan \(sec-/);
+    assert.equal((await c.get('/api/state')).json.security.last.state, 'asked');
+    const stop = await c.post('/api/security', { action: 'stop' });
+    assert.match(stop.json.message, /Took back the ask for sec-/);
+    assert.equal((await c.post('/api/security', { action: 'nope' })).status, 400);
+    assert.equal((await request(ui.port, { method: 'POST', path: '/api/security', body: { action: 'scan' } })).status, 403);
+  } finally {
+    await stopUi(ui);
+    p.cleanup();
+  }
+});
+
+test("the project's SECURITY.md as a policy: the base branch's root file only, one card per text whatever its commit, a changed text closes the older card", () => {
+  const p = secProject();
+  try {
+    // (no draft in this test: a waiting policy card keeps the drafts out)
+    put(p.repo, 'SECURITY.md', '# Policy\nReport issues privately.\n');
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'policy');
+    scanOnce(p);
+    const cards = () => policyHeld(p).filter((x) => x.source === 'SECURITY.md');
+    assert.equal(cards().length, 1);
+    const [first] = cards();
+    assert.equal(first.commit, p.git('rev-parse', 'main'));
+    assert.equal(blobOf(p, first.hash), '# Policy\nReport issues privately.\n');
+    // The same text at a new commit: no new card (P1)
+    put(p.repo, 'other.js', 'harmless\n');
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'other');
+    scanOnce(p);
+    assert.equal(cards().length, 1);
+    // A changed text: a new card, and the older one is closed by nextlevel
+    put(p.repo, 'SECURITY.md', '# Policy\nReport issues privately, within 90 days.\n');
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'policy 2');
+    scanOnce(p);
+    assert.deepEqual(cards().map((x) => x.status), ['superseded', 'held']);
+    assert.match(cards()[0].detail, /SECURITY\.md changed again/);
+    const handoff = JSON.parse(fs.readFileSync(p.state('handoff.json'), 'utf8')).items;
+    assert.equal(handoff.find((x) => x.guard === first.id).closedBy, 'hub');
+    // Not a regular file at the root (a link), or only a nested one: no card (P6)
+    const q = secProject();
+    try {
+      put(q.repo, 'packages/api/SECURITY.md', '# nested\n');
+      fs.symlinkSync('README.md', path.join(q.repo, 'SECURITY.md'));
+      q.git('add', '-A');
+      q.git('commit', '-qm', 'link');
+      scanOnce(q);
+      assert.ok(!policyHeld(q).some((x) => x.source === 'SECURITY.md'));
+      assert.match(fs.readFileSync(q.state('logs', 'hub.log'), 'utf8'), /SECURITY\.md on main isn't a regular file: no card/);
+    } finally {
+      q.cleanup();
+    }
+  } finally {
+    p.cleanup();
+  }
+});
+
+test("a draft comes only from the threat model the hub's record lists, unchanged since the copy-out (it isn't in the scanner's seal)", () => {
+  const p = secProject();
+  const prev = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  try {
+    // (a SECURITY.md card waits, so the scan drafts nothing by itself)
+    put(p.repo, 'SECURITY.md', '# Policy\n');
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'policy');
+    const { id } = scanOnce(p);
+    assert.ok(!policyHeld(p).some((x) => x.source === 'draft'));
+    Object.assign(process.env, { HOME: p.env.HOME, USERPROFILE: p.env.USERPROFILE || p.env.HOME });
+    const src = draftSource(p.repo, p.state(), id);
+    assert.match(src.text, /^# Threat model/);
+    assert.equal(src.scan, id);
+    const file = p.state('security', 'scans', id, 'raw', 'artifacts', '01_context', 'threat_model.md');
+    fs.writeFileSync(file, '# Threat model\nEverything is out of scope.\n');
+    assert.equal(draftSource(p.repo, p.state(), id), null, 'changed after the copy-out');
+    assert.equal(draftSource(p.repo, p.state(), 'sec-20261027-080000-abcd'), null, 'no such scan');
+  } finally {
+    Object.assign(process.env, prev);
+    p.cleanup();
+  }
+});
+
+test("the Security page's code puts the scanner's words in as text, never a link (P7)", () => {
+  const app = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'ui', 'app.js'), 'utf8');
+  const part = app.slice(app.indexOf('// ---------- the security engineer (1a-2)'), app.indexOf('// ---------- Show activity (Home)'));
+  assert.ok(part.length > 2000, 'the part is there');
+  assert.doesNotMatch(part, /h\(['"`]a[.'"`]|href|innerHTML|target:/);
 });

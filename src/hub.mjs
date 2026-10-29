@@ -86,7 +86,7 @@ import { accessFacts } from './checks/argon.mjs';
 import { blockCommands } from './lib/blockwatch.mjs';
 import { outsideSlot, outsideWords, shorten } from './lib/slotwatch.mjs';
 import { LOCKED_ROLES, lockFileParts, lockPasses, needsLockTest, roleKey, roleRun } from './lib/rolespec.mjs';
-import { CONFIG_FILE, ENGINES, SECOND, SECOND_TAKES, describeProfile, effortFor, findProfile, loadConfig, modelFor, profilesInUse, roleProfile, workerArgsOf } from './lib/config.mjs';
+import { CONFIG_FILE, ENGINES, SECOND, SECOND_TAKES, describeProfile, effortFor, findProfile, loadConfig, modelFor, profilesInUse, roleProfile, securityProfile, workerArgsOf } from './lib/config.mjs';
 import { INSTALL_COMMAND, binDir } from './lib/install.mjs';
 import { channelOf, runningVersion, versionFor } from './lib/versions.mjs';
 import { FORMAT, formatProblem, writeFormat } from './lib/format.mjs';
@@ -110,8 +110,9 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
-import { cmdScanProcess, cmdSecurity, pendingRequests, recoverScans } from './security.mjs';
-import { readScan, runningScan } from './lib/securityscan.mjs';
+import { approvedPolicy, changePolicy, cmdScanProcess, cmdSecurity, draftSource, pendingRequests, readPolicy, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage } from './security.mjs';
+import { DRAFT_WARNING, POLICY_MAX, POLICY_WHY, mayDraft, policyText, policyWhat } from './lib/securitypolicy.mjs';
+import { listScans, readScan, runningScan } from './lib/securityscan.mjs';
 import { capProblem, cmdAcceptProcess, cmdTester, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runningRun, writeRun } from './tester.mjs';
 import { testerOn } from './lib/testerconfig.mjs';
 import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
@@ -4139,6 +4140,7 @@ function valueWords(rec) {
 }
 // Who made a held change, and what it does, in one sentence (the card, the phone, Home)
 function heldWhat(rec) {
+  if (rec.kind === 'policy') return policyWhat(rec);
   const names = listFiles(namesOf(rec));
   if (rec.kind === 'push') return `A push of ${rec.count} commit(s) to ${rec.target} on ${REMOTE}${rec.deploy !== false ? ', a deploy branch' : ''}${rec.files?.length ? `${rec.deploy !== false ? ',' : ''} that changes ${names}` : ''}`;
   if (rec.kind === 'git') return `Git's own hooks or settings changed (${names}): all git work waits`;
@@ -4150,6 +4152,7 @@ function heldWhat(rec) {
 const heldText = (rec, card = rec.card) => {
   const where = `Approve or reject it on the dashboard: Notes and handoffs${card ? `, card ${card}` : ''} (${rec.id}).`;
   const names = namesOf(rec);
+  if (rec.kind === 'policy') return `A security policy waits for the owner: ${policyWhat(rec)}. ${where}`;
   if (rec.kind === 'push') return `nextlevel holds the push of ${short(rec.sha)} to ${rec.target} on ${REMOTE} until the owner approves it. ${where}`;
   if (rec.kind === 'secret') return `nextlevel holds ${rec.on === 'slot' ? "the hub's commit of its work" : rec.on === 'push' ? `the push to ${rec.target}` : 'its merge'}: ${rec.env ? `it has a .env file (${listFiles(names)}), which is never committed` : `it puts ${valueWords(rec)} in ${listFiles(names)}`}. ${where}`;
   return `nextlevel holds ${rec.kind === 'merge' ? 'its merge' : 'it'}: it changes ${listFiles(names)}, protected ${names.length === 1 ? 'file' : 'files'} (the agents and your tools load ${names.length === 1 ? 'it' : 'them'} outside any sandbox). ${where}`;
@@ -4158,7 +4161,7 @@ const heldText = (rec, card = rec.card) => {
 // A held change that deletes a protected file may not be anyone's: an antivirus removes a file it takes for a threat
 // (Bitdefender took a test START.cmd with a download-and-run line). Its card says so; Reject puts the file back.
 const deletedNote = (rec) => {
-  if (rec.kind === 'push') return '';
+  if (rec.kind === 'push' || rec.kind === 'policy') return '';
   const gone = rec.files.filter((f) => f.after === ABSENT && f.before !== ABSENT).map((f) => f.path);
   if (!gone.length) return '';
   const it = gone.length === 1 ? 'it' : 'them';
@@ -4175,10 +4178,11 @@ const pushWhy = (rec) => {
 function raiseCard(rec) {
   const names = namesOf(rec);
   const what = heldWhat(rec);
-  const gone = ['git', 'secret', 'push'].includes(rec.kind) ? '' : deletedNote(rec);
+  const gone = ['git', 'secret', 'push', 'policy'].includes(rec.kind) ? '' : deletedNote(rec);
   const why = {
     git: "They make git run programs or send a push somewhere else, outside any sandbox, and nextlevel didn't make this change: all git work (commits, merges, pushes, starting and checking tasks) waits until you decide. Approve records it; Reject puts back what was recorded",
     secret: rec.env ? 'A .env file holds your secrets: nextlevel never commits one, so this change waits until you decide. Reject leaves it out' : 'A value from your .env is a secret: nextlevel never commits it unless you say the value may be committed. The card shows the change with the value hidden',
+    policy: POLICY_WHY,
     push: `${pushWhy(rec)}, so nothing goes out until you decide. Approve pushes exactly ${short(rec.sha)} (only while ${rec.target} is where this card shows it); Reject pushes nothing`,
   }[rec.kind] || `${gone ? `${gone} ` : ''}${names.length === 1 ? 'It steers' : 'They steer'} the agents and your tools outside any sandbox, so nextlevel holds the change until you decide: ${rec.kind === 'merge' ? 'the task waits' : rec.kind === 'commit' ? "it isn't committed" : 'it is set back'} meanwhile`;
   let id = '';
@@ -4195,7 +4199,9 @@ function raiseCard(rec) {
   } catch (err) {
     log(`guard: couldn't add the card for ${rec.id}: ${err.message}`);
   }
-  if (rec.kind === 'push') {
+  if (rec.kind === 'policy') {
+    // (no phone message: the card is under Needs you, and nothing of the security engineer reaches the phone yet)
+  } else if (rec.kind === 'push') {
     queueNotify(`${NAME}: approve or reject a push to ${rec.target}`, `Card ${id || rec.id}: ${what}, since ${day(rec.oldest)}. Nothing goes out until you decide. Open the dashboard (Notes and handoffs, card ${id || rec.id}) to see the commits${rec.files?.length ? ' and the change' : ''} and approve or reject it. It can't be approved from your phone.`, 'high', 'lock');
   } else {
     queueNotify(`${NAME}: approve or reject a change`, `${what}: nextlevel holds it until you decide.${gone ? ` ${gone}` : ''} Open the dashboard (Notes and handoffs${id ? `, card ${id}` : ''}) to see the exact change and approve or reject it. It can't be approved from your phone.`, 'high', 'lock');
@@ -4250,6 +4256,7 @@ function guardDecide(id, action, reason = '') {
   if (rec.kind === 'git') return gitDecide(rec, action, why);
   if (rec.kind === 'secret') return secretDecide(rec, action, why);
   if (rec.kind === 'push') return pushDecide(rec, action, why);
+  if (rec.kind === 'policy') return policyDecide(rec, action, why);
   if (action === 'reject') {
     // A deleted file that is gone now goes back (antivirus may have removed it): the version before the change for a
     // change on disk, the base branch's for a commit or a merge
@@ -4640,6 +4647,7 @@ function guardView({ full = false, n = 30 } = {}) {
       detail: x.detail || '',
       text: heldText(x),
       note: deletedNote(x), // (a deleted file: antivirus may have removed it)
+      ...(x.kind === 'policy' ? { source: x.source, scan: x.scan || '', commit: x.commit || '', hash: String(x.hash || '').slice(0, 12), warning: x.source === 'draft' ? DRAFT_WARNING : '', cut: x.cut || 0 } : {}),
       ...(x.kind === 'push' ? { target: x.target, from: x.from, sha: x.sha, there: x.there || '', count: x.count, oldest: x.oldest || '', deploy: x.deploy !== false, why: x.files?.length ? pushWhy(x) : '' } : {}),
       ...(full ? { summary: x.summary || [], diff: x.diff || '', diffCut: !!x.diffCut, log: x.log || '', logCut: !!x.logCut, message: x.message || '', notRestored: x.notRestored || [] } : {}),
     }));
@@ -6155,6 +6163,7 @@ function securityTick() {
   if (!ask) return;
   if (updateHold) return; // (it waits for the update, as new tasks do)
   fs.rmSync(ask.file, { force: true });
+  proposeSecurityFile();
   const what = Buffer.from(JSON.stringify({ id: ask.id, deep: ask.deep })).toString('base64url');
   const child = spawn(process.execPath, [BIN, '_scan', what], { cwd: ROOT, env: { ...process.env, NEXTLEVEL_ROOT: ROOT }, stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
   Object.assign(scan, { child, id: ask.id });
@@ -6170,6 +6179,7 @@ function securityTick() {
     const r = readScan(DIR, ask.id) || {};
     addUsage('security', 'codex', { runs: 1, minutes: r.minutes || 0, tokens: r.tokens || null, model: r.model, effort: r.effort, profile: r.profile, reason: ask.deep ? 'deep' : 'scan' });
     log(`security scan ${ask.id}: ${r.state || 'ended'}${r.counts ? `, ${r.counts}` : ''}${r.why ? ` (${r.why})` : ''}`);
+    if (r.state === 'done') proposeDraft(ask.id);
   };
   child.once('exit', done);
   child.once('error', (err) => {
@@ -6177,6 +6187,130 @@ function securityTick() {
     done();
   });
 }
+// ---------- the security engineer's policy (lib/securitypolicy.mjs): a text the owner approves on a card ----------
+// The text is kept in the guard's blobs and held by its hash (the safe text alone: where it came from is the record's,
+// P1); the card shows that blob, never a file the team can write. Nothing reaches the phone: the card is under Needs you.
+const policyHeld = () => guard().held.list().filter((x) => x.kind === 'policy' && x.status === 'held');
+function holdPolicy({ source, raw, scan: scanId = '', commit = '' }) {
+  const t = policyText(raw, activitySecrets());
+  if (!t.text) return null;
+  if (readPolicy(ROOT).approved?.hash === t.hash) return null; // (it is the policy already)
+  const store = guard();
+  store.putBlob(Buffer.from(t.text, 'utf8'));
+  // (the card's exact change: from nothing, or from the policy approved now)
+  const shown = shownDiff(diffTexts('security-policy.md', approvedPolicy(ROOT)?.text ?? null, t.text, { tmpDir: path.join(store.dir, 'tmp') }));
+  const { item, fresh } = store.held.add({ kind: 'policy', source, scan: scanId, commit, hash: t.hash, cut: t.cut, by: source === 'draft' ? 'the security engineer' : 'SECURITY.md', task: '', job: '', files: [], key: t.hash, summary: [], ...shown });
+  if (!fresh) return null; // (held already, or rejected before: never again)
+  // (a SECURITY.md that changed again while its older text waits: the older card is closed, P1)
+  for (const x of policyHeld().filter((y) => y.id !== item.id && y.source === source && source === 'SECURITY.md')) closePolicy(x, 'SECURITY.md changed again');
+  raiseCard(item);
+  return item;
+}
+// A held policy the hub closes itself (a newer one replaced it): never the owner's doing
+function closePolicy(x, why) {
+  try {
+    guard().held.update(x.id, { status: 'superseded', decidedAt: now(), detail: why }, { expect: ['held'] });
+    cards().handoff.decideGuard(x.id, { reply: `Closed by nextlevel: ${why}`, hub: true });
+    log(`security policy ${x.id}: closed (${why})`);
+  } catch (err) {
+    log(`security policy ${x.id}: couldn't close it: ${err.message}`);
+  }
+}
+// The base branch's root SECURITY.md, when a scan is asked for: a regular file (mode 100644) of at most 64 KB (P6)
+function proposeSecurityFile() {
+  try {
+    const ls = git(['ls-tree', '-z', `refs/heads/${CFG.base}`, '--', 'SECURITY.md'], { allowFail: true });
+    const m = /^(\d{6}) blob ([0-9a-f]{40,64})\tSECURITY\.md$/.exec(ls.out.replace(/\0$/, ''));
+    if (!ls.ok || !ls.out) return;
+    if (!m || m[1] !== '100644') return log(`security policy: SECURITY.md on ${CFG.base} isn't a regular file: no card`);
+    const size = Number(git(['cat-file', '-s', m[2]], { allowFail: true }).out);
+    if (!(size <= POLICY_MAX)) return log(`security policy: SECURITY.md on ${CFG.base} is over ${POLICY_MAX / 1024} KB: no card`);
+    const buf = gitBlob(m[2]);
+    if (!buf) return;
+    const commit = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
+    const item = holdPolicy({ source: 'SECURITY.md', raw: buf.toString('utf8'), commit: /^[0-9a-f]{40}$/.test(commit) ? commit : '' });
+    if (item) log(`security policy: SECURITY.md on ${CFG.base} waits for the owner (${item.id})`);
+  } catch (err) {
+    log(`security policy: couldn't read SECURITY.md: ${err.message}`);
+  }
+}
+// After a scan that ended done: a draft from its threat model, when one may be made (P8)
+function proposeDraft(id) {
+  try {
+    const st = readPolicy(ROOT);
+    if (!mayDraft(st, { pending: policyHeld().length > 0 })) return;
+    const src = draftSource(ROOT, DIR, id);
+    if (!src) return;
+    const item = holdPolicy({ source: 'draft', raw: src.text, scan: id, commit: src.commit });
+    if (!item) return;
+    changePolicy(ROOT, () => ({ draftAgain: false }));
+    log(`security policy: the security engineer drafted one from ${id} (${item.id})`);
+  } catch (err) {
+    log(`security policy: couldn't draft one from ${id}: ${err.message}`);
+  }
+}
+// The owner's decision on a policy card (P2): Approve makes exactly its text the policy; nothing in the project changes
+function policyDecide(rec, action, why) {
+  const store = guard();
+  if (action === 'reject') {
+    store.held.update(rec.id, { status: 'rejected', decidedAt: now(), reason: why }, { expect: ['held'] });
+    if (rec.source === 'draft') changePolicy(ROOT, () => ({ rejectedDraftAt: now(), draftAgain: false }));
+    cards().handoff.decideGuard(rec.id, { reply: `Rejected${why ? `: ${why}` : ''}. The policy stays as it was.` });
+    log(`guard: the owner rejected ${rec.id} (a security policy)${why ? `: ${why}` : ''}`);
+    return { message: 'Rejected: the policy stays as it was, and this text never comes back.' };
+  }
+  if (!store.getBlob(rec.hash)) throw new Error(`${rec.id}'s text isn't kept any more, so it can't be approved: ask for a new draft on the Security page`);
+  store.held.update(rec.id, { status: 'applied', decidedAt: now(), reason: why }, { expect: ['held'] });
+  changePolicy(ROOT, () => ({ approved: { hash: rec.hash, from: rec.source, scan: rec.scan || '', commit: rec.commit || '', card: rec.card || '', guard: rec.id, at: now() } }));
+  cards().handoff.decideGuard(rec.id, { reply: 'Approved: every scan from now reads exactly this text as its policy.' });
+  for (const x of policyHeld()) closePolicy(x, `a newer policy was approved (${rec.id})`);
+  log(`guard: the owner approved ${rec.id} (a security policy, ${rec.hash.slice(0, 12)})`);
+  return { message: 'Approved: the next scan reads exactly this text as its policy. No file in the project changed.' };
+}
+
+// What Home's Security card and the tab's count read, cheaply (the scans' records and the policy, no findings): the
+// newest scan in words, the newest trusted scan's counts, a policy card waiting. `version` changes when any of it does.
+const SCAN_WORDS = { asked: 'asked for', starting: 'starting', waiting: "waiting for another project's scan", running: 'running', done: 'done', failed: "failed: its output isn't trusted", couldnt: "couldn't run", stopped: 'stopped' };
+function securitySummary() {
+  const p = securityProfile(CFG.config);
+  let scans = [];
+  try {
+    scans = listScans(DIR).slice(0, 10);
+  } catch {
+    scans = [];
+  }
+  const asked = pendingRequests(ROOT)[0] || null;
+  const s = scans[0] || null;
+  const newest = asked && (!s || asked.id > s.id) ? { id: asked.id, state: 'asked', deep: asked.deep, at: asked.at } : s;
+  const t = scans.find((x) => x.trusted && scanTrusted(ROOT, DIR, x.id)) || null;
+  const pending = policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source }));
+  const last = newest ? { id: newest.id, state: newest.state, words: SCAN_WORDS[newest.state] || newest.state, deep: !!newest.deep, at: newest.startedAt || newest.askedAt || newest.at || '', minutes: newest.minutes || 0, why: newest.why || '', running: ['asked', 'starting', 'waiting', 'running'].includes(newest.state), trusted: !!newest.trusted && newest.id === t?.id, daybreak: newest.daybreak || '' } : null;
+  const trusted = t ? { id: t.id, counts: t.counts || '', high: /\b\d+ (critical|high)\b/.test(t.counts || ''), at: t.endedAt || t.startedAt || '', daybreak: t.daybreak || '', partial: !!t.partial } : null;
+  const st = readPolicy(ROOT);
+  const policy = st.approved;
+  return {
+    on: !!p,
+    deepMinutes: CFG.config.security?.deepScanMinutes || 0,
+    last,
+    trusted,
+    pending,
+    policy: policy ? { from: policy.from, at: policy.at, hash: policy.hash.slice(0, 12) } : null,
+    version: JSON.stringify([last?.id, last?.state, trusted?.id, pending.map((x) => x.id), policy?.hash, st.draftAgain, st.rejectedDraftAt]),
+  };
+}
+// The Security page's data and its buttons (the owner's, through the dashboard's key; refused in an agent's session as
+// the commands are)
+function securityAct(b) {
+  const session = agentSession();
+  if (session) throw new Error(ownerOnly('The Security page', 'The owner uses it in their own browser.', session));
+  const ctx = { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive };
+  const action = String(b?.action || '');
+  if (action === 'scan' || action === 'deep') return requestScan(ctx, { deep: action === 'deep' });
+  if (action === 'stop') return requestStop(ctx, typeof b.id === 'string' ? b.id : '');
+  if (action === 'draft') return requestDraft(ctx);
+  throw new Error('action must be scan, deep, stop or draft');
+}
+
 // The hub stops: a scan it runs is asked to stop (its container stopped, its partial output kept), and waited for a
 // minute and a half; one that doesn't end by then is removed by the next hub's start
 async function stopScanForHub() {
@@ -7542,6 +7676,7 @@ function dashboardState() {
     waiting: st.waiting,
     lastActivity: ago(st.idleHours),
     usage: usageToday(jobs),
+    security: securitySummary(), // Home's Security card (the security engineer, 1a-2)
     switches: switchesView(),
     alerts: taskAlerts(jobs),
     dispatchPaused: getSettings().dispatchPaused || null, // files a worker needs are gone (FR-013)
@@ -7869,6 +8004,8 @@ function dashboardApi() {
     project: projectView,
     job: dashboardJob,
     activity: dashboardActivity,
+    // the Security page and Home's buttons (src/security.mjs): its data, and the owner's scan, deep scan, stop, new draft
+    security: { view: () => { refreshConfig(); return securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) }); }, act: (b) => { refreshConfig(); return securityAct(b); } },
     usage: usageView, // Home's Usage card for a range, by a field, this project or all (the owner's: the page's key)
     startHub,
     stopHub,

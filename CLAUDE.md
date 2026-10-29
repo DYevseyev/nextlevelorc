@@ -58,8 +58,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
 - `src/dashboard.mjs` — `nextlevel ui`: the local server (127.0.0.1, a one-time code traded for a session key in a
   header, FR-017 part 2A; server-sent events); the hub
   hands it what it may read and do (`dashboardApi` in `hub.mjs`). The page is `src/ui/` (plain
-  HTML/CSS/JS): Home, Project, Setup, Build, Team, Tools, Notes and handoffs (one line per card, one open at a time
-  with its bar pinned, its own address `#H<id>`); `src/ui/dom.js` has `h()`, which puts
+  HTML/CSS/JS): Home, Project, Setup, Build, Team, Security, Tools, Notes and handoffs (one line per card, one open at
+  a time with its bar pinned, its own address `#H<id>`); `src/ui/dom.js` has `h()`, which puts
   every text in as a text node, and a handoff card's conversation. Setup runs `nextlevel doctor --json` and, for
   Fix, `doctor --fix <id> --json`; Team runs `nextlevel team models|set ... --json`. `src/lib/overview.mjs`
   — Home's sentences, alerts, what needs the owner and the Blockers card (pure). `src/lib/roadmap.mjs` — the Project
@@ -92,8 +92,12 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   `src/lib/securityrun.mjs` — running them (the volumes' owner, the probe, the sign-in by its files' names, the models,
   the copy-out); `src/lib/securityscan.mjs` — the scan's checkout (steering files aside, links out, tracked secrets
   files), the PC's one-scan lease and the scans' records; `src/lib/findings.mjs` — the manifest's seal and the findings,
-  made safe (pure); `src/checks/security.mjs` — `security.docker`, `.image`, `.login`, `.probe`, `.daybreak`. The hub's
-  side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans, scanBusy).
+  made safe (pure); `src/lib/securitypolicy.mjs` — the policy (1a-2, pure): a text made safe, its kept state's shape
+  check, when a draft may come, its card's words; `src/checks/security.mjs` — `security.docker`, `.image`, `.login`,
+  `.probe`, `.daybreak`. The hub's side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans,
+  scanBusy; securitySummary for Home's card, securityAct for its buttons) and "the security engineer's policy"
+  (holdPolicy, proposeDraft, proposeSecurityFile, policyDecide: a guard record of kind `policy`, no file). The
+  dashboard's routes are `GET /api/security` (the Security page) and `POST /api/security`.
 - `src/tester.mjs` — the tester (`docs/design/tester.md`, `docs/acceptance.md`): `nextlevel tester
   status|check|run|wait|show|stop|persona|browser` and `_accept`, one run as the hub's child (no job; `NEXTLEVEL_AGENT=tester`,
   every command refuses in it), its record and evidence in `.nextlevel/evidence/<run id>/`, the audit line and the
@@ -256,7 +260,10 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   `test/security.test.mjs` covers the security engineer with the stub Docker (`test/stubs/fake-docker.mjs`, its
   `STUB_DOCKER_*` and `STUB_SCAN` knobs, what each run saw in `~/.fake-docker/seen.jsonl`): the pinned image, every
   `docker` line, the findings' shapes, a scan end to end with no job or round, output that doesn't hold, each stop rule,
-  a scanner error, a stop, a planted `.env` value, the seccomp fallback, and who may scan;
+  a scanner error, a stop, a planted `.env` value, the seccomp fallback, and who may scan; the policy (1a-2: a draft
+  on a card approved on the dashboard and read by the next scan exactly, its blob changed, a new draft rejected and
+  never back, the root SECURITY.md once per text, a link or a nested one never, a threat model changed after the
+  copy-out, Home's buttons, the Security page's code with no links);
   `test/tester.test.mjs` covers the tester's part 1 with a stand-in web app in a process of its own
   (`test/stubs/webapp.mjs`: three test accounts, a CSRF sign-in, a delayed audit log, a page that prints a password, a
   redirect off the origin): the YAML subset against fixtures a full YAML reader made (`test/fixtures/tester-yaml`), the

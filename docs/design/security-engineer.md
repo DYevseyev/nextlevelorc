@@ -2,8 +2,8 @@
 
 A role of its own that finds and confirms security problems in the project's code when the owner asks for a scan, and
 never changes the code. Its scans run in OpenAI's Codex Security scanner, in a Docker container, with the owner's
-ChatGPT sign-in kept in a volume of its own. This file is the design as built in part 1a-1; the steps after it are at
-the end and in `docs/ROADMAP.md`.
+ChatGPT sign-in kept in a volume of its own. This file is the design as built in parts 1a-1 and 1a-2; the steps after
+them are at the end and in `docs/ROADMAP.md`.
 
 ## Why a container
 
@@ -31,7 +31,45 @@ a plugin, is the one path, and nothing falls back to another.
 - The doctor's rows `security.docker`, `security.image`, `security.login`, `security.probe`, `security.daybreak`
   (`docs/CHECKS.md`). Information while the role is off; errors while it is on.
 
-The dashboard's buttons, the Security page and the SECURITY.md card are part 1a-2.
+## What 1a-2 adds, on the dashboard
+
+- **Home's Security card** (in the right column, under Blockers): off, with the Team page's link; or the newest scan in
+  words, the last trusted scan's counts, Daybreak unconfirmed, a policy card waiting, and **Run a security scan**,
+  **Deep scan** (asked first: up to `security.deepScanMinutes` and much more of the plan) and **Stop the scan** while
+  one is asked for or runs (an ask not yet taken is taken back).
+- **The Security page** (`#security`): the role, the last 10 scans (why one didn't count, a kept output volume with its
+  `docker volume rm` line), the last trusted scan's findings sorted by severity, each opening to what it is, where, the
+  evidence, how far it was validated and the suggested fix (at most 200; the rest in `nextlevel security status`), and
+  the policy. Every text is a text node; a path or a URL is text, never a link.
+- **The routes** (the dashboard's session key, FR-017 part 2A): `GET /api/security` (`securityPage` in
+  `src/security.mjs`) and `POST /api/security { action: scan | deep | stop | draft }` (the same functions as the
+  commands: `requestScan`, `requestStop`, `requestDraft`). The build data's `security` (`securitySummary` in `hub.mjs`)
+  is the scans' records and the policy only, with a `version` the page reloads on.
+
+## The policy (1a-2)
+
+A text every scan reads as its knowledge base (`--knowledge-base /input/kb/policy.md`), only once the owner approved
+exactly that text on its card. `src/lib/securitypolicy.mjs` (pure) makes a text safe (the `.env` values redacted,
+control and bidi characters dropped, at most 64 KB); the hub keeps it in the guard's blobs and holds it as a guard
+record of kind `policy` (no file: its text by its hash, which is also its key and its rejection memory, so the same text
+is the same policy whatever commit or scan it came with). Where one comes from:
+- **A draft:** after a scan ends `done` and trusted, from its threat model (`threatmodel.md`, else a sealed
+  `threat_model.md`), only when the hub's record of the copy-out lists that file and its hash still matches. It isn't
+  in the scanner's seal: the record proves only that it is the file the copy-out took. A draft is made when no policy
+  card waits, and either no policy was ever approved and no draft rejected since the owner last asked, or the owner
+  asked for a new draft (the Security page's **Ask for a new draft**, cleared when its card is made). Its card says the
+  scanner's model wrote it from the code, and that an approved policy steers every scan.
+- **The project's SECURITY.md:** when a scan is asked for, the base branch's root `SECURITY.md`, a regular file (mode
+  `100644` in `git ls-tree`, never a link or a folder) of at most 64 KB. A changed text while an older one waits closes
+  the older card (`superseded`). A SECURITY.md anywhere else is never read.
+
+Approve (the dashboard's, `policyDecide` in `hub.mjs`) records the text's hash in
+`~/.nextlevel/guard/<project>/security-policy.json` and marks the record `applied`; any other policy card waiting is
+closed by nextlevel. Reject marks it `rejected`, and that text never comes back. Neither changes a file in the project,
+and a decision is the owner acting (one autopilot round, as any card). No phone message: the card is under Needs you.
+At a scan, `kb/policy.md` is written from the blob; its hash and the role doc's are checked again right before the scan
+starts, after the dry run, and a mismatch, or a blob no longer what was approved, is `couldn't run`. The scan's record
+keeps both hash prefixes (`policy`, `role`), which `nextlevel security status --json` and the Security page show.
 
 ## The image
 
@@ -124,10 +162,8 @@ A refused copy-out also removes what it had copied onto the PC.
 - Daybreak Blue is asked for, not confirmed by the scanner's output.
 - A repository written to fool the scanner can still hide a finding: bars, not walls.
 
-## After 1a-1
+## After 1a-2
 
-- **1a-2, on the dashboard:** Home's Security tile and buttons, the Security page, the SECURITY.md card (a policy only
-  the owner's Approve makes count, then passed as `--knowledge-base`).
 - **1b:** a Claude Code version, the Daybreak model watch, SECURITY.md committed to the repository.
 - **2:** findings in autopilot rounds, a merge gate, the fix loop, dismissing a finding.
 - **3:** supply chain, automatic scans, phone alerts.

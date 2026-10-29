@@ -5,7 +5,7 @@
 // It also plays OpenAI's Codex Security scanner image for the security engineer (src/security.mjs), with its state in
 // ~/.fake-docker: volumes (a folder each, with their labels, owner and mode), containers made with `create`, the pulled
 // image. What each `run` was given is appended to ~/.fake-docker/seen.jsonl (its arguments, and for a scan the files of
-// the checkout it was given), so a test can say what the scan saw. Settings:
+// the checkout it was given and the policy it read from /input/kb), so a test can say what the scan saw. Settings:
 //   STUB_DOCKER=stopped          not running          STUB_DOCKER_OS=windows   Windows containers
 //   STUB_DOCKER_NO_IMAGE=1       the pinned image isn't pulled yet (a pull brings it)
 //   STUB_DOCKER_PERMS=777        the helper's chmod doesn't take (stat says 777)
@@ -17,6 +17,7 @@
 //   STUB_SCAN=ok|broken-seal|link|unlisted|reproduced-text|malformed|slow|exit2|exit2-sealed|deep-name
 //                                (exit2-sealed: a whole, sealed output, then exit 2: the scanner's integrity failure)
 //   STUB_SCAN_TEXT=<text>        put into the first finding's summary (a planted .env value)
+//   STUB_SCAN_THREAT=<text>      the threat model it writes (a policy's draft comes from it)
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -162,7 +163,15 @@ if (args[0] === 'run') {
     fs.writeFileSync(path.join(volDir(m.source), 'meta.json'), JSON.stringify({ labels: {}, owner: '0:0', mode: '755' }));
   }
   const isScan = !o.entrypoint && o.rest[0] === 'scan';
-  seen({ name: o.name, entrypoint: o.entrypoint, args: args.slice(1), ...(isScan ? { files: listFiles(dataOf(at(o, '/input/repository'))) } : {}) });
+  const kbText = (name) => {
+    const m = at(o, '/input/kb');
+    try {
+      return m ? fs.readFileSync(path.join(dataOf(m), name), 'utf8') : null;
+    } catch {
+      return null;
+    }
+  };
+  seen({ name: o.name, entrypoint: o.entrypoint, args: args.slice(1), ...(isScan ? { files: listFiles(dataOf(at(o, '/input/repository'))), policy: kbText('policy.md') } : {}) });
   if (o.entrypoint === 'chown' || o.entrypoint === 'chmod') {
     if (o.user !== '0:0') die(`${o.entrypoint}: Operation not permitted`);
     if (o.entrypoint === 'chown' && env.STUB_DOCKER_CHOWN === 'eperm' && o.flags.some(([f, v]) => f === '--security-opt' && /^seccomp=/.test(v || ''))) die("chown: changing ownership of '/v': Operation not permitted");
@@ -337,7 +346,7 @@ async function scan(o) {
     'findings.json': kind === 'malformed' ? '{"documentType":"codex-security.findings","findings":"no"}' : JSON.stringify(findings),
     'coverage.json': JSON.stringify(coverage),
     'report.md': '# Report\n',
-    'artifacts/01_context/threat_model.md': '# Threat model\n',
+    'artifacts/01_context/threat_model.md': env.STUB_SCAN_THREAT ?? '# Threat model\nThe server serves files from public/ only.\n',
   };
   if (kind === 'deep-name') files['artifacts/a/b/c.md'] = 'deep\n';
   fs.mkdirSync(outDir, { recursive: true });

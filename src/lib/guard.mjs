@@ -1,7 +1,8 @@
 // The guard's state, kept outside the project where the orchestrator's sandbox can't write it: ~/.nextlevel/guard/
 // <project>/ (the project's .nextlevel/ is writable by the orchestrator, so nothing there decides anything):
 //   held.json   the held changes: { next, items: [{ id: 'G3', kind: 'disk' | 'commit' | 'merge' | 'git' | 'secret' |
-//               'push' (FR-015: a push to a deploy branch), status: 'held' | 'approved' | 'rejected' | 'applied' |
+//               'push' (FR-015: a push to a deploy branch) | 'policy' (the security engineer's, a text by its hash, no
+//               file), status: 'held' | 'approved' | 'rejected' | 'applied' |
 //               'superseded' | 'failed', files: [{ path, before, after, link? }], key,
 //               summary, diff, ... }]; before/after are sha-256 of the content ('-': not there)
 //   blobs/      the content of held and watched files, by its sha-256 (what an approval puts back is exactly that)
@@ -386,7 +387,7 @@ export function guardStore({ root, home = os.homedir(), entries = () => BUILT_IN
       return lock(() => {
         const h = readHeld();
         const key = rec.key || keyOf(rec.files);
-        const same = h.items.find((x) => x.kind === rec.kind && x.key === key && (x.task || '') === (rec.task || '') && (x.status === 'held' || (['merge', 'secret', 'push'].includes(rec.kind) && x.status === 'rejected')));
+        const same = h.items.find((x) => x.kind === rec.kind && x.key === key && (x.task || '') === (rec.task || '') && (x.status === 'held' || (['merge', 'secret', 'push', 'policy'].includes(rec.kind) && x.status === 'rejected')));
         if (same) return { item: same, fresh: false };
         const item = { id: `G${h.next}`, status: 'held', createdAt: now(), decidedAt: null, reason: '', ...rec, key };
         h.items.push(item);

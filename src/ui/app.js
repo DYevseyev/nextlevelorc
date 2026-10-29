@@ -240,7 +240,7 @@ function md(text, cls = 'md') {
 
 
 // ---------- tabs ----------
-const TABS = ['home', 'project', 'setup', 'build', 'team', 'tools', 'notes'];
+const TABS = ['home', 'project', 'setup', 'build', 'team', 'security', 'tools', 'notes'];
 // A card's own address (the cards redesign): #H29 is the Notes page with that card open
 const CARD_HASH = /^#(H[1-9]\d{0,6})$/;
 const hashCard = () => (CARD_HASH.exec(location.hash) || [])[1] || null;
@@ -259,6 +259,7 @@ function showTab() {
   }
   if (tab === 'notes') cards.data ? renderCards() : loadCards();
   if (tab === 'project') proj.data ? renderProject() : loadProject();
+  if (tab === 'security') sec.data ? renderSecurity() : loadSecurity();
   renderAll();
 }
 window.addEventListener('hashchange', showTab);
@@ -586,6 +587,134 @@ function orchestratorTile(b) {
 const tile = (label, kind, title, text, sub, button) =>
   h(`div.tile.k-${kind}`, {}, h('div.tile-label', {}, label), h('div.tile-title', {}, h('span.dot'), title), text ? h('p.tile-text', {}, text) : null, sub ? h('p.tile-sub', {}, sub) : null, button ? h('div.tile-actions', {}, button) : null);
 
+// ---------- the security engineer (1a-2): Home's Security card and the Security page ----------
+// Everything a scan wrote is the scanner's words about code an attacker may have written: text nodes only, paths and
+// URLs as text, never links (P7). Nothing here approves a policy: that is its card's Approve (the guard).
+const sec = { data: null, version: null, loading: false, again: false, open: new Set(), showPolicy: false };
+async function loadSecurity() {
+  if (sec.loading) return (sec.again = true);
+  sec.loading = true;
+  const res = await api('/api/security');
+  sec.loading = false;
+  sec.data = res.ok ? res : { ok: false, message: res.message || "The security engineer's scans couldn't be read." };
+  if (currentTab() === 'security') renderSecurity();
+  if (sec.again) {
+    sec.again = false;
+    loadSecurity();
+  }
+}
+const VALIDATION = { reproduced: 'Codex Security reproduced it', source: 'validated by source', none: 'not validated' };
+const SCAN_KIND = { asked: 'info', starting: 'info', waiting: 'info', running: 'info', done: 'good', failed: 'bad', couldnt: 'bad', stopped: 'idle' };
+const cut = (text, max) => {
+  const t = String(text ?? '');
+  return t.length > max ? `${t.slice(0, max)} (cut: ${t.length - max} more characters)` : t;
+};
+// Run a security scan, Deep scan (asked first: it spends much more of the plan), or Stop while one is asked or runs
+function securityButtons(s) {
+  if (!s?.on) return null;
+  const busy = pending.has('security');
+  const post = (action, button) => control('security', '/api/security', { action }, button);
+  if (s.last?.running) return h('span.row', {}, h('button.btn', { type: 'button', disabled: busy, onclick: (e) => post('stop', e.currentTarget) }, busy ? '…' : 'Stop the scan'));
+  return h('span.row', {},
+    h('button.btn.primary', { type: 'button', disabled: busy, onclick: (e) => post('scan', e.currentTarget) }, busy ? '…' : 'Run a security scan'),
+    h('button.btn', { type: 'button', disabled: busy, onclick: (e) => {
+      if (!confirm(`A deep scan can take up to ${s.deepMinutes} minutes and uses much more of your Codex plan. Start it?`)) return;
+      post('deep', e.currentTarget);
+    } }, 'Deep scan'));
+}
+const scanMinutes = (m) => (!m ? '' : m < 1 ? ', under a minute' : `, ${plural(Math.round(m), 'min')}`);
+const scanLine = (l) => `${l.deep ? 'Deep scan' : 'Scan'} ${l.id}: ${l.words}${l.at ? ` (${ago2(l.at)})` : ''}${scanMinutes(l.minutes)}${l.why ? `: ${l.why}` : ''}`;
+function securityCard(b) {
+  const s = b.security;
+  if (!s) return null;
+  const card = h('div.card.security-card', {}, h('h2', {}, 'Security'));
+  if (!s.on) {
+    card.append(h('p.muted', {}, 'The security engineer is off. ', h('button.linkish', { type: 'button', onclick: () => goTo('team') }, 'Turn it on on the Team page')));
+    return card;
+  }
+  if (!s.last) card.append(h('p.muted', {}, 'No scan yet. A scan reads the base branch in a container of its own and changes nothing.'));
+  else card.append(h(`p.scan-state.k-${SCAN_KIND[s.last.state] || 'idle'}`, {}, h('span.dot'), scanLine(s.last)));
+  if (s.trusted) {
+    card.append(h('p', {}, h('strong', {}, s.trusted.counts || 'No findings'), h('span.muted', {}, ` in the last trusted scan (${s.trusted.id}${s.trusted.partial ? ', partial' : ''})`)));
+    if (s.trusted.daybreak && /unconfirmed/.test(s.trusted.daybreak)) card.append(h('p.small.warn', {}, 'Daybreak unconfirmed for that scan.'));
+  }
+  for (const x of s.pending || []) card.append(h('p.small', {}, h('button.linkish', { type: 'button', onclick: () => goToCard(x.card || x.id) }, `A security policy waits for you (${x.card || x.id})`)));
+  card.append(h('div.row', {}, securityButtons(s), h('button.btn', { type: 'button', onclick: () => goTo('security') }, 'The Security page')));
+  return card;
+}
+
+function findingView(f) {
+  const open = sec.open.has(f.id);
+  const where = (f.where || []).map((l) => `${l.path}${l.line ? `:${l.line}${l.end && l.end !== l.line ? `-${l.end}` : ''}` : ''}`);
+  const head = h('summary', {},
+    h(`span.sev.sev-${f.severity}`, {}, f.severity),
+    h('span.finding-title', {}, cut(f.title, 300)),
+    h('span.muted.small', {}, ` ${f.id}${where[0] ? ` · ${where[0]}` : ''} · ${VALIDATION[f.validation?.state] || VALIDATION.none}`));
+  const part = (label, text) => (text ? [h('h4', {}, label), h('div.msg-text', {}, cut(text, 4000))] : null);
+  return h('details.finding', { open, ontoggle: (e) => (e.currentTarget.open ? sec.open.add(f.id) : sec.open.delete(f.id)) }, head,
+    part('What it is', f.what),
+    h('p.small', {}, [f.category ? `Category: ${f.category}` : '', f.confidence ? `Confidence: ${f.confidence}` : ''].filter(Boolean).join(' · ')),
+    where.length ? [h('h4', {}, 'Where'), h('ul.where-list', {}, where.map((w) => h('li', {}, h('code', {}, w))))] : null,
+    part('The evidence', f.evidence),
+    h('h4', {}, 'How far it was validated'),
+    h('p', {}, VALIDATION[f.validation?.state] || VALIDATION.none, f.validation?.method ? ` (${cut(f.validation.method, 300)})` : ''),
+    f.validation?.summary ? h('div.msg-text', {}, cut(f.validation.summary, 1000)) : null,
+    part('The suggested fix', f.fix));
+}
+function renderSecurity() {
+  const root = $('#security');
+  const d = sec.data;
+  if (!d || selecting(root)) {
+    if (!d) root.replaceChildren(h('p.muted', {}, 'Loading…'));
+    return;
+  }
+  if (!d.ok) return root.replaceChildren(h('div.callout.bad', {}, d.message));
+  const s = build?.security;
+  const role = h('div.card', {}, h('h2', {}, 'The security engineer'));
+  if (!d.role.on) role.append(h('p.muted', {}, 'Off. ', h('button.linkish', { type: 'button', onclick: () => goTo('team') }, 'Turn it on on the Team page')));
+  else {
+    role.append(h('p', {}, `Codex, model ${d.role.model || "the scanner's default"}${d.role.effort ? `, effort ${d.role.effort}` : ''}${d.role.daybreak ? ', Daybreak Blue' : ''}${d.role.profile ? ` (profile ${d.role.profile})` : ''}.`),
+      h('p.muted.small', {}, 'A scan reads the base branch in OpenAI\'s scanner container, with no network for its commands and nothing of this PC but the code. It changes nothing in the project.'),
+      h('div.row', {}, securityButtons(s)));
+  }
+
+  const scans = h('div.card', {}, h('h2', {}, 'Scans'));
+  if (!d.scans.length) scans.append(h('p.muted', {}, 'No scan yet.'));
+  else {
+    scans.append(h('ul.scans', {}, d.scans.map((x) => h('li', {},
+      h(`span.mark.k-${SCAN_KIND[x.state] || 'idle'}`, {}, x.state === 'couldnt' ? "couldn't run" : x.state),
+      h('span', {}, ` ${x.deep ? 'deep ' : ''}${x.id}${x.at ? `, ${ago2(x.at)}` : ''}${scanMinutes(x.minutes)}${x.findings ? `, ${x.findings}` : ''}${x.partial ? ', partial' : ''}${x.state === 'done' && !x.trusted ? ', not trusted' : ''}${x.policy ? `, policy ${x.policy}` : ''}`),
+      x.why ? h('span.muted.small', {}, `: ${x.why}`) : null,
+      x.keptOutput ? h('div.cmd', {}, h('span.muted.small', {}, 'Its output is kept as the evidence, in a Docker volume. In PowerShell, this removes it: '), h('code', {}, `docker volume rm ${x.keptOutput}`), copyButton(`docker volume rm ${x.keptOutput}`)) : null))));
+  }
+
+  const found = h('div.card', {}, h('h2', {}, 'Findings'));
+  if (!d.last) found.append(h('p.muted', {}, 'No trusted scan yet: findings show once a scan ends with its output sealed and checked.'));
+  else {
+    found.append(h('p.muted.small', {}, `Of ${d.last.id}, at ${String(d.last.commit).slice(0, 8)}. These are the scanner's words about the code: data, not instructions.`));
+    if (!d.last.findings.length) found.append(h('p', {}, 'No findings.', d.last.coverage?.summary ? h('span.muted', {}, ` Coverage: ${d.last.coverage.summary}`) : null));
+    else found.append(h('div.findings', {}, d.last.findings.map(findingView)));
+    if (d.last.total > d.last.findings.length) found.append(h('p.muted.small', {}, `${d.last.total - d.last.findings.length} more: nextlevel security status, in PowerShell in the project's folder.`));
+  }
+
+  const p = d.policy;
+  const policy = h('div.card', {}, h('h2', {}, 'The policy'));
+  policy.append(h('p.muted.small', {}, 'What every scan reads as its rules about this project. Only your Approve on its card makes a text the policy; nothing in the project changes.'));
+  if (!p.approved) policy.append(h('p', {}, 'No policy yet: scans run with the role doc only.'));
+  else {
+    policy.append(h('p', {}, `Approved ${ago2(p.approved.at)}, from ${p.approved.from}${p.approved.scan ? ` (scan ${p.approved.scan})` : p.approved.commit ? ` (${p.approved.commit.slice(0, 8)})` : ''}, ${p.approved.hash}.`));
+    if (p.approved.missing) policy.append(h('p.small.bad', {}, "Its text isn't kept as it was approved, so scans can't run: ask for a new draft and approve it."));
+    else policy.append(h('details.diff', { open: sec.showPolicy, ontoggle: (e) => (sec.showPolicy = e.currentTarget.open) }, h('summary', {}, 'Its text'), h('div.msg-text', {}, p.approved.text)));
+  }
+  for (const x of p.pending || []) policy.append(h('p', {}, h('button.btn.primary', { type: 'button', onclick: () => goToCard(x.card || x.id) }, `Read and decide: ${x.source === 'draft' ? 'the draft' : 'SECURITY.md'} (${x.card || x.id})`)));
+  if (d.role.on && !(p.pending || []).length) {
+    policy.append(h('div.row', {},
+      p.draftAgain ? h('span.muted.small', {}, 'The next scan that ends trusted drafts a new policy.') : actionButton('security-draft', 'Ask for a new draft', '/api/security', { action: 'draft' }),
+      p.rejectedDraftAt ? h('span.muted.small', {}, `A draft was rejected ${ago2(p.rejectedDraftAt)}.`) : null));
+  }
+  root.replaceChildren(h('div.grid', {}, h('div.col', {}, role, found), h('div.col', {}, scans, policy)));
+}
+
 // ---------- Show activity (Home): a running task's progress notes and technical feed ----------
 // Collapsed by default; which ones are open is remembered in this browser (the dashboard keeps its port, so the
 // page keeps its address). The page asks for a task's activity only while its toggle is open, every 2 seconds.
@@ -747,7 +876,7 @@ function renderHome() {
   }
   progress.append(h('p.muted.small', {}, `Last activity ${b.lastActivity}. `, h('button.linkish', { type: 'button', onclick: () => goTo('project') }, 'The roadmap')));
 
-  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), progress, usageCard(b)))].filter(Boolean));
+  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), securityCard(b), progress, usageCard(b)))].filter(Boolean));
 }
 
 // The update in progress, paused or just done (src/updater.mjs): its steps, what it waits for, and the owner's buttons
@@ -1819,6 +1948,16 @@ function renderAll() {
   if (tab === 'team') renderTeam();
   if (tab === 'tools') renderTools();
   if (!b.ok) return;
+  // The security engineer's scans or policy changed: the Security page reads them again
+  if (b.security && b.security.version !== sec.version) {
+    sec.version = b.security.version;
+    if (sec.data || tab === 'security') loadSecurity();
+  }
+  const sc = $('#security-count');
+  const secWaits = (b.security?.pending || []).length + (b.security?.trusted?.high ? 1 : 0);
+  sc.hidden = !secWaits;
+  sc.textContent = String(secWaits);
+  sc.className = `count ${b.security?.trusted?.high ? 'error' : 'warn'}`;
   const needs = b.needs || [];
   const urgent = needs.filter((n) => n.level !== 'info').length;
   const home = $('#home-count');
@@ -2057,7 +2196,7 @@ function handoffCard(x) {
 // A change to protected files the hub holds (lib/guard.mjs): what it does in plain words, read from the change by
 // nextlevel's code (never by an AI), its exact diff, and Approve or Reject. Only here: not from a command, not from
 // the phone. Its words and diff come from the guard's own records (GET /api/cards "guard"), not from the card.
-const GUARD_WHO = (g) => (g.kind === 'push' ? `A push to ${g.target}` : g.kind === 'git' ? "Git's own hooks and settings" : g.kind === 'merge' || ['merge', 'slot'].includes(g.on) ? `Task ${g.task}` : g.kind === 'commit' || g.on === 'commit' ? "The orchestrator's commit" : `A change on disk (${g.by || "during the orchestrator's work"})`);
+const GUARD_WHO = (g) => (g.kind === 'policy' ? (g.source === 'draft' ? "The security engineer's draft" : "The project's SECURITY.md") : g.kind === 'push' ? `A push to ${g.target}` : g.kind === 'git' ? "Git's own hooks and settings" : g.kind === 'merge' || ['merge', 'slot'].includes(g.on) ? `Task ${g.task}` : g.kind === 'commit' || g.on === 'commit' ? "The orchestrator's commit" : `A change on disk (${g.by || "during the orchestrator's work"})`);
 function diffView(text) {
   const pre = h('pre.diff');
   for (const line of String(text || '').split('\n')) {
@@ -2080,7 +2219,10 @@ function guardCard(g) {
       git: "Git's own hooks and settings make git run programs or send a push somewhere else, outside any sandbox; nextlevel didn't make this change, so all git work waits until you decide.",
       secret: g.env ? 'A .env file holds your secrets: nextlevel never commits one.' : 'A value from your .env is a secret: nextlevel commits it only if you say it may be. The value itself is never shown here.',
       push: `${g.why || `A push to ${g.target} may deploy`}, so nothing goes out until you decide.`,
-    }[g.kind] || 'Protected files steer the agents and your tools outside any sandbox, so nothing changes until you decide.'} ${g.kind === 'push' ? 'What would go out, as nextlevel reads it from git (not an AI):' : 'What it does, as nextlevel reads it from the change (not an AI):'}`),
+      policy: `${g.source === 'draft' ? `The security engineer drafted a security policy from scan ${g.scan}` : `The project's SECURITY.md (${String(g.commit).slice(0, 8)}) could be the security policy`}. A security policy is what every scan reads as its rules: what matters, what is out of scope. Nothing in the project changes either way.`,
+    }[g.kind] || 'Protected files steer the agents and your tools outside any sandbox, so nothing changes until you decide.'} ${g.kind === 'push' ? 'What would go out, as nextlevel reads it from git (not an AI):' : g.kind === 'policy' ? '' : 'What it does, as nextlevel reads it from the change (not an AI):'}`),
+    g.warning ? h('p.small.act-held', {}, g.warning) : null,
+    g.cut ? h('p.small.muted', {}, `Its text was cut to 64 KB (${g.cut} more characters left out); the approval covers the text shown.`) : null,
     h('ul.guard-summary', {}, (g.summary || []).map((l) => h(`li${/^\s/.test(l) ? '.sub' : ''}`, {}, l.trim()))),
     g.note ? h('p.small.act-held', {}, g.note) : null,
     g.message ? h('p.small', {}, h('span.muted', {}, 'Commit message: '), g.message) : null,
@@ -2088,12 +2230,12 @@ function guardCard(g) {
     g.notRestored?.length ? h('p.small.bad', {}, `Couldn't be set back: ${g.notRestored.join(', ')}. Put it back by hand, or approve it.`) : null,
     g.kind === 'push' && g.files.length ? h('details.diff', { open: true }, h('summary', {}, g.diffCut ? 'The exact change to the protected files (its first 200 KB; the approval covers all of it)' : 'The exact change to the protected files'), diffView(g.diff || '(no text: see the words above)')) : null,
     g.kind === 'push' && g.files.length ? h('details.diff', {}, h('summary', {}, 'The commits that would go out, newest first'), diffView(g.log || '')) : null,
-    g.kind === 'push' && g.files.length ? null : h('details.diff', { open: true }, h('summary', {}, g.kind === 'push' ? 'The commits that would go out, newest first' : g.diffCut ? 'The exact change (its first 200 KB; the approval covers all of it)' : 'The exact change'), diffView(g.diff || '(no text: see the words above)')));
+    g.kind === 'push' && g.files.length ? null : h('details.diff', { open: true }, h('summary', {}, g.kind === 'push' ? 'The commits that would go out, newest first' : g.kind === 'policy' ? (g.diffCut ? 'The exact text, as a change from the policy approved now (its first 200 KB)' : 'The exact text, as a change from the policy approved now') : g.diffCut ? 'The exact change (its first 200 KB; the approval covers all of it)' : 'The exact change'), diffView(g.diff || '(no text: see the words above)')));
   if (held) {
-    const area = h('textarea.reply-box', { rows: 2, placeholder: 'Why you reject it (the orchestrator reads it)', 'aria-label': `Reason to reject ${g.id}`, dataset: { key: `${key}:reason` }, oninput: (e) => cards.replies.set(key, e.target.value) });
+    const area = h('textarea.reply-box', { rows: 2, placeholder: g.kind === 'policy' ? 'Why you reject it (kept with the card)' : 'Why you reject it (the orchestrator reads it)', 'aria-label': `Reason to reject ${g.id}`, dataset: { key: `${key}:reason` }, oninput: (e) => cards.replies.set(key, e.target.value) });
     area.value = cards.replies.get(key) || '';
     const decide = async (action) => {
-      if (action === 'approve' && !confirm(g.kind === 'push' ? `Approve ${g.id}? The hub pushes exactly ${String(g.sha || '').slice(0, 7)} (${g.count} commit(s)) to ${g.target}${g.deploy ? ', which may deploy' : ''}${g.files.length ? `, with its change to ${g.files.join(', ')}` : ''}.` : `Approve ${g.id}? Exactly this change to ${g.files.join(', ')} goes in.`)) return;
+      if (action === 'approve' && !confirm(g.kind === 'policy' ? `Approve ${g.id}? Exactly this text becomes the policy every scan reads.` : g.kind === 'push' ? `Approve ${g.id}? The hub pushes exactly ${String(g.sha || '').slice(0, 7)} (${g.count} commit(s)) to ${g.target}${g.deploy ? ', which may deploy' : ''}${g.files.length ? `, with its change to ${g.files.join(', ')}` : ''}.` : `Approve ${g.id}? Exactly this change to ${g.files.join(', ')} goes in.`)) return;
       const res = await cardPost('/api/guard', { action, id: g.id, reason: cards.replies.get(key) || '' }, key);
       if (res?.ok) cards.replies.delete(key);
     };
@@ -2103,6 +2245,7 @@ function guardCard(g) {
       disk: 'Approve: it goes back as changed. Reject: it stays as it was.',
       git: 'Approve: recorded as it is now, and git work goes on. Reject: put back as it was recorded, and git work goes on.',
       push: `Approve: the hub pushes exactly this commit to ${g.target} (if anything moved since, nothing is pushed and a new card asks). Reject: nothing is pushed.`,
+      policy: 'Approve: exactly this text becomes the policy every scan reads. Reject: the policy stays as it is, and this text never comes back.',
       secret: g.env ? 'A .env file is never committed: Reject it, and take it out of the change.' : g.on === 'merge' ? 'Approve (only if the value may be public): the hub merges the task. Reject: it goes back to the orchestrator with your reason.' : 'Approve (only if the value may be public): the hub commits it. Reject: it stays out.',
     }[g.kind] || '';
     card.append(area, h('div.row', {},

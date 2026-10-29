@@ -743,3 +743,31 @@ p.bad { color: var(--error); }
 .checks-state.warn strong, p.warn { color: var(--warn); }
 .checks-jobs { margin: .25rem 0 .5rem; padding-left: 1.2rem; }
 .checks-jobs li { margin: .2rem 0; overflow-wrap: anywhere; }
+
+/* The security engineer (1a-2): Home's Security card and the Security page */
+.security-card .row, .tab .card .row { flex-wrap: wrap; align-items: center; }
+.scan-state { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; overflow-wrap: anywhere; }
+.scan-state .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--skip); }
+.scan-state.k-good .dot { background: var(--ok); }
+.scan-state.k-info .dot { background: var(--info); }
+.scan-state.k-bad .dot { background: var(--error); }
+ul.scans { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+ul.scans li { overflow-wrap: anywhere; }
+ul.scans .cmd { flex-wrap: wrap; margin-top: 4px; }
+ul.scans code { overflow-wrap: anywhere; }
+.mark.k-good { background: var(--ok-bg); color: var(--ok); }
+.mark.k-info { background: var(--info-bg); color: var(--info); }
+.mark.k-bad { background: var(--error-bg); color: var(--error); }
+.mark.k-idle { background: var(--soft); color: var(--skip); }
+.findings { display: grid; gap: 6px; }
+details.finding { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); min-width: 0; }
+details.finding summary { cursor: pointer; overflow-wrap: anywhere; }
+details.finding h4 { margin: 10px 0 4px; font-size: 13px; }
+details.finding .where-list { margin: 0; padding-left: 18px; }
+details.finding code { overflow-wrap: anywhere; }
+.finding-title { font-weight: 600; margin-left: 6px; }
+.sev { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+.sev-critical, .sev-high { background: var(--error-bg); color: var(--error); }
+.sev-medium { background: var(--warn-bg); color: var(--warn); }
+.sev-low { background: var(--info-bg); color: var(--info); }
+.sev-info { background: var(--soft); color: var(--skip); }

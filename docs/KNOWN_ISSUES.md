@@ -843,6 +843,13 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), w
   write a request file into the guard's folder, which the hub takes as the owner's ask; change `.nextlevel/security/`
   (the findings' hashes are kept in the guard's folder, outside the project, so a changed file reads as untrusted); hold
   the one-scan lease. Each is a bar, not a wall.
+- **An approved policy steers the scans:** a draft written to hide a finding is caught only by the owner reading it.
+  A draft comes from the scanner's threat model, which its model wrote from the code (an attacker may have written
+  that code), and the threat model isn't in the scanner's seal: the hub's record proves only that it is the file the
+  copy-out took. Its card says so. The scanner's own process can read the policy it is given (a read-only mount); it
+  holds nothing secret.
+- **The Security page and Home's buttons are the dashboard's:** an agent running as the owner with the dashboard's
+  session key could ask for a scan there as from the command (FR-017 part 2A: the key is in the page's tab only).
 
 ## The tester (part 1)
 - **The sign-ins are sealed for your account, not walled from it.** Any program running as you can ask Windows' DPAPI,
