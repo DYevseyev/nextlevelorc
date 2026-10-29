@@ -1505,6 +1505,12 @@ test('guard.held: the changes to protected files that wait for the owner, and th
     { id: 'G6', kind: 'push', status: 'held', from: 'M1-02-ci', target: 'M1-02-ci', sha: 'fedcba9876543210', files: [{ path: '.github/workflows/ci.yml' }] },
   ]) });
   assert.match(pushes.detail, /^2 waiting for you: G5 \(the push of main to production: commit 0123456\); G6 \(the push of M1-02-ci to M1-02-ci: \.github\/workflows\/ci\.yml\)$/);
+  // a security policy on its card (the security engineer, 1a-2): no file, its source
+  const policies = await check('guard.held', { files: held([
+    { id: 'G7', kind: 'policy', source: 'draft', scan: 'sec-20261029-210000-abcd', status: 'held', files: [] },
+    { id: 'G8', kind: 'policy', source: 'SECURITY.md', status: 'held', files: [] },
+  ]) });
+  assert.match(policies.detail, /^2 waiting for you: G7 \(a security policy: the draft from sec-20261029-210000-abcd\); G8 \(a security policy: SECURITY\.md\)$/);
   assert.equal((await check('guard.held', { root: null })).status, 'skip');
 });
 

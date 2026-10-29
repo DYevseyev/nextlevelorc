@@ -147,7 +147,7 @@ export function ownerNeeds(b, checks = {}) {
       level: 'error',
       id: g.card || g.id,
       text: `${g.what || `${guardWho(g)} changes ${fileList(g.files)}`}: approve or reject it (${g.id})`,
-      why: { git: "git's own hooks and settings make git run programs or send a push elsewhere, and nextlevel didn't make this change", secret: 'a value from your .env is a secret: nextlevel never commits one unless you say so', push: pushWhy(g) }[g.kind] || 'those files steer the agents and your tools outside any sandbox, so nextlevel holds the change until you decide',
+      why: { git: "git's own hooks and settings make git run programs or send a push elsewhere, and nextlevel didn't make this change", secret: 'a value from your .env is a secret: nextlevel never commits one unless you say so', push: pushWhy(g), policy: 'every security scan reads the approved policy as its rules; nothing in the project changes either way' }[g.kind] || 'those files steer the agents and your tools outside any sandbox, so nextlevel holds the change until you decide',
       action: { label: 'Review it', page: 'notes', focus: g.card || '' },
     });
   }
@@ -403,7 +403,8 @@ export function blockersView(text, handoff = [], closed = [], guard = []) {
     const handled = it.kind === 'needs' && ids.length > 0 && ids.every((id) => closedIds.has(id) && !openIds.has(id));
     return { ...it, ids, handled };
   });
-  for (const g of guard.filter((x) => x.status === 'held')) {
+  // (a security policy's card blocks no work: it is under Needs you only)
+  for (const g of guard.filter((x) => x.status === 'held' && x.kind !== 'policy')) {
     const ids = `${g.id}${g.card ? `, card ${g.card}` : ''}`;
     const text = g.kind === 'git' ? `${g.what} for your approval (${ids})` : g.kind === 'secret' ? `${g.what}: it waits for your approval (${ids})` : g.kind === 'push' && !(g.files || []).length ? `${guardWho(g)}, a deploy branch, waits for your approval (${ids})` : `${guardWho(g)} waits for your approval: it changes ${fileList(g.files)}, protected files (${ids})`;
     list.push({ kind: 'blocked', label: 'Blocked by the tool', text, ids: g.card ? [g.card] : [], guard: g.id, handled: false });

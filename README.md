@@ -48,7 +48,8 @@ orchestrator, autopilot, the bridge test) and press **d** for the dashboard, whi
 the next action.
 
 An optional **security engineer** scans your code for security problems when you ask, in OpenAI's Codex Security
-scanner in Docker, and never changes the code (`docs/GUIDE.md`, "The security engineer").
+scanner in Docker, and never changes the code. Home and its Security page show the findings, and a policy you
+approve on a card guides every scan (`docs/GUIDE.md`, "The security engineer").
 
 ## How safe is it
 

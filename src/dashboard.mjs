@@ -669,6 +669,22 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         return reply(res, cardAction(api.cards.handoff, b, handoffView), { raw: true });
       case 'POST /api/guard':
         return reply(res, guardAction(b));
+      case 'GET /api/security':
+        // The Security page (the security engineer, 1a-2): the role, the scans, the last trusted scan's findings, the policy
+        return reply(res, [200, { ok: true, ...api.security.view() }]);
+      case 'POST /api/security': {
+        // Home's and the Security page's buttons: a scan, a deep scan, stop, a new draft of the policy (the owner's)
+        if (!['scan', 'deep', 'stop', 'draft'].includes(b.action)) return reply(res, [400, { ok: false, message: 'action must be scan, deep, stop or draft' }]);
+        if (b.id !== undefined && (typeof b.id !== 'string' || !/^sec-[\w-]{1,40}$/.test(b.id))) return reply(res, [400, { ok: false, message: 'which scan?' }]);
+        try {
+          const r = api.security.act(b);
+          return reply(res, [r.ok ? 200 : 409, r]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        } finally {
+          pushBuild();
+        }
+      }
       case 'POST /api/hub':
         if (b.action === 'start') return reply(res, await act((say) => api.startHub(say)));
         if (b.action === 'stop') return reply(res, await act((say) => api.stopHub(say)));

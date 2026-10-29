@@ -6,9 +6,10 @@ import { protectedList } from '../lib/protect.mjs';
 import { fail, pass, step } from './lib.mjs';
 
 const who = (x) =>
-  x.kind === 'push' ? `the push of ${x.from} to ${x.target}` : x.kind === 'git' ? "git's own hooks and settings" : x.kind === 'merge' || ['merge', 'slot'].includes(x.on) ? `task ${x.task}` : x.kind === 'commit' || x.on === 'commit' ? "the orchestrator's commit" : 'a change on disk';
+  x.kind === 'policy' ? 'a security policy' : x.kind === 'push' ? `the push of ${x.from} to ${x.target}` : x.kind === 'git' ? "git's own hooks and settings" : x.kind === 'merge' || ['merge', 'slot'].includes(x.on) ? `task ${x.task}` : x.kind === 'commit' || x.on === 'commit' ? "the orchestrator's commit" : 'a change on disk';
 const itemsOf = (x) => {
   if (x.kind === 'git') return x.items || [];
+  if (x.kind === 'policy') return [x.source === 'draft' ? `the draft from ${x.scan}` : 'SECURITY.md'];
   const files = (x.files || []).map((f) => f.path);
   // a deploy push that changes no protected file is held for what it is: exactly that commit
   return files.length || x.kind !== 'push' ? files : [`commit ${String(x.sha || '').slice(0, 7)}`];

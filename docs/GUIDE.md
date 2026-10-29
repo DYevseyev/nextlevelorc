@@ -224,8 +224,17 @@ account in a Docker volume of its own. In PowerShell, in the project's folder:
    your browser and type the code it shows there.
 4. Turn the role on: the Team page, or `nextlevel team set security --engine codex --daybreak on`. Without a model it
    picks the first one Daybreak Blue works on.
-5. `nextlevel security scan` (or `--deep`), then `nextlevel security status` for how it goes and its findings;
-   `nextlevel security stop` stops it. A 41-file scan used about 6% of a week's allowance; a larger project uses more.
+5. Home's **Run a security scan** (or **Deep scan**, which asks first: it uses much more of your plan), or
+   `nextlevel security scan [--deep]`. Home's Security card and the **Security** page show how it goes and its
+   findings (`nextlevel security status` too); Stop, or `nextlevel security stop`, stops it. A 41-file scan used about
+   6% of a week's allowance; a larger project uses more.
+
+**The policy.** A scan can read a security policy, your rules for this project (what matters, what is out of scope).
+None counts until you approve its exact text on a card under Needs you: the security engineer drafts one from its first
+trusted scan, and the project's own `SECURITY.md` (at the top of the base branch) gets a card too. Read a draft before
+you approve it: the scanner's model wrote it from the code, and an approved policy steers every scan. Approve changes
+no file in the project; Reject keeps the policy as it is, and that text never comes back. The Security page shows the
+policy, and **Ask for a new draft** has the next trusted scan draft again.
 
 Nothing starts a scan by itself, and a scan isn't a task: autopilot doesn't see it. Anything on your PC that can run
 `docker` can read the scanner's sign-in (`docs/KNOWN_ISSUES.md`).

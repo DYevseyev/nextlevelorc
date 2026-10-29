@@ -2074,3 +2074,22 @@ One entry each: date, decision, why, alternatives.
   a kept value gets a mask of its own (marked `data-nextlevel-i`), besides the password fields, the fields the sign-in
   and the steps filled, and the plan's and environment's masks. A value found only across elements keeps the picture
   out. A mask the browser can't read as a selector keeps it out too, rather than a picture without that mask.
+- 2026-10-29 — **Home gets a Security card, not a fourth tile.** The tiles row holds the team, autopilot and the
+  orchestrator; a fourth broke it at phone width. The card sits in the right column, under Blockers.
+- 2026-10-29 — **A security policy is a guard record with no file.** Its text is kept in the guard's blobs and held by
+  the hash of the safe text alone (no header line: what it came from is the record's), so a rejection is found again
+  and an unchanged SECURITY.md at a new commit gets no new card. Approve sets `applied`, not `approved` (the build view
+  keeps approved records of every kind but disk), and writes `security-policy.json` in the guard's folder, the hub's
+  and the dashboard's alone. No command approves one, and no phone message comes: the card is under Needs you, and a
+  policy card blocks no work, so it isn't on Blockers.
+- 2026-10-29 — **A draft comes only from a threat model the hub's record lists with its hash.** `.nextlevel/` is the
+  orchestrator's to write, and the threat model isn't in the scanner's seal, so the record of the copy-out is what ties
+  the text to the scan. SECURITY.md is read from the base branch's root only, as a regular file by its mode (a link or
+  a nested one never counts). A policy card's text comes from the blob, never a file the team can write.
+- 2026-10-29 — **The policy and the role doc are hashed again right before the scan starts.** The knowledge-base folder
+  is outside the guard's folder and is written before the dry run, minutes before the scan; what the scan reads is
+  checked against what was approved and written just before `docker run`.
+- 2026-10-29 — **Home's card shows the last scan's reason, not the doctor's step.** The review suggested showing a
+  failing `security.login` or `security.probe` step instead of Run a security scan. Those checks run Docker and aren't
+  kept for the build data (only the probe's verdict is, by image), so the card shows the newest scan's words and why it
+  couldn't run (which names the doctor's row), and the Setup page has the step.
