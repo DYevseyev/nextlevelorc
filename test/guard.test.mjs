@@ -342,6 +342,10 @@ test("an owner's write of nextlevel.json while the orchestrator acts never appro
     assert.match(fixed.out, /The fix for "[^"]+" failed: nextlevel\.json changed while the orchestrator is at work/);
     assert.equal(fs.readFileSync(file, 'utf8'), theirs);
     assert.ok(!store.isApproved('nextlevel.json', createHash('sha256').update(theirs).digest('hex')), 'never approved');
+    // committed by the orchestrator itself (as one on Antigravity can): HEAD moved after the watch opened, so still refused
+    p.git('commit', '-q', '-a', '-m', 'the orchestrator commits its own edit');
+    assert.match(team(['window', 'visible']).message, /changed while the orchestrator is at work/);
+    assert.equal(fs.readFileSync(file, 'utf8'), theirs, 'nothing written over the committed edit');
     // (an agent's session isn't stopped here: its write is the guard's to judge, and recordOwner approves nothing for it)
     assert.equal(ownerWriteProblem(p.repo, ['nextlevel.json'], { home, env: { NEXTLEVEL_AGENT: 'orchestrator' } }), '');
     assert.match(ownerWriteProblem(p.repo, ['nextlevel.json'], { home, env: {} }), /changed while the orchestrator is at work/);

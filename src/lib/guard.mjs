@@ -423,7 +423,9 @@ export function guardStore({ root, home = os.homedir(), entries = () => BUILT_IN
           const e = entryOf(rel, s);
           if (e.hash !== ABSENT) files[rel] = e;
         }
-        st.window = { openedAt: now(), holders: {}, files };
+        // (HEAD then: what was committed before the orchestrator could act, for ownerWriteProblem)
+        const head = gitRead(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], root);
+        st.window = { openedAt: now(), holders: {}, files, ...(head.ok && /^[0-9a-f]{40,64}$/.test(head.out.trim()) ? { head: head.out.trim() } : {}) };
       }
       st.window.holders[key] = { pid, what, since: now() };
       writeJson(F.state, st);
@@ -668,8 +670,9 @@ export function ownerWriteProblem(root, rels, { home = os.homedir(), env = proce
       const h = sha(buf);
       const base = Object.entries(win.files || {}).find(([k]) => pathKey(k) === pathKey(rel))?.[1]?.hash;
       if (h === base || g.isApproved(rel, h)) continue;
-      const head = spawnSync('git', ['cat-file', 'blob', `HEAD:${rel}`], { cwd: root, env: readEnv(), windowsHide: true, maxBuffer: 2 * BLOB_MAX });
-      if (head.status === 0 && fold(head.stdout) === fold(buf)) continue; // (as committed, line ends aside)
+      // (as committed when the watch opened, line ends aside: a commit made since could be the orchestrator's own)
+      const head = win.head ? spawnSync('git', ['cat-file', 'blob', `${win.head}:${rel}`], { cwd: root, env: readEnv(), windowsHide: true, maxBuffer: 2 * BLOB_MAX }) : null;
+      if (head?.status === 0 && fold(head.stdout) === fold(buf)) continue;
       return `${rel} changed while the orchestrator is at work, and you haven't approved that change: nothing was saved. Try again once the orchestrator is done (its round ends, or you close its window); Home shows the change on a card if it was the orchestrator's.`;
     }
     return '';
