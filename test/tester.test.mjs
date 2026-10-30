@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -1140,7 +1141,8 @@ test("a card's plan fails: a fix draft from code for the orchestrator, quoting w
 });
 
 test("after a task's merge and after a deploy: a spec's Acceptance line runs its plan once the environment has the merge; a deploy waits for the version endpoint to name the pushed commit, or its wait; a deploy's new failure tells the phone", async () => {
-  const versionFile = path.join(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'nl-version-')), 'version');
+  const versionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nl-version-'));
+  const versionFile = path.join(versionDir, 'version');
   fs.writeFileSync(versionFile, 'old');
   const app = await startWebApp({ versionFile });
   const p = testerProject(app, { mutations: false });
@@ -1214,6 +1216,7 @@ test("after a task's merge and after a deploy: a spec's Acceptance line runs its
   } finally {
     await app.close();
     p.cleanup();
+    fs.rmSync(versionDir, { recursive: true, force: true });
   }
 });
 const listRunsOf = (p) => {

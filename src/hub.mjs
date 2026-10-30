@@ -6523,8 +6523,8 @@ function testerEnded(ask, r) {
           // (the values in it come from the run's record, made safe already; its own lines are code's: only kept values are
           // taken out again, never by shape, which would turn a long plan's path into *** and break its Acceptance: line)
           fs.writeFileSync(file, redactReport(fixDraft({ run: r, card: x.id, step }), acceptContext().secrets));
-          store.acceptFix(x.id, { run: ask.id, step: step.n, file: rel(file) });
-          log(`acceptance run ${ask.id}: step ${step.n} failed; the fix draft for ${x.id} is ${rel(file)}`);
+          store.acceptFix(x.id, { run: ask.id, step: step.n, file: slash(rel(file)) });
+          log(`acceptance run ${ask.id}: step ${step.n} failed; the fix draft for ${x.id} is ${slash(rel(file))}`);
         }
       } else if (state !== 'checking') {
         testerTell(`${NAME}: ${x.id} needs you`, `${acceptWords(card)} (card ${x.id}, ${title}, on the dashboard: Notes and handoffs).`, 'high');
