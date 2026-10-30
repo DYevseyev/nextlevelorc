@@ -4,6 +4,7 @@
 //   nextlevel security stop [<id>]     stop the scan that runs
 //   nextlevel security login           sign the scanner in, in this window (OpenAI's device page)
 //   nextlevel _scan <what>             one scan, in a process the hub follows
+//   nextlevel _daybreak                the Daybreak model watch's one look, in a process the hub follows (1b-1)
 // A scan runs in OpenAI's scanner container (lib/securityspec.mjs builds every docker command, lib/securityrun.mjs runs
 // the steps the doctor shares): the base branch's head in a checkout of its own with the steering files moved aside, the
 // approved policy read-only, three volumes the scanner alone owns, and nothing else of the PC. Its findings count only
@@ -20,10 +21,13 @@ import { resolveBin, runQuiet, spawnDirect } from './lib/proc.mjs';
 import { processStartSync } from './lib/proctree.mjs';
 import { DIGEST, REVISION, SECCOMP_FILE, VERSION, imageRef, seccompProblem } from './lib/securityimage.mjs';
 import { apiPortOpen, apiPortWords, copyOut, daybreakFor, accessPrograms, dockerFacts, dockerSettingsText, ensureVolume, imagePresent, ownVolumes, runProbes, signedIn } from './lib/securityrun.mjs';
-import { newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
+import { holderWords, withLease, newScanId, readScan, refreshCheckout, releaseLease, scanDir, setAside, SCAN_ID, takeLease, trackedSecrets, leaseHolder, listScans, writeScan } from './lib/securityscan.mjs';
 import { FROM, POLICY_FILE_NAME, POLICY_MAX, readPolicyState, threatModelOf } from './lib/securitypolicy.mjs';
 import { LABEL_KIND, LABEL_PROJECT, POLICY_FILE, ROLE_FILE, accountKey, containerName, loginArgs, memoryLimit, scanRunArgs, volumes } from './lib/securityspec.mjs';
 import { fileURLToPath } from 'node:url';
+import { clockNow } from './lib/clock.mjs';
+import { readWatch, seenNews, watchFile, withAnswer } from './lib/daybreakwatch.mjs';
+import { readJsonFile, updateJsonFile } from './lib/filelock.mjs';
 
 const TEMPLATES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'templates', 'project');
 import { agentSession, ownerOnly } from './lib/session.mjs';
@@ -120,18 +124,20 @@ async function login(a, { root, config, envKeys }) {
     return 1;
   }
   const vols = volumes({ projectKey: projectKey(root), account: accountKey(p.name) });
-  const made = ensureVolume(docker, vols.state, { kind: 'state', projectKey: projectKey(root) }) || ensureVolume(docker, vols.login, { kind: 'login' });
-  const own = made ? { problem: made } : ownVolumes(docker, vols, { seccomp: SECCOMP_FILE });
-  if (own.problem) {
-    console.error(`Can't sign in: ${own.problem}`);
-    return 1;
-  }
-  // (one at a time with the scans: a scan and a sign-in never write the login volume together)
+  // (one at a time with the scans, the setup checks and the Daybreak watch: nothing else mounts the sign-in volume while
+  // it is written, its owner's helper included)
   const home = os.homedir();
   const me = { root, pid: process.pid, start: processStartSync(process.pid), scan: 'login' };
   const lease = takeLease(home, me);
   if (!lease.ok) {
-    console.error(`Can't sign in now: a security scan runs${lease.holder?.root ? ` (in ${path.basename(lease.holder.root)})` : ''}. Sign in when it ends (nextlevel security status).`);
+    console.error(`Can't sign in now: ${holderWords(lease.holder)} is using the scanner's sign-in. Sign in when it ends (nextlevel security status).`);
+    return 1;
+  }
+  const made = ensureVolume(docker, vols.state, { kind: 'state', projectKey: projectKey(root) }) || ensureVolume(docker, vols.login, { kind: 'login' });
+  const own = made ? { problem: made } : ownVolumes(docker, vols, { seccomp: SECCOMP_FILE });
+  if (own.problem) {
+    releaseLease(home, me);
+    console.error(`Can't sign in: ${own.problem}`);
     return 1;
   }
   try {
@@ -319,6 +325,47 @@ export function recoverScans({ root, stateDir, envKeys, running = null }) {
     }
   }
   return said;
+}
+
+// ---------- the Daybreak model watch: nextlevel _daybreak (1b-1, lib/daybreakwatch.mjs) ----------
+// Once a day and when the image changes, the hub's child asks the scanner's own Codex which models the role's sign-in
+// covers with Daybreak Blue, under the PC's lease (it mounts the sign-in volume, which `codex debug models` may write
+// when it refreshes the sign-in). Its answer goes into the sign-in's record, which every project reads. A busy lease
+// writes nothing (the next look tries again); a scanner not on this PC is a failed try, never a pull.
+export const watchOf = (config) => {
+  const p = securityProfile(config);
+  return p ? { file: watchFile(os.homedir(), accountKey(p.name)), account: accountKey(p.name), role: p } : null;
+};
+export const readWatchFile = (file) => readWatch(readJsonFile(file, {}));
+export function cmdDaybreakProcess(ctx) {
+  const session = agentSession();
+  if (session) {
+    console.error(ownerOnly('nextlevel _daybreak', "The hub runs the Daybreak watch itself, once a day, while the security engineer is on.", session));
+    return 1;
+  }
+  const { root, config, envKeys } = ctx;
+  const w = watchOf(config);
+  if (!w) return 0;
+  const docker = dockerRunner(envKeys);
+  const now = clockNow();
+  const bad = seccompProblem() || (!imagePresent(docker) ? `the scanner isn't on this PC (docker pull ${imageRef()})` : '');
+  const vols = volumes({ projectKey: projectKey(root), account: w.account });
+  const answer = bad ? { ok: false, why: bad } : withLease(os.homedir(), { root, who: 'watch' }, () => accessPrograms(docker, vols, { seccomp: SECCOMP_FILE }));
+  if (answer.busy) {
+    console.log(`The Daybreak watch waits: ${answer.busy} is using the scanner's sign-in.`);
+    return 0;
+  }
+  const rec = updateJsonFile(w.file, (r) => withAnswer(r, answer, { now, digest: DIGEST }), {});
+  const r = readWatch(rec);
+  console.log(r.ok ? `Daybreak Blue covers ${r.covered.join(', ') || 'no model'}${r.news.length ? ` (new: ${r.news.map((n) => n.model).join(', ')})` : ''}.` : `The Daybreak watch couldn't ask: ${r.why}`);
+  return 0;
+}
+// The owner's Seen on a piece of the watch's news (Home's Security card)
+export function daybreakSeen(config, model) {
+  const w = watchOf(config);
+  if (!w) return { ok: false, message: 'The security engineer is off.' };
+  updateJsonFile(w.file, (r) => seenNews(r, model), {});
+  return { ok: true, message: `Seen: ${model} stays out of the security engineer's scans until you choose it.` };
 }
 
 // ---------- one scan: nextlevel _scan <what> ----------

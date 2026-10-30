@@ -100,6 +100,8 @@ export function fakeContext(o = {}) {
     userState: { get: (k) => user[k], set: (k, v) => (user[k] = v) },
     hubAlive: () => !!o.hubAlive,
     tcpOpen: async (ports) => ports.find((x) => (o.tcpOpen || []).includes(x)) || 0,
+    // (leaseBusy: who holds the PC's security lease, which a check that mounts the sign-in volume doesn't run beside)
+    signInLease: (fn) => (o.leaseBusy ? { busy: o.leaseBusy } : fn()),
     getUrl: async (url) => {
       calls.push(`GET ${url}`);
       return (o.urls || {})[url] || { problem: `${new URL(url).host} doesn't resolve (ENOTFOUND)` };

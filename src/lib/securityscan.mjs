@@ -138,6 +138,25 @@ export function releaseLease(home, { pid, start }) {
 }
 
 
+// Who holds the lease, in words (`scan`: a scan's id, or what else took it: the sign-in, a setup check, the watch)
+export const holderWords = (h) =>
+  !h ? 'another process' : SCAN_ID.test(h.scan || '') ? `a security scan (${h.scan}${h.root ? `, in ${path.basename(h.root)}` : ''})` : ({ login: 'a security sign-in', check: "a setup check of the security engineer's", watch: 'the Daybreak watch' })[h.scan] || 'a security scan';
+// A short run that mounts the sign-in volume (a setup check, the Daybreak watch: 1b-1's B4) under the lease: fn()'s
+// answer, or { busy: <who holds it> } without running it. Never waits. Already this process's: fn() under it, left held.
+export function withLease(home, { root = '', who }, fn, { startOf = processStartSync } = {}) {
+  const me = { root, pid: process.pid, start: startOf(process.pid), scan: who };
+  const h = leaseHolder(home, { startOf });
+  if (h && h.pid === me.pid && h.start === me.start) return fn();
+  const t = takeLease(home, me, { startOf });
+  if (!t.ok) return { busy: holderWords(t.holder) };
+  try {
+    return fn();
+  } finally {
+    releaseLease(home, me);
+  }
+}
+
+
 // ---------- the checkout: a standalone clone (delta 1 D1) ----------
 // A worktree's .git file names a Windows path the container can't see, so the scan's checkout is a clone of its own:
 // made once with no hard links and nothing checked out, its origin removed, hooks and git's automatic housekeeping off;

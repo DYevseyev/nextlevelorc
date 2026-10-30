@@ -33,7 +33,7 @@ export function roleRun({ profile, role, mode, prompt, timeoutMin = 60, engineAr
   // (the agent doesn't read AGENTS.md by itself, FR-013: the prompt tells it to, as a worker's)
   const isolation = { args: ['--agent', spec.agent], readsAgentsMd: false };
   // (sessionArgs puts isolation's arguments on a headless run's and on an interactive one's: agy's -i takes them as `extra`)
-  const args = sessionArgs(profile, { mode, role, prompt, timeoutMin, args: engineArgs, isolation });
+  const args = sessionArgs(profile, { mode, role, prompt, timeoutMin, args: engineArgs, isolation, version });
   const out = { args, files, launcher: mode === 'headless' ? 'console' : 'window' };
   if (!env) return out;
   const session = { ...sessionVars(role, mode), ...(ADAPTERS.agy.headlessEnv || {}) };

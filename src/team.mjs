@@ -196,6 +196,7 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
     next: r.next,
     steps: r.steps.map((s) => ({ ...s, label: windowLabel(s.window, process.platform) })),
     quiet: r.quiet,
+    ...(r.busy ? { busy: true } : {}),
   }));
   // Only an error about the role being changed blocks it: a check of its engine that fails as an error, or
   // that couldn't run where it would be one (it needs a check before it that fails or can't tell: nothing says
@@ -203,7 +204,9 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   // fallback's is a warning there. Warnings (an engine only a fallback uses, FR-009's Codex workers on Windows)
   // and errors about other roles are shown with the result and never keep it from being saved.
   const aboutRole = (r) => r.id !== 'profiles.accounts' || (!row.fallback && !!accountProblem(profile));
-  const blocking = results.filter((r) => aboutRole(r) && (r.status === 'fail' ? r.severity === 'error' : r.status === 'skip' && !r.quiet && /^needs /.test(r.detail) && severityOf(byId(r.id), ctx) === 'error'));
+  // (a security check that couldn't look because a scan, a sign-in or the Daybreak watch holds the scanner's sign-in
+  // blocks too: nothing says the change works, so the owner tries again when it ends)
+  const blocking = results.filter((r) => aboutRole(r) && (r.busy || (r.status === 'fail' ? r.severity === 'error' : r.status === 'skip' && !r.quiet && /^needs /.test(r.detail) && severityOf(byId(r.id), ctx) === 'error')));
   const warnings = results.filter((r) => r.status === 'fail' && r.severity !== 'info' && !blocking.includes(r));
   const daybreakWords = row.role === 'security' ? (config.roles.security.daybreak ? ', Daybreak Blue' : ", standard safeguards (OpenAI's cyber screening may block parts of a scan)") : '';
   const who = `${row.title}: ${profile.name ? `profile ${profile.name} (${engineTitle(profile.engine)})` : engineTitle(profile.engine)}${profile.model ? `, model ${profile.model}` : ''}${profile.effort ? `, effort ${profile.effort}` : ''}${daybreakWords}`;

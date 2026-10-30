@@ -859,8 +859,32 @@ function securityCard(b) {
     if (s.trusted.daybreak && /unconfirmed/.test(s.trusted.daybreak)) card.append(h('p.small.warn', {}, 'Daybreak unconfirmed for that scan.'));
   }
   for (const x of s.pending || []) card.append(h('p.small', {}, h('button.linkish', { type: 'button', onclick: () => goToCard(x.card || x.id) }, `A security policy waits for you (${x.card || x.id})`)));
+  card.append(...daybreakNews(s));
   card.append(h('div.row', {}, securityButtons(s), h('button.btn', { type: 'button', onclick: () => goTo('security') }, 'The Security page')));
+  if (s.daybreak) card.append(h('p.muted.small', {}, s.daybreak.text));
   return card;
+}
+// The Daybreak watch's news (1b-1): a model newly covered (Use it, through the Team page's own checked change, or Seen),
+// and the chosen model no longer covered. nextlevel never switches by itself.
+function daybreakNews(s) {
+  const d = s.daybreak;
+  if (!d) return [];
+  const out = [];
+  if (d.dropped) {
+    out.push(h('div.callout.bad', {}, h('p', {}, `The security engineer's model ${d.dropped} no longer takes Daybreak Blue: its next scan won't start.`),
+      h('div.row', {}, h('button.btn', { type: 'button', onclick: () => goTo('team') }, 'Choose another on the Team page'))));
+  }
+  for (const m of d.news || []) {
+    const key = `daybreak:${m}`;
+    out.push(h('div.callout.info', {}, h('p', {}, `Daybreak Blue now covers ${m} for the security engineer's sign-in.`),
+      h('div.row', {},
+        h('button.btn.primary', { type: 'button', disabled: pending.has(key), onclick: (e) => {
+          if (!confirm(`Use ${m} for the security engineer's scans? Its checks run first, and nothing is saved unless they pass.`)) return;
+          control(key, '/api/team', { role: 'security', engine: 'codex', model: m, effort: s.effort || '' }, e.currentTarget);
+        } }, pending.has(key) ? 'Checking…' : `Use ${m} for scans`),
+        actionButton(`${key}:seen`, 'Seen', '/api/security', { action: 'daybreak-seen', model: m }))));
+  }
+  return out;
 }
 
 function findingView(f) {
@@ -895,6 +919,7 @@ function renderSecurity() {
   else {
     role.append(h('p', {}, `Codex, model ${d.role.model || "the scanner's default"}${d.role.effort ? `, effort ${d.role.effort}` : ''}${d.role.daybreak ? ', Daybreak Blue' : ''}${d.role.profile ? ` (profile ${d.role.profile})` : ''}.`),
       h('p.muted.small', {}, 'A scan reads the base branch in OpenAI\'s scanner container, with no network for its commands and nothing of this PC but the code. It changes nothing in the project.'),
+      d.daybreak ? h('p.small', {}, h('strong', {}, 'The Daybreak watch: '), d.daybreak.text, h('span.muted', {}, ' It asks once a day, and when the scanner changes; nothing switches by itself.')) : null,
       h('div.row', {}, securityButtons(s)));
   }
 
@@ -925,6 +950,24 @@ function renderSecurity() {
     policy.append(h('p', {}, `Approved ${ago2(p.approved.at)}, from ${p.approved.from}${p.approved.scan ? ` (scan ${p.approved.scan})` : p.approved.commit ? ` (${p.approved.commit.slice(0, 8)})` : ''}, ${p.approved.hash}.`));
     if (p.approved.missing) policy.append(h('p.small.bad', {}, "Its text isn't kept as it was approved, so scans can't run: ask for a new draft and approve it."));
     else policy.append(h('details.diff', { open: sec.showPolicy, ontoggle: (e) => (sec.showPolicy = e.currentTarget.open) }, h('summary', {}, 'Its text'), h('div.msg-text', {}, p.approved.text)));
+    // (1b-1: into the repository as SECURITY.md, the owner's change; nothing is pushed)
+    const r = p.repo;
+    if (r?.same) policy.append(h('p.small.muted', {}, `It is the repository's SECURITY.md on ${r.base}.`));
+    else if (r && !p.approved.missing) {
+      if (r.cut) policy.append(h('p.small.muted', {}, 'It was cut at 64 KB when it was made, so it stays out of the repository (it is still the scans\' policy).'));
+      else {
+        policy.append(h('div.row', {}, h('button.btn', { type: 'button', disabled: pending.has('security-commit'), onclick: (e) => {
+          const words = [
+            `Write SECURITY.md at the project's root and commit it on ${r.base} through the hub, as your change?`,
+            r.exists ? `It replaces the SECURITY.md that is there now.` : '',
+            'If the repository is public, GitHub shows it to everyone as the project\'s security policy. A threat model can name weak spots: read it as a stranger would.',
+            'Nothing is pushed: it goes out with your next push.',
+          ].filter(Boolean).join('\n\n');
+          if (!confirm(words)) return;
+          control('security-commit', '/api/security', { action: 'commit-policy', hash: p.approved.hash }, e.currentTarget);
+        } }, pending.has('security-commit') ? '…' : 'Add it to the repository as SECURITY.md')));
+      }
+    }
   }
   for (const x of p.pending || []) policy.append(h('p', {}, h('button.btn.primary', { type: 'button', onclick: () => goToCard(x.card || x.id) }, `Read and decide: ${x.source === 'draft' ? 'the draft' : 'SECURITY.md'} (${x.card || x.id})`)));
   if (d.role.on && !(p.pending || []).length) {
@@ -1816,6 +1859,8 @@ function teamCard(row, b) {
       // (spread: append() writes an array as its text, "[object HTMLDivElement]")
       ...(row.warnings || []).map((w) => h('div.callout.warn', {}, h('strong', {}, 'Warning: '), w)),
       ...(row.notices || []).map((w) => h('div.callout.info', {}, h('strong', {}, 'Note: '), w)),
+      // (the security engineer: what the Daybreak watch last found, 1b-1)
+      ...(row.key === 'security' && b.security?.daybreak ? [h('p.small.muted', {}, b.security.daybreak.text)] : []),
     );
   }
   const ed = editors.get(row.key);
@@ -1918,7 +1963,8 @@ function drawEditor(row, ed) {
       ed.draw();
     } },
     h('option', { value: '', selected: !state.other && !state.model }, `${eng.title}'s own choice`),
-    known.map((m) => h('option', { value: m.id, selected: !state.other && state.model === m.id }, m.label)),
+    // (the security engineer: a model the Daybreak watch found covered says so, a newly covered one too, 1b-1)
+    known.map((m) => h('option', { value: m.id, selected: !state.other && state.model === m.id }, `${m.label}${row.key === 'security' && build?.security?.daybreak?.covered?.includes(m.id) ? ` (Daybreak${build.security.daybreak.news?.includes(m.id) ? ', new' : ''})` : ''}`)),
     h('option', { value: '\u0000other', selected: state.other }, 'Another model: type its name…'));
     const modelField = h('label.field', {}, h('span', {}, 'Model'), modelSelect);
     if (state.other) {

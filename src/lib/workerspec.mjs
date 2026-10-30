@@ -91,7 +91,7 @@ export function workerRun({ profile, engineArgs = [], addons, addonCtx = {}, pro
   const eng = engine(profile.engine);
   const iso = workerIsolation(profile, addons, { ...addonCtx, version });
   const run = { ...profile, model: profile.model || iso.pin?.model || '', effort: profile.effort || iso.pin?.effort || '' };
-  const args = sessionArgs(run, { mode: 'headless', role: 'worker', prompt, timeoutMin, args: engineArgs, isolation: asIs ? { ...iso, readsAgentsMd: true } : iso });
+  const args = sessionArgs(run, { mode: 'headless', role: 'worker', prompt, timeoutMin, args: engineArgs, isolation: asIs ? { ...iso, readsAgentsMd: true } : iso, version });
   const base = workerEnv({ ...env, NEXTLEVEL_AGENT: 'worker' }, { dotenv, ghConfig: NO_GH_CONFIG });
   // (on top, what a worker's session of the engine needs: Claude Code's background commands off, FR-020; a Codex worker's
   // PowerShell policy on Windows)

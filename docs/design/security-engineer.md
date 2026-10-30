@@ -2,8 +2,8 @@
 
 A role of its own that finds and confirms security problems in the project's code when the owner asks for a scan, and
 never changes the code. Its scans run in OpenAI's Codex Security scanner, in a Docker container, with the owner's
-ChatGPT sign-in kept in a volume of its own. This file is the design as built in parts 1a-1 and 1a-2; the steps after
-them are at the end and in `docs/ROADMAP.md`.
+ChatGPT sign-in kept in a volume of its own. This file is the design as built in parts 1a-1, 1a-2 and 1b-1; the steps
+after them are at the end and in `docs/ROADMAP.md`.
 
 ## Why a container
 
@@ -159,11 +159,63 @@ A refused copy-out also removes what it had copied onto the PC.
   sandbox included. Extra layers only: a Claude Code worker is told not to run a command naming `nextlevel-sec-`, every
   worker's log is read for one after its attempt (a Home card), and the Team row says so.
 - The scanner's own process can reach programs listening on the PC's 127.0.0.1.
-- Daybreak Blue is asked for, not confirmed by the scanner's output.
+- Daybreak Blue is asked for, not confirmed by the scanner's output; the watch's only proof is the model list.
 - A repository written to fool the scanner can still hide a finding: bars, not walls.
 
-## After 1a-2
+## What 1b-1 adds
 
-- **1b:** a Claude Code version, the Daybreak model watch, SECURITY.md committed to the repository.
+1b is split in two: 1b-1 needs no new evidence, and 1b-2, the Claude Code version, waits for its own Step 0c.
+
+- **The standard pin.** Every Codex run nextlevel starts gets `-c daybreak=false`, last among its overrides, on Codex
+  0.163 or newer (`codex --version`, kept like a slow answer: `engineVersion` in `src/lib/proc.mjs`). That covers the
+  orchestrator's window and rounds, workers (and so the trial and the bridge test), the setup guide, the advisor and the
+  `codex.model` check. The scans never run the host's Codex.
+  - A run that picks a Codex profile gets `-c profiles.<name>.daybreak=false` after it, since a profile's own fields win
+    over the root, where a `-c` lands. The profile comes from `--profile` or `-p` in its arguments, else
+    `config.toml`'s top-level `profile`.
+  - Below 0.163 there is no Daybreak setting, and nothing is passed.
+  - The doctor's `codex.daybreak` says when `config.toml` turns Daybreak on (info), and warns when a run picks a profile
+    whose name isn't a plain TOML key.
+- **The Daybreak model watch.**
+  - **When:** while the role is on, once a day and when the scanner's image changes (`watchDue`). It never runs beside a
+    scan (asked for or running), another holder of the PC's lease, or an update's hold.
+  - **How:** a child of the hub (`nextlevel _daybreak`) asks the scanner's own `codex debug models` under the lease. It
+    is model-free, spends no plan, and pulls no image.
+  - **Proof:** a model counts as covered only when its `available_access_programs.cyber` lists `daybreak_blue`.
+  - **The record** is the sign-in's, not a project's: `~/.nextlevel/security/daybreak-watch/<account key>.json`
+    (`src/lib/daybreakwatch.mjs`).
+  - **News:** a model newly covered, never on the first answer. A project also hears when its chosen model is no longer
+    covered, before its next scan fails. Each reaches the phone once per PC, through `notify()`.
+  - **Home's Security card** shows the news. **Use it for scans** runs the Team page's own checked change; **Seen**
+    clears it. nextlevel never switches by itself.
+  - **Failed tries:** a try that fails (Docker stopped, no image) is said on the Security page, never as a card. It is
+    asked again in an hour, then once a day after three in a row.
+- **Every container that mounts the sign-in takes the lease.** The doctor's `security.login`, `security.probe` and
+  `security.daybreak` run under it (info while another holds it, no container), and so does `nextlevel security
+  login`'s volume helper. `team set security` saves nothing then.
+- **The approved policy into the repository.** The Security page's **Add it to the repository as SECURITY.md** (after
+  a confirmation that says GitHub shows the file to everyone on a public repository):
+  - it writes the approved text from its blob at the project's root, never through a link (a file beside it, then one
+    rename);
+  - it marks the file the owner's (`recordOwner`, and git's form of it approved, as the update's `commitAsOwner` does);
+  - it queues the hub's own `commit` job with that one path, so another staged change stays staged;
+  - the guard holds nothing, a push carries it with no card of its own, and nothing is pushed by it.
+
+  It refuses:
+  - a policy that was cut at 64 KB when it was made;
+  - the main checkout on another branch than the base;
+  - a SECURITY.md with changes of its own;
+  - a link;
+  - a tracked case twin (`security.md`: on Windows one file).
+
+  `policyText` folds the line ends at the end, so the committed file reads back as the same policy and gets no card.
+- **A fix to 1a-2:** the guard's blob tidying kept only files' blobs, and removed the approved policy's text, which has
+  no file. It now keeps a policy waiting on its card and the approved one.
+
+## After 1b-1
+
+- **1b-2:** a Claude Code version of the role (review-only). It first needs evidence on Windows: what keeps Claude
+  Code's reads inside a scan's checkout (a container, as for Codex), its sign-in in a volume, a canary read, and where a
+  findings file in this format would come from. Until then the role refuses Claude Code.
 - **2:** findings in autopilot rounds, a merge gate, the fix loop, dismissing a finding.
-- **3:** supply chain, automatic scans, phone alerts.
+- **3:** supply chain, automatic scans, phone alerts for findings.

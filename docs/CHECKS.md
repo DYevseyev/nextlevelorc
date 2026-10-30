@@ -367,6 +367,20 @@ autopilot rounds get. Workers have their own arguments, `engines.codex.workerArg
 workers", or `nextlevel team sandbox on|off`): in Codex's sandbox they get its network with `-c` on their own command
 line. Never put `network_access = true` in `~/.codex/config.toml`: that gives the orchestrator network too.
 
+### codex.daybreak
+Every Codex run nextlevel starts (the orchestrator's window and rounds, workers, the setup guide, the advisor, the
+`codex.model` check), but the security engineer's scans, gets `-c daybreak=false` last among its overrides, on Codex
+0.163 or newer (the security engineer, part 1b-1). A run that picks a Codex profile also gets
+`-c profiles.<name>.daybreak=false`: a profile's own fields win over the root, where a `-c` lands. The profile comes
+from `--profile` or `-p` in its arguments, else `config.toml`'s top-level `profile`. Work that isn't defensive security
+keeps OpenAI's usual safeguards, and a model Daybreak doesn't cover doesn't fail at once. Only the scans, in the
+scanner's own Codex, use Daybreak.
+
+This row says when the account's `config.toml` turns Daybreak on for every run (a top-level `daybreak = true`, or one
+in the profile it names). That is **info**: nothing to do. It **warns** when a run picks a profile whose name isn't
+letters, digits, `-` and `_`. The pin can't name such a profile, so its own setting may win and that run may use
+Daybreak. Below Codex 0.163 there is no Daybreak setting, and none is passed.
+
 ### codex.worker-windows
 On Windows only, when the workers, the second worker or the workers' fallback run on Codex in its sandbox (the workers' own arguments,
 `engines.codex.workerArgs`, else `engines.codex.args`). Codex's sandbox runs a worker's commands under accounts of its
@@ -446,6 +460,11 @@ Whether the security engineer's model takes OpenAI's Daybreak Blue, from the sca
 (Codex says nothing of it). Turning the role on without a model saves the first one the check finds working. **error**
 with Daybreak on and refused; **info** with Daybreak off (standard safeguards may block parts of a scan). The scan
 record says Daybreak was asked for: nothing in the scanner's output confirms it.
+
+`security.login`, `security.probe` and `security.daybreak` mount the sign-in volume (or the state volume it sits in),
+so they run under the PC's security lease, as a scan, a sign-in and the Daybreak watch do (part 1b-1). While another
+one holds it, they say who as **info**, run no container, and ask again next time. `nextlevel team set security` (the
+Team page's change) then saves nothing and says to try again when it ends.
 
 ### tool.agy
 The Antigravity CLI is installed and 1.2.4 or newer; fix: `agy update`, then a new window. **error**
