@@ -267,7 +267,7 @@ export function ownerNeeds(b, checks = {}) {
     // (a card with a plan: what the tester found, and the card's own Close or a look at it, tester part 3)
     if (x.accept && x.id && x.status === 'open') {
       const verified = x.acceptState === 'verified';
-      const said = { verified: 'verified, ready to close', changed: 'passed, but its plan changed since the card was added', stuck: "the fixes didn't make it pass", blocked: "the tester's run couldn't finish" }[x.acceptState] || 'the tester needs you';
+      const said = { verified: 'verified, ready to close', changed: 'passed, but its plan changed since the card was added', stuck: "the fixes didn't make it pass", blocked: "the tester's run couldn't finish", fixing: 'a fix draft waits for the orchestrator, and autopilot is off (open its window, or turn autopilot on)' }[x.acceptState] || 'the tester needs you';
       needs.push({ kind: 'accept', level: verified ? 'info' : 'warn', id: x.id, text: `${x.id}: ${said}: ${what}`, why: '', action: verified ? { label: 'Close', post: '/api/handoff', body: { action: 'done', id: x.id } } : { label: 'Look at the run', page: 'notes', focus: x.id }, more: verified ? { label: 'Look at the run', page: 'notes', focus: x.id } : null });
       continue;
     }

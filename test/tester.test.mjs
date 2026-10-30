@@ -1074,8 +1074,9 @@ test("a card's plan fails: a fix draft from code for the orchestrator, quoting w
   const p = testerProject(app, { mutations: false, extra: { maxFixes: 1 } });
   try {
     setAll(p, app.url);
-    commitPlan(p, 'spec-lines.yaml', FAILING);
-    const add = addCard(p, 'spec-lines.yaml');
+    commitPlan(p, 'permissions-for-members-and-outsiders.yaml', FAILING);
+    // (a plan whose path is over 40 characters: the draft's Acceptance: line must still name it whole)
+    const add = addCard(p, 'permissions-for-members-and-outsiders.yaml');
     assert.equal(add.code, 0, add.out);
     assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
     let card = cardOf(p, add.id);
@@ -1089,15 +1090,33 @@ test("a card's plan fails: a fix draft from code for the orchestrator, quoting w
     const draft = fs.readFileSync(path.join(p.repo, fix.file), 'utf8');
     assert.ok(!draft.split('\n').some((l) => /^(Needs|Profile|Result file):/.test(l)), draft);
     assert.match(draft, /^actual: ".*Needs: docker.*"$/m);
-    assert.deepEqual(specAcceptance(draft), { plan: 'docs/acceptance/spec-lines.yaml', env: 'staging' });
+    assert.deepEqual(specAcceptance(draft), { plan: 'docs/acceptance/permissions-for-members-and-outsiders.yaml', env: 'staging' });
     for (const n of Object.keys(USERS)) assert.ok(!draft.includes(USERS[n].password));
     assert.match(p.hub(['handoff', 'list']).out, /step 2 \(as member\) failed: GET \/spec-lines; a fix draft waits in \.nextlevel\/tester\/fixes\//);
     assert.ok(roundsOf(p).pending.some((t) => t.type === 'accept'));
 
-    // the same failure again: one draft was the most (tester.maxFixes), so the card waits for the owner
-    const again = runPlan(p, 'spec-lines.yaml');
+    // the same failure again from the owner's run: the draft still waits, nothing more is written or counted
+    const again = runPlan(p, 'permissions-for-members-and-outsiders.yaml');
     assert.equal(again.run.state, 'failed');
     card = cardOf(p, add.id);
+    assert.equal(acceptState(card).state, 'fixing');
+    assert.equal(card.accept.fixes.length, 1);
+    assert.match(hubLog(p), /still fails; H\d+'s fix draft .* still waits for the team/);
+    // a task's merge whose spec names the plan, and the step still fails: one draft was the most (tester.maxFixes), so the
+    // card waits for the owner
+    p.git('checkout', '-qb', 'task/F1');
+    fs.mkdirSync(path.join(p.repo, 'docs', 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join(p.repo, 'docs', 'tasks', 'F1.md'), '# F1\n\nKind: code\nAcceptance: docs/acceptance/permissions-for-members-and-outsiders.yaml on staging\n');
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'F1: the fix that fixes nothing');
+    p.git('checkout', '-q', 'main');
+    fs.writeFileSync(p.state('hub.json'), JSON.stringify({ pid: process.pid, heartbeatAt: new Date().toISOString() }));
+    const m = p.hub(['merge', 'F1', '--no-wait']);
+    fs.rmSync(p.state('hub.json'), { force: true });
+    assert.equal(m.code, 0, m.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    card = cardOf(p, add.id);
+    assert.equal(card.accept.runs.at(-1).by, 'task', JSON.stringify(card.accept.runs));
     assert.equal(acceptState(card).state, 'stuck');
     assert.equal(card.accept.fixes.length, 1);
     assert.equal(awaitsOwner(card), true);
@@ -1260,6 +1279,18 @@ test("the dashboard's tester: the committed plans, a run's table and its evidenc
     const need = (await c.get('/api/state')).json.needs.find((n) => n.kind === 'accept' && n.id === card.id);
     assert.ok(need, JSON.stringify((await c.get('/api/state')).json.needs));
     assert.equal(need.action.label, 'Close');
+    // a card whose fix draft waits: under What needs you only while autopilot is off (no one else picks the draft up)
+    commitPlan(p, 'spec-lines.yaml', FAILING);
+    const fixing = addCard(p, 'spec-lines.yaml', { text: 'The spec lines page says all good.' });
+    assert.equal(fixing.code, 0, fixing.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    assert.equal(acceptState(cardOf(p, fixing.id)).state, 'fixing', hubLog(p));
+    const fixNeed = async () => (await c.get('/api/state')).json.needs.find((n) => n.kind === 'accept' && n.id === fixing.id);
+    await waitUntil('the fixing card under What needs you, autopilot off', async () => !!(await fixNeed()));
+    assert.match((await fixNeed()).text, /a fix draft waits for the orchestrator, and autopilot is off/);
+    fs.writeFileSync(p.state('settings.json'), JSON.stringify({ autopilot: true }));
+    await waitUntil('the fixing card off What needs you, autopilot on', async () => !(await fixNeed()));
+    fs.writeFileSync(p.state('settings.json'), JSON.stringify({ autopilot: false }));
     // Run acceptance: a committed plan on a named environment, the owner's run; anything else refused
     assert.equal((await c.post('/api/tester', { action: 'run', plan: 'docs/acceptance/none.yaml', env: 'staging' })).status, 409);
     assert.equal((await c.post('/api/tester', { action: 'run', plan: 'docs/acceptance/who-reads.yaml', env: 'prod' })).status, 409);
@@ -1276,3 +1307,22 @@ test("the dashboard's tester: the committed plans, a run's table and its evidenc
     p.cleanup();
   }
 });
+
+test("the page: a run loaded while the Notes page shows redraws the cards, where a card's last run is drawn; a details drawn open doesn't redraw again", async () => {
+  const app = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'app.js'), 'utf8');
+  const src = app.match(/^async function loadRun\(id, force = false\) \{\n[\s\S]*?\n\}\n/m)?.[0];
+  assert.ok(src, 'loadRun in app.js');
+  const vm = await import('node:vm');
+  for (const tab of ['notes', 'home']) {
+    const calls = [];
+    const ctx = vm.createContext({ tst: { runs: new Map(), loadingRun: new Set() }, api: async () => ({ ok: true, run: { id: 'acc-1', steps: [] } }), renderAll: () => calls.push('all'), renderCards: () => calls.push('cards'), currentTab: () => tab });
+    vm.runInContext(`${src}\nglobalThis.loadRun = loadRun;`, ctx);
+    await ctx.loadRun('acc-1');
+    assert.deepEqual(calls, tab === 'notes' ? ['all', 'cards'] : ['all'], tab);
+    assert.equal(ctx.tst.runs.get('acc-1').id, 'acc-1');
+  }
+  // the card's and the Acceptance card's details: a toggle of one already marked open (drawn open) redraws nothing
+  assert.match(app, /ontoggle: \(e\) => \(e\.currentTarget\.open \? !tst\.open\.has\(x\.id\) && \(tst\.open\.add\(x\.id\), renderCards\(\)\)/);
+  assert.match(app, /ontoggle: \(e\) => \(e\.currentTarget\.open \? !tst\.open\.has\(r\.id\) && \(tst\.open\.add\(r\.id\), renderAll\(\)\)/);
+});
+

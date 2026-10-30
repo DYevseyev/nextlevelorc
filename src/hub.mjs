@@ -6506,15 +6506,23 @@ function testerEnded(ask, r) {
         testerTell(`${NAME}: ${x.id} verified${closed ? ' and closed' : ''}`, `The tester's run of ${ask.plan} on ${ask.env} passed: card ${x.id} (${title}) ${closed ? 'is closed (Reopen on the card undoes it)' : 'is ready to close'}, on the dashboard: Notes and handoffs.`, 'default');
       } else if (state === 'fixing') {
         const lastPass = Math.max(0, ...(card.accept.runs || []).filter((y) => y.end === 'passed').map((y) => isoMs(y.at)));
-        const tries = (card.accept.fixes || []).filter((f) => f.step === step.n && isoMs(f.at) > lastPass).length;
-        if (tries >= t.maxFixes) {
+        const drafts = (card.accept.fixes || []).filter((f) => f.step === step.n && isoMs(f.at) > lastPass);
+        const tries = drafts.length;
+        // (a fix draft is written for a step's first failure, and again only for a run after a task's merge (a fix that was
+        // tried): a deploy's, the owner's or the orchestrator's run that fails while the last draft waits writes none, and
+        // counts toward nothing)
+        if (tries && ask.by !== 'task') {
+          log(`acceptance run ${ask.id}: step ${step.n} still fails; ${x.id}'s fix draft ${drafts.at(-1).file} still waits for the team`);
+        } else if (tries >= t.maxFixes) {
           store.acceptStuck(x.id);
           log(`acceptance run ${ask.id}: step ${step.n} of ${ask.plan} still fails after ${tries} fix draft(s) for ${x.id}: no more drafts (tester.maxFixes), the card waits for the owner`);
           testerTell(`${NAME}: ${x.id} needs you`, `Step ${step.n} of ${ask.plan} on ${ask.env} still fails after ${tries} fix draft(s): card ${x.id} (${title}) waits for you, on the dashboard: Notes and handoffs.`, 'high');
         } else {
           const file = path.join(FIXES(), `${ask.id}.md`);
           mkdirp(FIXES());
-          fs.writeFileSync(file, safeText(fixDraft({ run: r, card: x.id, step }), acceptContext().secrets, 64 * 1024));
+          // (the values in it come from the run's record, made safe already; its own lines are code's: only kept values are
+          // taken out again, never by shape, which would turn a long plan's path into *** and break its Acceptance: line)
+          fs.writeFileSync(file, redactReport(fixDraft({ run: r, card: x.id, step }), acceptContext().secrets));
           store.acceptFix(x.id, { run: ask.id, step: step.n, file: rel(file) });
           log(`acceptance run ${ask.id}: step ${step.n} failed; the fix draft for ${x.id} is ${rel(file)}`);
         }
@@ -7991,7 +7999,10 @@ function cardsSummary() {
     // (a pending Done: only when it becomes final, never its reply; the server's time only while one is pending, so a
     // quiet tick leaves the build data as it was and pushes nothing)
     const all = store.handoff.list().map((x) => ({ ...cardView(x), pending: x.pending ? { finalAt: x.pending.finalAt } : undefined }));
-    const items = all.filter(awaitsOwner);
+    // (a card whose fix draft waits moves only by the orchestrator: with autopilot off or paused, the owner is told)
+    const ap = getSettings();
+    const draftWaits = (x) => x.status === 'open' && x.acceptState === 'fixing' && (!ap.autopilot || !!ap.pausedReason);
+    const items = all.filter((x) => awaitsOwner(x) || draftWaits(x));
     // (closed: the handled items' ids, so Home's Blockers doesn't count a "Needs you" the owner has done)
     return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id), now: all.some((x) => x.pending) ? new Date(clockNow()).toISOString() : undefined };
   } catch (err) {

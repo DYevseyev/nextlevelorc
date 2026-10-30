@@ -607,6 +607,8 @@ async function loadRun(id, force = false) {
   tst.loadingRun.delete(id);
   tst.runs.set(id, res.ok ? res.run : { id, missing: res.message || 'This run is gone (only the newest runs are kept).' });
   renderAll();
+  // (renderAll draws Home; a card's run on the Notes page is drawn with the cards)
+  if (currentTab() === 'notes') renderCards();
 }
 async function loadShot(id, file) {
   const key = `${id}/${file}`;
@@ -673,7 +675,7 @@ function acceptBox(x) {
     st === 'fixing' && fix ? h('p.small', {}, `Step ${last?.step?.n ?? '?'} failed. The fix draft for the team is ${fix.file}; the plan runs again once the fix is merged and deployed.`) : null,
     st === 'stuck' ? h('p.small', {}, `${plural((a.fixes || []).length, 'fix draft')} didn't make step ${last?.step?.n ?? '?'} pass, so the tester writes no more. Look at the run, then reply to the team or close the card.`) : null,
     st === 'blocked' && last ? h('p.small', {}, `The run ended ${last.end}${last.why ? `: ${last.why}` : ''}. That is not the team's to fix (an environment down, the browser missing, a stop): run it again from Home once it is sorted.`) : null,
-    last ? h('details', { open, ontoggle: (e) => (e.currentTarget.open ? (tst.open.add(x.id), renderAll()) : tst.open.delete(x.id)) }, h('summary', {}, `The last run (${plural((a.runs || []).length, 'run')} in all)`), open ? runTable(tst.runs.get(last.id)) : null) : null);
+    last ? h('details', { open, ontoggle: (e) => (e.currentTarget.open ? !tst.open.has(x.id) && (tst.open.add(x.id), renderCards()) : tst.open.delete(x.id)) }, h('summary', {}, `The last run (${plural((a.runs || []).length, 'run')} in all)`), open ? runTable(tst.runs.get(last.id)) : null) : null);
 }
 // Home's Acceptance card: the plans on the base branch, an environment, Run acceptance; the last runs
 function testerCard() {
@@ -706,7 +708,7 @@ function testerCard() {
     card.append(h('ul.runs', {}, runs.map((r) => {
       const open = tst.open.has(r.id);
       if (open) loadRun(r.id, ['asked', 'starting', 'running'].includes(r.state));
-      return h('li', {}, h('details', { open, ontoggle: (e) => (e.currentTarget.open ? (tst.open.add(r.id), renderAll()) : tst.open.delete(r.id)) },
+      return h('li', {}, h('details', { open, ontoggle: (e) => (e.currentTarget.open ? !tst.open.has(r.id) && (tst.open.add(r.id), renderAll()) : tst.open.delete(r.id)) },
         h('summary', {}, h(`span.k-${RUN_KIND[r.state] || 'idle'}`, {}, h('span.dot'), r.state), ` ${r.plan.replace(/^docs\/acceptance\//, '')} on ${r.env}`, h('span.muted.small', {}, ` · ${ago2(r.at)}${r.by ? ` · ${r.by}` : ''}`)),
         open ? runTable(tst.runs.get(r.id)) : null));
     })));
