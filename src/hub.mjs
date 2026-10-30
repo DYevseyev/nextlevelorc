@@ -113,7 +113,11 @@ import { cmdTeam } from './team.mjs';
 import { approvedPolicy, changePolicy, cmdScanProcess, cmdSecurity, draftSource, pendingRequests, readPolicy, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage } from './security.mjs';
 import { DRAFT_WARNING, POLICY_MAX, POLICY_WHY, mayDraft, policyText, policyWhat } from './lib/securitypolicy.mjs';
 import { listScans, readScan, runningScan } from './lib/securityscan.mjs';
-import { capProblem, cmdAcceptProcess, cmdTester, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runningRun, writeRun } from './tester.mjs';
+import { capProblem, cmdAcceptProcess, cmdTester, evidenceFile, hubRequest, listRuns, ownerRun, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runView, runningRun, testerView, writeRun } from './tester.mjs';
+import { VERSION_EVERY_MS, VERSION_WAIT_MS, changesWords, deployEnvs, deployedBySome, failedStep, fixDraft, planChanges, resultKey, specAcceptance, versionNames } from './lib/acceptloop.mjs';
+import { planPathProblem, readPlan } from './lib/acceptance.mjs';
+import { safeText } from './lib/evidence.mjs';
+import { reachOf, request as testerRequest } from './lib/testernet.mjs';
 import { testerOn } from './lib/testerconfig.mjs';
 import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
@@ -121,7 +125,7 @@ import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
-import { UNDO_MS, awaitsOwner, cardStore, eventsOf, noteGroups, unreadAnswer } from './lib/cards.mjs';
+import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
 import { readTextFile } from './lib/textin.mjs';
 import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from './lib/team.mjs';
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
@@ -3511,6 +3515,13 @@ async function runPush(job) {
   log(`finished ${job.id}: ${r.state}`);
   // A push that sent commits moved work (FR-019); one with nothing new didn't
   if (r.state === 'done' && r.push?.count > 0) workMoved(`${r.push.count} commit(s) were pushed to ${r.push.target}`);
+  if (r.state === 'done' && r.push?.count > 0) {
+    try {
+      testerAfterPush(r.push);
+    } catch (err) {
+      log(`tester: couldn't note the deploy: ${err.message}`);
+    }
+  }
   jobEnded(job.id);
 }
 
@@ -4893,6 +4904,13 @@ async function runGitJob(job) {
   log(`finished ${job.id}: ${state} · ${r.detail}`);
   // A merge or a branch deleted moved work (FR-019); a commit never does
   if (r.ok && r.moved) workMoved(r.moved);
+  if (r.ok && job.op === 'merge' && /was merged/.test(r.moved || '')) {
+    try {
+      testerAfterMerge(job);
+    } catch (err) {
+      log(`tester: couldn't look at ${job.task}'s acceptance plan: ${err.message}`);
+    }
+  }
   jobEnded(job.id);
 }
 
@@ -6339,12 +6357,15 @@ const scanBusy = () => !!scan.child || !!runningScan(DIR);
 // to tester.maxRunsPerHour per plan and environment by the hub's own record, in the guard's folder); the hub starts one
 // at a time in a child process it follows (`_accept`), never while an update holds new work, with an environment built
 // from nothing (no .env value, no sign-in: the run opens the personas' values itself) and the plan as the base branch
-// has it now. A run isn't a job: no queue, no jobs/, no round (part 3 wires runs into cards and rounds).
+// has it now. A run isn't a job: no queue, no jobs/. Its end (part 3, below) goes to the cards that follow its plan, may
+// write a fix draft, and may start an autopilot round.
 const accept = { child: null, id: '' };
 function acceptContext() {
   const secrets = activitySecrets();
   return { root: ROOT, stateDir: DIR, config: CFG.config, secrets, log, denyPorts: dashboardPorts() };
 }
+// What tester.mjs's views read with
+const testerCtx = () => ({ root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, git: (args) => git(args, { allowFail: true }).out });
 // The ports this project's dashboard has or had: a run never reaches them on this PC
 function dashboardPorts() {
   return [readJson(path.join(DIR, 'ui.json'))?.port, readJson(path.join(DIR, 'ui-port.json'))?.port].map(Number).filter((p) => Number.isInteger(p) && p > 0);
@@ -6358,6 +6379,11 @@ function acceptEnv() {
   return { ...env, NEXTLEVEL_ROOT: ROOT };
 }
 function testerTick() {
+  try {
+    deployTick();
+  } catch (err) {
+    log(`tester: couldn't look at the deploys: ${err.message}`);
+  }
   if (accept.child) return;
   const asks = pendingRuns(ROOT, DIR);
   if (!asks.length || updateHold) return; // (it waits for the update, as new tasks do)
@@ -6365,17 +6391,21 @@ function testerTick() {
   fs.rmSync(ask.file, { force: true });
   const t = CFG.config.tester;
   const refuse = (why) => {
-    writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, state: 'refused', why, askedAt: ask.at, endedAt: now() });
+    const r = writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, state: 'refused', why, askedAt: ask.at, endedAt: now() });
     log(`acceptance run ${ask.id} (${ask.plan} on ${ask.env}, asked by the ${ask.by}): not started: ${why}`);
+    testerEnded(ask, r);
   };
   if (!testerOn(CFG.config)) return refuse('the tester is off');
   if (!t.environments[ask.env]) return refuse(`no environment ${ask.env} in nextlevel.json's tester`);
-  const cap = ask.by === 'owner' ? '' : capProblem(ROOT, { plan: ask.plan, env: ask.env, max: t.maxRunsPerHour });
+  // (the orchestrator's runs and its cards' are held to the hourly cap; the owner's, and the hub's own after the owner's
+  // approved deploy or a task's merge, are not)
+  const cap = ['orchestrator', 'card'].includes(ask.by) ? capProblem(ROOT, { plan: ask.plan, env: ask.env, max: t.maxRunsPerHour }) : '';
   if (cap) return refuse(cap);
   const head = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
   if (!/^[0-9a-f]{40}$/.test(head)) return refuse(`no ${CFG.base} branch`);
   recordStart(ROOT, { plan: ask.plan, env: ask.env, by: ask.by, id: ask.id });
-  writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, commit: head, state: 'starting', askedAt: ask.at });
+  writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, commit: head, state: 'starting', askedAt: ask.at, ...(ask.card ? { card: ask.card } : {}), ...(ask.task ? { task: ask.task } : {}) });
+  testerCardsRun(ask, 'starting');
   const what = Buffer.from(JSON.stringify({ id: ask.id, plan: ask.plan, env: ask.env, by: ask.by, commit: head })).toString('base64url');
   const child = spawn(process.execPath, [BIN, '_accept', what], { cwd: ROOT, env: acceptEnv(), stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
   Object.assign(accept, { child, id: ask.id });
@@ -6388,8 +6418,9 @@ function testerTick() {
     const e = readRun(DIR, ask.id) || {};
     addUsage('tester', 'none', { runs: 1, minutes: e.minutes || 0, reason: ask.by });
     log(`acceptance run ${ask.id}: ${e.state || 'ended'}${e.why ? ` (${e.why})` : ''}`);
+    testerEnded(ask, e);
     try {
-      pruneRuns(DIR, t.keepRuns);
+      pruneRuns(DIR, t.keepRuns, keptRuns());
     } catch (err) {
       log(`couldn't remove old acceptance runs: ${err.message}`);
     }
@@ -6419,6 +6450,210 @@ async function stopAcceptForHub() {
   });
 }
 const acceptBusy = () => !!accept.child || !!runningRun(DIR);
+
+// ---------- the tester's part 3: cards, fix drafts, rounds, after a deploy and after a task's merge ----------
+// (docs/design/tester.md §8, §9; lib/acceptloop.mjs is the pure part, lib/cards.mjs the cards')
+// The cards that follow a run: the card it was asked for, and every open card with the same plan and environment
+const FIXES = () => path.join(DIR, 'tester', 'fixes');
+function testerCards(ask) {
+  try {
+    return cards().handoff.list().filter((x) => x.status === 'open' && x.accept && (x.id === ask.card || (x.accept.plan === ask.plan && x.accept.env === ask.env)));
+  } catch (err) {
+    log(`acceptance run ${ask.id}: couldn't read the cards: ${err.message}`);
+    return [];
+  }
+}
+// A run the cards follow has started: "the tester is checking this"
+function testerCardsRun(ask, end) {
+  for (const x of testerCards(ask)) {
+    try {
+      cards().handoff.acceptRun(x.id, { id: ask.id, end, planHash: x.accept.runs?.find((r) => r.id === ask.id)?.planHash || '', by: ask.by });
+    } catch (err) {
+      log(`acceptance run ${ask.id}: couldn't mark ${x.id}: ${err.message}`);
+    }
+  }
+}
+// The runs a card still shows are kept, whatever keepRuns says (§7)
+function keptRuns() {
+  try {
+    return new Set(cards().handoff.list().filter((x) => x.status === 'open' && x.accept).flatMap((x) => (x.accept.runs || []).map((r) => r.id)));
+  } catch {
+    return new Set();
+  }
+}
+// A phone message from the tester's loop, said in hub.log too (which card, which run)
+function testerTell(title, message, priority) {
+  log(`tester: phone: ${title}`);
+  queueNotify(title, message, priority);
+}
+// A run ended (or was refused): each card that follows it learns how, and goes on by itself where it can: a pass of the
+// plan the card was added with is "Verified" (closed by the tester with autoClose on), a failure gets a fix draft (up to
+// maxFixes for that step), anything else waits for the owner. Then a round, and the phone.
+function testerEnded(ask, r) {
+  const t = CFG.config.tester || {};
+  const step = r.state === 'failed' ? failedStep(r) : null;
+  const prev = listRuns(DIR).find((x) => x.id !== ask.id && x.plan === ask.plan && x.env === ask.env && !['asked', 'starting', 'running', 'refused'].includes(x.state));
+  const news = !prev || resultKey(prev) !== resultKey(r);
+  const store = cards().handoff;
+  for (const x of testerCards(ask)) {
+    try {
+      const card = store.acceptRun(x.id, { id: ask.id, end: r.state, at: r.endedAt, planHash: r.planHash || '', by: ask.by, step, why: r.why || '' });
+      const title = `"${firstLine(card.what).slice(0, 80)}"`;
+      const state = acceptState(card).state;
+      if (state === 'verified') {
+        const closed = t.autoClose ? store.testerClose(x.id, { run: ask.id }) : null;
+        log(`acceptance run ${ask.id}: card ${x.id} is verified${closed ? ' and closed by the tester (tester.autoClose)' : ''}`);
+        testerTell(`${NAME}: ${x.id} verified${closed ? ' and closed' : ''}`, `The tester's run of ${ask.plan} on ${ask.env} passed: card ${x.id} (${title}) ${closed ? 'is closed (Reopen on the card undoes it)' : 'is ready to close'}, on the dashboard: Notes and handoffs.`, 'default');
+      } else if (state === 'fixing') {
+        const lastPass = Math.max(0, ...(card.accept.runs || []).filter((y) => y.end === 'passed').map((y) => isoMs(y.at)));
+        const drafts = (card.accept.fixes || []).filter((f) => f.step === step.n && isoMs(f.at) > lastPass);
+        const tries = drafts.length;
+        // (a fix draft is written for a step's first failure, and again only for a run after a task's merge (a fix that was
+        // tried): a deploy's, the owner's or the orchestrator's run that fails while the last draft waits writes none, and
+        // counts toward nothing)
+        if (tries && ask.by !== 'task') {
+          log(`acceptance run ${ask.id}: step ${step.n} still fails; ${x.id}'s fix draft ${drafts.at(-1).file} still waits for the team`);
+        } else if (tries >= t.maxFixes) {
+          store.acceptStuck(x.id);
+          log(`acceptance run ${ask.id}: step ${step.n} of ${ask.plan} still fails after ${tries} fix draft(s) for ${x.id}: no more drafts (tester.maxFixes), the card waits for the owner`);
+          testerTell(`${NAME}: ${x.id} needs you`, `Step ${step.n} of ${ask.plan} on ${ask.env} still fails after ${tries} fix draft(s): card ${x.id} (${title}) waits for you, on the dashboard: Notes and handoffs.`, 'high');
+        } else {
+          const file = path.join(FIXES(), `${ask.id}.md`);
+          mkdirp(FIXES());
+          // (the values in it come from the run's record, made safe already; its own lines are code's: only kept values are
+          // taken out again, never by shape, which would turn a long plan's path into *** and break its Acceptance: line)
+          fs.writeFileSync(file, redactReport(fixDraft({ run: r, card: x.id, step }), acceptContext().secrets));
+          store.acceptFix(x.id, { run: ask.id, step: step.n, file: slash(rel(file)) });
+          log(`acceptance run ${ask.id}: step ${step.n} failed; the fix draft for ${x.id} is ${slash(rel(file))}`);
+        }
+      } else if (state !== 'checking') {
+        testerTell(`${NAME}: ${x.id} needs you`, `${acceptWords(card)} (card ${x.id}, ${title}, on the dashboard: Notes and handoffs).`, 'high');
+      }
+    } catch (err) {
+      log(`acceptance run ${ask.id}: couldn't bring ${x.id} up to date: ${err.message}`);
+    }
+  }
+  if (r.state === 'refused') return;
+  // A round (§8): a run a card, a deploy or a task's merge asked for is a real event when it ends; the owner's and the
+  // orchestrator's only when it came to something new, and the orchestrator's not while a round runs (that round asked
+  // for it, and waits for it with nextlevel tester wait)
+  const real = ['card', 'deploy', 'task'].includes(ask.by) || (news && !(ask.by === 'orchestrator' && cycle));
+  if (real) {
+    const what = `the acceptance run ${ask.id} of ${ask.plan} on ${ask.env} ended (${r.state})`;
+    try {
+      rounds((st, at) => {
+        noteReal(st, what, at);
+        addTrigger(st, { type: 'accept', what }, at);
+      });
+    } catch (err) {
+      log(`autopilot: couldn't note that ${what}: ${err.message}`);
+    }
+  }
+  // The phone: a deploy's run that fails anew (the owner approved the deploy; a pass says nothing)
+  if (ask.by === 'deploy' && r.state === 'failed' && news) testerTell(`${NAME}: acceptance failed after the deploy`, `${ask.plan} on ${ask.env}: step ${step?.n ?? '?'} failed${step?.what ? ` (${step.what})` : ''}. nextlevel tester show ${ask.id}`, 'high');
+}
+
+// After the owner's approved push to a branch tester.afterDeploy maps to environments: each waits until its version
+// endpoint names the pushed commit (up to 15 minutes), or deployWaitMinutes without one; then every committed plan for
+// that environment runs, and a task's merge the deploy carries is told. Kept in the guard's folder: the orchestrator
+// can't make the hub believe in a deploy.
+const deploysFile = () => path.join(guard().dir, 'tester-deploys.json');
+const afterTasksFile = () => path.join(guard().dir, 'tester-after-tasks.json');
+const readList = (f) => (Array.isArray(readJson(f)) ? readJson(f).filter((x) => x && typeof x === 'object') : []);
+function testerAfterPush(push) {
+  const t = CFG.config.tester;
+  if (!testerOn(CFG.config) || !COMMIT_RE.test(String(push.sha || ''))) return;
+  const envs = deployEnvs(t, push.target).filter((e) => t.environments[e]);
+  if (!envs.length) return;
+  const list = readList(deploysFile()).filter((d) => !(d.branch === push.target && envs.includes(d.env)));
+  // (its times by lib/clock.mjs: the tests move a test clock past a deploy's wait instead of waiting for it)
+  for (const env of envs) list.push({ branch: push.target, sha: push.sha, env, at: clockIso(), checkedAt: null });
+  mkdirp(guard().dir);
+  writeJson(deploysFile(), list);
+  log(`tester: ${push.target} went out at ${short(push.sha)}: acceptance runs on ${envs.join(', ')} once it is deployed`);
+}
+// A task merged whose spec names an acceptance plan: its plan runs once the environment has the merge (after the
+// deploy that carries it, or now for an environment no branch deploys to)
+function testerAfterMerge(job) {
+  if (!testerOn(CFG.config)) return;
+  const t = CFG.config.tester;
+  const head = git(['rev-parse', 'HEAD'], { allowFail: true }).out;
+  const spec = git(['show', `HEAD:${slash(path.relative(ROOT, path.join(TASKS, `${job.task}.md`)))}`], { allowFail: true });
+  const want = spec.ok ? specAcceptance(spec.out) : null;
+  if (!want || !COMMIT_RE.test(head)) return;
+  let env = want.env;
+  if (!env) {
+    const p = git(['show', `HEAD:${want.plan}`], { allowFail: true });
+    const plan = p.ok ? readPlan(p.out, { file: want.plan }).plan : null;
+    env = plan?.env?.length === 1 ? plan.env[0] : '';
+  }
+  if (!env || !t.environments[env]) return log(`tester: task ${job.task}'s spec names ${want.plan}${env ? ` on ${env}, which nextlevel.json's tester doesn't have` : ' without an environment ("on <env>")'}: it isn't run`);
+  if (!deployedBySome(t, env)) {
+    hubRequest(ROOT, { plan: want.plan, env, by: 'task', task: job.task });
+    return log(`tester: task ${job.task} merged: ${want.plan} runs on ${env}`);
+  }
+  mkdirp(guard().dir);
+  writeJson(afterTasksFile(), [...readList(afterTasksFile()).filter((x) => !(x.task === job.task && x.env === env)), { task: job.task, plan: want.plan, env, commit: head, at: now() }]);
+  log(`tester: task ${job.task} merged: ${want.plan} runs on ${env} after the deploy that carries it`);
+}
+// The committed plans for an environment, on the base branch's head: a plan that names environments runs on those only
+function plansFor(env) {
+  const head = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
+  if (!COMMIT_RE.test(head)) return [];
+  const files = gitLines(['ls-tree', '-r', '--name-only', head, '--', 'docs/acceptance']).filter((f) => !planPathProblem(f)).slice(0, 100);
+  return files.filter((f) => {
+    const r = git(['show', `${head}:${f}`], { allowFail: true });
+    const plan = r.ok ? readPlan(r.out, { file: f }).plan : null;
+    return plan && (!plan.env || plan.env.includes(env));
+  });
+}
+let versionLook = false;
+function deployTick() {
+  if (!testerOn(CFG.config)) return;
+  const t = CFG.config.tester;
+  const list = readList(deploysFile());
+  if (!list.length) return;
+  const nowMs = clockNow();
+  const due = [];
+  for (const d of list) {
+    const e = t.environments[d.env];
+    if (!e) {
+      due.push({ ...d, gone: true });
+      continue;
+    }
+    const age = nowMs - isoMs(d.at);
+    if (d.seen || (e.version ? age >= VERSION_WAIT_MS : age >= t.deployWaitMinutes * 60_000)) due.push(d);
+  }
+  // (a version endpoint is asked at most every 30 s, one at a time, through the tester's own client: its origin rules)
+  const ask = list.find((d) => t.environments[d.env]?.version && !d.seen && !due.includes(d) && (!d.checkedAt || nowMs - isoMs(d.checkedAt) >= VERSION_EVERY_MS));
+  if (ask && !versionLook) {
+    versionLook = true;
+    const e = t.environments[ask.env];
+    const reach = reachOf(e.url, t.alsoAllow, { denyPorts: dashboardPorts() });
+    testerRequest(new URL(e.version, reach.envOrigin).href, { reach, timeoutMs: 10_000, maxBytes: 64 * 1024 })
+      .then((res) => res.status >= 200 && res.status < 300 && versionNames(res.body.toString('utf8'), ask.sha))
+      .catch(() => false)
+      .then((seen) => {
+        versionLook = false;
+        writeJson(deploysFile(), readList(deploysFile()).map((d) => (d.branch === ask.branch && d.env === ask.env && d.sha === ask.sha ? { ...d, checkedAt: clockIso(), seen: d.seen || seen } : d)));
+        if (seen) log(`tester: ${ask.env} answers ${short(ask.sha)} at ${e.version}`);
+      });
+  }
+  if (!due.length) return;
+  writeJson(deploysFile(), list.filter((d) => !due.includes(d) && !due.some((x) => x.gone && x.env === d.env && x.branch === d.branch)));
+  let tasks = readList(afterTasksFile());
+  for (const d of due.filter((x) => !x.gone)) {
+    const covered = tasks.filter((x) => x.env === d.env && isAncestor(x.commit, d.sha));
+    tasks = tasks.filter((x) => !covered.includes(x));
+    const plans = plansFor(d.env);
+    for (const plan of plans) {
+      const task = covered.find((x) => x.plan === plan);
+      hubRequest(ROOT, { plan, env: d.env, by: task ? 'task' : 'deploy', ...(task ? { task: task.task } : {}) });
+    }
+    log(`tester: ${d.branch} at ${short(d.sha)} is deployed to ${d.env}${d.seen ? '' : ' (by its wait)'}: ${plans.length} acceptance plan(s) run${covered.length ? `, after task(s) ${covered.map((x) => x.task).join(', ')}` : ''}`);
+  }
+  writeJson(afterTasksFile(), tasks);
+}
 
 // ---------- releases (safe updates, lib/update.mjs) ----------
 // The hub learns of a new release by fetching the tool's repository at its start and every 6 hours, in a child process
@@ -6632,7 +6867,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !acceptBusy() && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -7716,7 +7951,20 @@ function dashboardState() {
 // them; what the team wrote (its replies, the handoff items) is redacted by the dashboard like everything else.
 // A handoff card as the page gets it: with its thread (FR-014) and whether the team's last answer waits for the owner
 // (with its closings and reopenings, undo Done and FR-018; a pending Done says when it becomes final)
-const cardView = (x) => ({ ...x, unread: unreadAnswer(x), events: eventsOf(x) });
+const cardView = (x) => ({ ...x, unread: unreadAnswer(x), events: eventsOf(x), ...(x.accept ? { acceptState: acceptState(x).state } : {}) });
+// A card whose plan passed in another version than the one it was added with: what changed, step by step, from code
+function planChange(x) {
+  const last = (x.accept.runs || []).at(-1);
+  const run = last && readRun(DIR, last.id);
+  if (!run?.commit || !COMMIT_RE.test(run.commit) || !COMMIT_RE.test(x.accept.commit)) return '';
+  const read = (c) => {
+    const r = git(['show', `${c}:${x.accept.plan}`], { allowFail: true });
+    return r.ok ? readPlan(r.out, { file: x.accept.plan }).plan : null;
+  };
+  const before = read(x.accept.commit);
+  const after = read(run.commit);
+  return before && after ? changesWords(planChanges(before, after)) : '';
+}
 function cardsView() {
   const store = cards();
   try {
@@ -7725,7 +7973,7 @@ function cardsView() {
     log(`cards: a Done past its Undo couldn't be made final now (the next look tries again): ${err.message}`);
   }
   const notes = noteGroups(store.notes.list());
-  const items = store.handoff.list().map(cardView);
+  const items = store.handoff.list().map((x) => (x.status === 'open' && x.accept && acceptState(x).state === 'changed' ? { ...cardView(x), planChange: planChange(x) } : cardView(x)));
   const news = store.news();
   const closed = items.filter((x) => x.status !== 'open');
   return {
@@ -7751,7 +7999,10 @@ function cardsSummary() {
     // (a pending Done: only when it becomes final, never its reply; the server's time only while one is pending, so a
     // quiet tick leaves the build data as it was and pushes nothing)
     const all = store.handoff.list().map((x) => ({ ...cardView(x), pending: x.pending ? { finalAt: x.pending.finalAt } : undefined }));
-    const items = all.filter(awaitsOwner);
+    // (a card whose fix draft waits moves only by the orchestrator: with autopilot off or paused, the owner is told)
+    const ap = getSettings();
+    const draftWaits = (x) => x.status === 'open' && x.acceptState === 'fixing' && (!ap.autopilot || !!ap.pausedReason);
+    const items = all.filter((x) => awaitsOwner(x) || draftWaits(x));
     // (closed: the handled items' ids, so Home's Blockers doesn't count a "Needs you" the owner has done)
     return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id), now: all.some((x) => x.pending) ? new Date(clockNow()).toISOString() : undefined };
   } catch (err) {
@@ -8007,6 +8258,20 @@ function dashboardApi() {
     // the Security page and Home's buttons (src/security.mjs): its data, and the owner's scan, deep scan, stop, new draft
     security: { view: () => { refreshConfig(); return securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) }); }, act: (b) => { refreshConfig(); return securityAct(b); } },
     usage: usageView, // Home's Usage card for a range, by a field, this project or all (the owner's: the page's key)
+    // the tester (tester part 3): Home's Run acceptance and the Team page's card, a run's table and its evidence files,
+    // and the owner's run (the dashboard's process is the owner's)
+    tester: {
+      view: () => {
+        refreshConfig();
+        return testerView(testerCtx());
+      },
+      run: (id) => runView(DIR, id),
+      file: (id, name) => evidenceFile(DIR, id, name),
+      ask: (b) => {
+        refreshConfig();
+        return ownerRun(testerCtx(), String(b.plan || ''), String(b.env || ''));
+      },
+    },
     startHub,
     stopHub,
     setAutopilot,
@@ -8155,7 +8420,7 @@ const COMMAND_TABLE = {
   note: (rest) => cmdNote(rest, { store: cards() }),
   // (the team's answer on a card is redacted like a report before it is kept, and the owner's phone gets a message that
   // names the card, not the answer: FR-014)
-  handoff: (rest) => cmdHandoff(rest, { store: cards(), redact: teamWords(), notify: queueNotify, name: NAME }),
+  handoff: (rest) => cmdHandoff(rest, { store: cards(), redact: teamWords(), notify: queueNotify, name: NAME, tester: { config: CFG.config, base: CFG.base, stateDir: DIR, git: (args) => git(args, { allowFail: true }).out } }),
   team: (rest) => cmdTeam(rest, { root: ROOT, stateDir: DIR, hubAlive, loaded: LOADED }).then((code) => (process.exitCode = code)),
   ask: (rest) => {
     refuseInSandbox('The assistant (nextlevel ask)');

@@ -22,6 +22,9 @@ so a clear, honest report matters as much as the code.
    (`pnpm.cmd`, `npm.cmd`, `npx.cmd`). If the task needs Docker and Docker can't be reached from where you
    run, say so in your report and finish with `Status: BLOCKED`. Don't run remote scans such as `rafter run`:
    your branch isn't published, so they can't reach it. If the spec asks for one, say so in your report.
+   If the spec has a line `Acceptance: docs/acceptance/<plan>.yaml on <env>`, nextlevel's tester runs that plan
+   against the environment once your work is merged and deployed: build what the plan checks. Write or extend the
+   plan only when the spec lists it under "Files owned", and never weaken a step to make it pass.
 4. For anything that starts services (Docker Compose, dev servers, databases), use the environment:
    `COMPOSE_PROJECT_NAME` and `NEXTLEVEL_PORT_OFFSET` are set per slot so two workers don't collide.
    Never hardcode ports. Stop the services you started before you finish.

@@ -8,7 +8,10 @@ Needs: none
      list it under "Files owned" too). The hub checks that it is committed on the task's branch and not empty.
      Needs: what the task needs from the worker that runs it: docker (a stack, compose, an integration check with
      containers), packages (pnpm or npm installs), network; several with commas (Needs: docker, packages), or none.
-     The hub refuses to send it to a worker that can't give it, and says which can. -->
+     The hub refuses to send it to a worker that can't give it, and says which can.
+     Acceptance: docs/acceptance/<plan>.yaml on <env>, on a line of its own here, when nextlevel's tester is on: the
+     hub runs that plan after the task is merged and deployed to the environment, and a card with the plan follows the
+     result. -->
 
 
 ## Goal

@@ -34,7 +34,8 @@ export const templateHash = (text) => createHash('sha256').update(String(text).r
 // orchestrator's before FR-021 had no way to close a task it won't build (a real project's orchestrator closed five at the owner's
 // word by writing "closed" in their specs, and the Project page counted them as planned); and the orchestrator's before
 // Codex workers' part B knew no second worker and no "Needs:" line, and told it never to pick an engine itself; and the
-// orchestrator's before handoff close (FR-018) knew only cancel, and nothing of a reopened card.
+// orchestrator's before handoff close (FR-018) knew only cancel, and nothing of a reopened card; and the orchestrator's,
+// the worker's and the task template before the tester's part 3 knew no card the tester checks and no "Acceptance:" line.
 export const OLD_TEMPLATES = {
   'docs/agents/ORCHESTRATOR.md': [
     'bb38c3a0a3ed60ea7e5cfa9d41bca9765be25ee1dc67223ff1d724b85fa30be5', // M1
@@ -57,6 +58,7 @@ export const OLD_TEMPLATES = {
     '14d6eb904a5685f77c6ac6b311ee8c4049dedb619b9f1494bd9a8ff96889de0a', // Codex workers' part B (the first public version reworded one example)
     '34846aac319924a1dc8809377c681b7ef56491c2967c4f637de7dc04ff90dde7', // the public versions to v0.2.0 (only cancel, no reopened cards)
     '956e92c57485776bf476b13a5a7b93a168f841f079a02e81808e1b268df585f1', // the handoff cards (AGENTS.override.md and SECURITY.md not protected)
+    'dbea69572b9d510531f99881ebd3b26d1d6be6cb8572c2b8d9fa0e508945a099', // the security engineer (no cards the tester checks)
   ],
   'docs/agents/WORKER.md': [
     '76eb1176642564d6e2612d232aacc0433041ad191327f2b69809251e29923d21', // M1
@@ -67,6 +69,7 @@ export const OLD_TEMPLATES = {
     'a4def5a456bf1e0ef1f227b6792b8cda30412aa8ee98c80f0ba5da32de1a5102', // the guard, part 2 (the result in the report, remote scans)
     '3aa6e303e12a4afb01f923d38832b3f30bb6a4f9d79e61a81cb438b044bdff99', // FR-012 (commands tried to learn what they do)
     '374366b1fdab5b5ccfb22f8596ba9a93223d1ecd8fedea2d2c099857e925f97e', // before the security engineer (AGENTS.override.md and SECURITY.md not protected)
+    '577f4166fa342117739fb2744a5929fba75265e9a9d1de86cdbeb80f82d1ac13', // the security engineer (no Acceptance: line)
   ],
   // The security engineer's role doc (docs/design/security-engineer.md): new with the role, none older yet
   'docs/agents/SECURITY-ENGINEER.md': [],
@@ -89,6 +92,7 @@ export const OLD_TEMPLATES = {
     '9d1308636d541e5ed2bc0d8131bb4511072b432cf3d65f301a68d84e05e8b300', // the original kit
     'beb096b6986c5125513c551117823f83d970385660c9b814cd2bf39d71bfc7f5', // M1
     '2229690b01773e56dc758d4539e0f68039d2905c93bada55064f2c2a2c353b11', // FR-012 (no Needs: line)
+    '7f06d1faf7dd3724b5da075a8e19f23060259a62b71bd694638aa7aad0d7ac6e', // Codex workers' part B (no Acceptance: line)
   ],
   // (START.cmd is replaced only while no cmd.exe runs it: the update looks for one first)
   'START.cmd': [

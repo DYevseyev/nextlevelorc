@@ -455,3 +455,35 @@ Where part 2 differs from §2 and §6, and why (`docs/DECISIONS.md` has each):
 - **The stand-in browser** (`test/stubs/playwright`) is the part of Playwright's API the runner uses, over a small DOM,
   with every request through the run's proxy; the stand-in npm installs it. The runner was also tried against the real
   Playwright 1.63.0 and Chromium on Linux (a whole run through the hub); the manual check covers Windows.
+
+## 17. As built: part 3
+
+Where part 3 differs from §8 and §9, and why (`docs/DECISIONS.md` has each):
+
+- **Where it lives.** The pure part is `src/lib/acceptloop.mjs` (a spec's `Acceptance:` line, a run's result as one key,
+  the fix draft, what changed in a plan, which branch deploys which environment, whether a version answer names a
+  commit); the cards' side is `accept` in `src/lib/cards.mjs` (`acceptState`, `acceptWords`, and the hub-only
+  `acceptRun`, `acceptFix`, `acceptStuck`, `testerClose`); the hub's side is "the tester's part 3" in `hub.mjs`
+  (`testerEnded`, `testerAfterPush`, `testerAfterMerge`, `deployTick`).
+- **A card's states,** from code: checking (a run asked or running), verified, changed (a pass of another plan than
+  the card's), fixing (a draft waits for the team), stuck (`maxFixes` drafts and the step still fails), blocked (the run
+  was refused, incomplete or broken: not the team's to fix). Verified, changed, stuck and blocked are the owner's turn,
+  under What needs you; checking and fixing aren't.
+- **Which cards a run's end reaches:** the card it was asked for, and every open card with the same plan and
+  environment. With `autoClose`, every such card that the run verified closes (`closedBy: 'tester'`, the owner's
+  Reopen undoes it).
+- **Fix drafts are counted per step since the plan's last pass,** not per fix task: the hub can't tell which task was
+  the fix, and a pass starts the count again.
+- **No format change.** `accept` is a field older versions ignore; one that rewrites `handoff.json` drops it, and the
+  card is then an ordinary one.
+- **The version endpoint** is asked through the tester's own HTTP client (its origin rules, the dashboard's port
+  refused), at most every 30 seconds, one at a time; an answer names the commit when its whole hash, or at least its
+  first 7 characters, stands as a word of its own. Deploys and the tasks waiting for one are kept in the guard's folder
+  (`tester-deploys.json`, `tester-after-tasks.json`), so the orchestrator can't make the hub believe in a deploy.
+- **After a task's merge** to an environment no branch deploys, the plan runs at once (that environment serves what is
+  merged); otherwise the merge waits for a deploy whose commit contains it.
+- **Who asked a run** is part of its record (`by`: owner, orchestrator, card, deploy, task). Only the orchestrator's and
+  a card's count in `maxRunsPerHour`: a deploy's and a task's are the hub's.
+- **Deferred to part 4:** turning the tester on from the Team page (the card says how to add the section), and the merge
+  card saying when a fix changes its own plan (a card's plan hash catches it: the pass reads "changed").
+

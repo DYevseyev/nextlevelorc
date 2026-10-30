@@ -168,6 +168,26 @@ Values are typed by the plan's shape, never by YAML's guesses: `status: 200` is 
 `text: no` is the text "no". In `json` bodies and in `json.equals`, plain `true`, `false`, `null` and numbers are JSON's,
 and anything else is a string.
 
+## Cards, deploys and fixes
+
+- **A card the tester checks.** The orchestrator adds a handoff card with a plan:
+  `nextlevel handoff add --file <request> --plan docs/acceptance/<plan>.yaml --env <env>`. The hub runs the plan as
+  committed then; the card reads "The tester is checking this" and waits for no one. A pass makes it "Verified, ready to
+  close" (one Close on Home); with `"autoClose": true` the hub closes it itself, and Reopen on the card undoes that. A
+  pass of a plan that changed since the card was added says what changed and never closes the card by itself.
+- **A failure** leaves a fix draft in `.nextlevel/tester/fixes/<run id>.md` for the orchestrator to commit as a task:
+  what the app answered is quoted on one line each, so no line of it can act as part of the spec. After `maxFixes` (2)
+  drafts for the same step since the plan last passed, the card waits for you. A run that couldn't finish (the
+  environment down, a sign-in not set, the browser missing) waits for you too: that isn't the team's to fix.
+- **A task's `Acceptance:` line.** A task spec with `Acceptance: docs/acceptance/<plan>.yaml on <env>` has its plan run
+  after its merge: at once when no branch deploys that environment, else after the deploy that carries the merge.
+- **After a deploy.** `"afterDeploy": { "main": ["staging"] }` names the environments a pushed branch deploys to. After
+  a push of that branch, every committed plan for those environments runs once the environment's `version` path (like
+  `"version": "/version"`) answers the pushed commit (asked every 30 seconds, up to 15 minutes), or after
+  `deployWaitMinutes` (10) when it has none. A failure after a deploy sends one phone message.
+- Home's Acceptance card runs a committed plan on an environment and shows the last runs, step by step, with their
+  screenshots; the Team page shows the environments and which personas are set.
+
 ## Commands
 
 | Command | Who | What |
@@ -177,6 +197,7 @@ and anything else is a string.
 | `nextlevel tester run <plan> --env <name>` | the owner, the orchestrator | asks the hub for a run of the committed plan |
 | `nextlevel tester wait <run id>` / `show <run id>` | the owner, the orchestrator | how it ended, step by step |
 | `nextlevel tester stop [<run id>]` | the owner | stops a run at its next step |
+| `nextlevel handoff add ... --plan <plan> --env <name>` | the orchestrator | a card the tester checks |
 | `nextlevel tester persona set\|list\|forget` | the owner, in their own window | the personas' sign-ins |
 | `nextlevel tester browser [status]` / `browser install` | anyone / the owner, in their own window | whether the browser is ready; installing it |
 
