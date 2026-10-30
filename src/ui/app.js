@@ -650,6 +650,7 @@ function runTable(run) {
   });
   return h('div.run-table', {},
     h(`p.small.k-${RUN_KIND[run.state] || 'idle'}`, {}, h('span.dot'), `Run ${run.id}: ${run.state}${run.why ? ` (${run.why})` : ''} · ${run.plan} on ${run.env}${run.commit ? ` at ${run.commit.slice(0, 8)}` : ''}${run.by ? ` · asked by ${run.by}` : ''}`),
+    run.planChanged && run.task ? h('p.small.warn', {}, `Task ${run.task}'s merge changed this plan, the one its fix is judged by: read what changed before you trust a pass.`) : null,
     rows.length ? h('table.run-steps', {}, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'As'), h('th', {}, 'Status'), h('th', {}, 'Step'), h('th', {}, 'Time'))), h('tbody', {}, rows)) : null,
     h('p.small.muted', {}, 'What a step expected and got comes from the plan and the app. Passwords, tokens and cookies were taken out before anything was kept.'));
 }
@@ -715,28 +716,95 @@ function testerCard() {
   } else card.append(h('p.muted.small', {}, 'No run yet.'));
   return card;
 }
-// The Team page's Tester card: on or off, each environment with its personas (set or not), the browser
+// The Team page's Tester card: on or off (Turn on / Turn off: nextlevel team tester, the owner's change), each environment
+// with its personas (set or not) and the form that sets one, the schedules, the browser. What is typed into the form goes
+// in the request's body only: the page keeps none of it, and the inputs are emptied whatever the answer.
+const tform = { open: '', busy: false, toggling: false };
 function testerTeamCard() {
   loadTester();
   const d = tst.data;
   if (!d?.ok) return null;
   const card = h('div.card.role.tester-team', { id: 'tester' },
     h('div.role-head', {}, h('div', {}, h('h2', {}, 'Tester'), h('p.muted.small', {}, 'A program, not a model: it walks each acceptance plan itself, with no tokens, and no AI ever holds a test account\'s password.'))));
-  if (!d.on) {
-    card.append(h('p', {}, 'Off.'), h('p.small', {}, 'To turn it on, add a "tester" section to nextlevel.json (docs/acceptance.md in nextlevel shows one): your approval of that change on the dashboard turns it on. Then set each test account once:'), command('PowerShell, in the project folder', 'nextlevel tester persona set <environment> <persona>'));
+  if (!d.section) {
+    card.append(h('p', {}, 'Off.'), h('p.small', {}, 'To use it, add a "tester" section to nextlevel.json with its environments and personas (docs/acceptance.md in nextlevel shows one): you approve that change on the dashboard. Then turn it on here and set each test account once.'));
     return card;
   }
-  card.append(h('p', {}, h('strong', {}, 'On'), d.store?.problem ? h('span.warn', {}, ` · the secret store: ${d.store.problem}`) : null));
+  card.append(h('div.tester-switch', {},
+    h('p', {}, h('strong', {}, d.on ? 'On' : 'Off'), d.store?.problem ? h('span.warn', {}, ` · the secret store: ${d.store.problem}`) : null),
+    h(`button.btn${d.on ? '' : '.primary'}`, { type: 'button', disabled: tform.toggling, onclick: () => setTester(!d.on) }, tform.toggling ? 'Saving…' : d.on ? 'Turn off' : 'Turn on')));
+  if (!d.on) card.append(h('p.muted.small', {}, 'While it is off nothing runs, and cards, deploys and tasks go on as if there were no tester. You can set the test accounts first.'));
   for (const e of d.environments || []) {
     card.append(h('p.small', {}, h('strong', {}, e.name), ` ${e.url}${e.production ? ' (production)' : ''} · ${e.mutations ? 'steps that change data may run' : 'read-only'}`),
-      h('ul.small.personas', {}, e.personas.map((p) => h(`li.${p.set ? 'ok' : 'warn'}`, {}, `${p.persona}: ${p.set ? 'set' : p.old ? 'set for an old URL: set it again' : 'not set'}`))));
-    const unset = e.personas.find((p) => !p.set);
-    if (unset) card.append(command('PowerShell, in the project folder', `nextlevel tester persona set ${e.name} ${unset.persona}`));
+      h('ul.small.personas', {}, e.personas.map((p) => {
+        const key = `${e.name}/${p.persona}`;
+        return h(`li.${p.set ? 'ok' : 'warn'}`, {},
+          h('span', {}, `${p.persona}: ${p.set ? 'set' : p.old ? 'set for an old URL: set it again' : 'not set'}`),
+          h('span.persona-acts', {},
+            h('button.linkish', { type: 'button', disabled: tform.busy, 'aria-expanded': tform.open === key ? 'true' : 'false', onclick: () => openPersona(tform.open === key ? '' : key) }, p.set ? 'Set again' : 'Set'),
+            p.set || p.old ? h('button.linkish', { type: 'button', disabled: tform.busy, onclick: () => forgetPersona(e.name, p.persona) }, 'Forget') : null),
+          tform.open === key ? personaForm(e, p.persona) : null);
+      })));
+  }
+  if (d.schedule?.length) {
+    card.append(h('p.small', {}, h('strong', {}, 'Schedules')),
+      h('ul.small', {}, d.schedule.map((x) => h('li', {}, `${x.plans.length ? x.plans.join(', ') : 'every plan'} on ${x.env}, every ${x.every}`))));
   }
   const br = d.browser || {};
   card.append(h('p.small', {}, `Browser: ${br.ok ? `Playwright ${br.version}, installed` : br.installed ? br.problem : 'not installed (only browser steps need it)'}`));
   if (!br.ok) card.append(command('PowerShell, in the project folder', 'nextlevel tester browser install'));
   return card;
+}
+// The form for one persona: the fields its environment's sign-in uses. A test account made for this, never a real
+// person's. Nothing typed is shown again or kept in the page.
+function personaForm(e, persona) {
+  const inputs = e.fields.map((f) => h('label.persona-field', {}, h('span', {}, f),
+    h('input', { type: f === 'username' ? 'text' : 'password', name: f, autocomplete: f === 'username' ? 'off' : 'new-password', spellcheck: 'false', autocapitalize: 'off', maxlength: f === 'username' ? '320' : '4096', disabled: tform.busy })));
+  return h('form.persona-form', { onsubmit: (ev) => {
+    ev.preventDefault();
+    const values = {};
+    for (const i of ev.currentTarget.querySelectorAll('input')) {
+      if (i.value) values[i.name] = i.value;
+      i.value = '';
+    }
+    setPersona(e.name, persona, values);
+  } },
+  h('p.muted.small', {}, `The sign-in of ${persona} on ${e.name}. Use a test account made for this, never a real person's. It is kept on this PC with your account's own protection. Type every value: Set again replaces them all.`),
+  inputs,
+  h('div.persona-buttons', {}, h('button.btn.primary', { type: 'submit', disabled: tform.busy }, tform.busy ? 'Keeping…' : 'Keep it'), h('button.btn', { type: 'button', disabled: tform.busy, onclick: () => openPersona('') }, 'Cancel')));
+}
+function openPersona(key) {
+  tform.open = key;
+  renderTeam(true);
+  if (key) $('#tester form.persona-form input')?.focus();
+}
+async function setPersona(env, persona, values) {
+  tform.busy = true;
+  renderTeam(true);
+  const res = await api('/api/tester', { action: 'persona', env, persona, values });
+  tform.busy = false;
+  if (res.ok) tform.open = '';
+  toast(res.message || (res.ok ? 'Kept.' : 'Not kept.'), res.ok ? 'good' : 'error');
+  await loadTester(true);
+  renderTeam(true);
+}
+async function forgetPersona(env, persona) {
+  tform.busy = true;
+  renderTeam(true);
+  const res = await api('/api/tester', { action: 'forget', env, persona });
+  tform.busy = false;
+  toast(res.message || (res.ok ? 'Forgotten.' : 'Not forgotten.'), res.ok ? 'good' : 'error');
+  await loadTester(true);
+  renderTeam(true);
+}
+async function setTester(on) {
+  tform.toggling = true;
+  renderTeam(true);
+  const res = await api('/api/team', { tester: on });
+  tform.toggling = false;
+  toast(res.message || (res.ok ? 'Saved.' : 'Not saved.'), res.ok ? 'good' : 'error');
+  await loadTester(true);
+  renderTeam(true);
 }
 
 // ---------- the security engineer (1a-2): Home's Security card and the Security page ----------
@@ -1978,6 +2046,8 @@ function renderTeam(force = false) {
   if (!b?.ok || !b.team) return;
   const text = JSON.stringify([b.team, b.teamChoices, b.workerWindow, b.codexWorkers, b.githubChecks, windowBusy, sandboxBusy, checksBusy, tst.data]);
   if (!force && text === lastTeam) return;
+  // (a redraw would empty the persona form under the owner's typing: it waits until the form is closed)
+  if (!force && tform.open && root.querySelector('form.persona-form')) return;
   lastTeam = text;
   root.replaceChildren(h('div.roles', {}, b.team.map((row) => teamCard(row, b)), testerTeamCard(), windowCard(b), codexWorkersCard(b), githubChecksCard(b)),
     h('p.muted.small', {}, 'Saved in nextlevel.json: commit it with your next change. From PowerShell: nextlevel team, and nextlevel team set <role> --engine codex|claude|agy --model <name> --effort <level>.'));

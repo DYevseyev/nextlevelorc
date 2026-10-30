@@ -2134,6 +2134,20 @@ One entry each: date, decision, why, alternatives.
   neither the guard nor the push guard holds it. It goes out with the next push. A cut policy, another branch, a file
   with changes of its own, a link and a case twin are refused. Alternative: push it at once, which would be a push the
   owner didn't see on a card.
+- 2026-10-30 — **A schedule never catches up.** After the hub was stopped, a schedule runs once, not once per interval
+  it missed: the runs would all see the same app, and a burst of them could pass the orchestrator's cap for nothing.
+  Its next time is kept in the guard's folder, so the team can't move it, and is keyed by the entry's words, so a
+  changed entry starts its interval again.
+- 2026-10-30 — **A scheduled run is the hub's, outside `maxRunsPerHour`,** like a deploy's: the owner set it, and an
+  hour is its shortest interval.
+- 2026-10-30 — **`nextlevel team tester on|off` changes `enabled` alone, and refuses without a section.** Turning on what
+  the owner approved is the owner's switch; adding environments and personas, which say where values go, stays a
+  change approved on its card.
+- 2026-10-30 — **The persona form is on the dashboard, in the dashboard's process,** with the command's checks. The
+  dashboard is the owner's (its key, 127.0.0.1); its answer, its log and the page's data never carry a value, and the
+  page empties the form whatever the answer. The audit line names the fields, not their values.
+- 2026-10-30 — **A fix that changes its own plan is said, not held.** The card's plan hash already keeps such a pass
+  from verifying the card; holding the merge would stop work for a change the team may need (a plan that was wrong).
 - 2026-10-30 — **The owner's own write of a protected file refuses while the orchestrator's unapproved change is on
   it.** The Team page's switches and the doctor's fixes read nextlevel.json from disk, write it back with their own
   change, and approve the whole result (`recordOwner`). Clicked during a round, before the guard's watch looked, that

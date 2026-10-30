@@ -123,7 +123,9 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   `accept` in `src/lib/cards.mjs` (`acceptState`; the hub-only `acceptRun`, `acceptFix`, `acceptStuck`, `testerClose`);
   the hub's "the tester's part 3" (testerEnded, testerAfterPush, testerAfterMerge, deployTick, its lists in the guard's
   folder); `handoff add --plan --env`; the dashboard's `/api/tester` routes, Home's Acceptance card and the Team page's
-  Tester card.
+  Tester card. Part 4: `tester.schedule` (`everyMinutes`, the hub's scheduleTick, its state in the guard's folder),
+  `nextlevel team tester on|off` (`setTester` in `src/team.mjs`), the persona form (`ownerPersona` in `src/tester.mjs`,
+  `POST /api/tester` with `persona` or `forget`), and a run's `planChanged` when a task's merge changes its own plan.
 - `src/lib/usage.mjs` — the usage ledger (`docs/design/token-usage.md`): one line per ended run in
   `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
   today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
@@ -292,7 +294,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   browser run end to end, a read-only environment, a missing or broken browser; and part 3 (a card verified, closed by
   itself and reopened; a failure's fix draft, stuck, a changed plan; a task's `Acceptance:` line and a deploy waiting
   for the version endpoint with the test clock, one phone message; the cap and the tester off; the dashboard's tester
-  routes with and without the key);
+  routes with and without the key); and part 4 (a schedule with the test clock, none caught up, one phone message; `team
+  tester on|off` and Turn off; the persona form's checks and no value anywhere; a fix that changes its own plan);
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),

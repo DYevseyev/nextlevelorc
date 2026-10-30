@@ -4,6 +4,8 @@
 //   nextlevel team window [hidden|minimized|visible] [--json]   how a worker's process shows on Windows (workers.window, FR-010)
 //   nextlevel team sandbox [on|off] [--json]   Codex workers in Codex's sandbox, or without it like the other workers
 //        (engines.codex.workerArgs; the orchestrator keeps engines.codex.args)
+//   nextlevel team tester [on|off] [--json]   the tester (tester.enabled in nextlevel.json; its section is written by hand
+//        or with the owner's help: docs/acceptance.md)
 //   nextlevel team runner status|on [--repo owner/name] [--json]   the project's GitHub checks on this PC: whether it's
 //        offered and recommended (status), and setting it up (on: only a personal account's private repository; the
 //        runner itself is the design's part B, docs/design/self-hosted-runner.md)
@@ -86,6 +88,7 @@ export async function cmdTeam(argv, { root, stateDir, hubAlive = () => false, lo
   if (sub === 'window') return setWindow(rest[0], a, { root, loaded, print });
   if (sub === 'sandbox') return setSandbox(rest[0], a, { root, loaded, print });
   if (sub === 'runner') return runner(rest[0], a, { root, print });
+  if (sub === 'tester') return setTester(rest[0], a, { root, loaded, print });
   if (sub === 'set') return set(rest[0], a, { root, stateDir, hubAlive, loaded, print });
   print({ ok: false, message: `unknown: team ${sub}` }, 'usage: nextlevel team [--json] | team models <engine> | team set <role> --engine E [--model M] [--effort X]');
   return 1;
@@ -380,6 +383,60 @@ function setSandbox(choice, a, { root, loaded, print }) {
   const env = (loaded.overrides || []).includes('CODEX_ARGS') ? " CODEX_ARGS is set in this environment: it changes engines.codex.args, not the workers' own arguments." : '';
   const message = `Saved: Codex workers: ${v.title} (engines.codex.workerArgs: ${workerArgs.join(' ')}). It applies to the next task that starts (running workers go on as they are). The orchestrator keeps engines.codex.args. The rest of engines.codex.args is copied as it is now: a later change to it (a -m, a -c) reaches Codex workers only when you choose here again.${choice === 'off' ? ' Run the bridge test for Codex workers again: nextlevel bridge-test --engine codex.' : ''}${env}`;
   print({ ok: true, saved: true, message, codexWorkers: v }, `${message}\nCommit nextlevel.json with your next change.`);
+  return 0;
+}
+
+// The tester on or off (the tester's part 4): only tester.enabled changes, as the owner's change (recordOwner); the rest
+// of the section (environments, personas, schedules) is the owner's to write, and the guard holds anyone else's change
+// to it. No choice: whether it is on, and what it has. The running hub reads it at its next look.
+function setTester(choice, a, { root, loaded, print }) {
+  const fail = (message) => {
+    print({ ok: false, saved: false, message }, message);
+    return 1;
+  };
+  const view = (t) => ({ on: !!t?.enabled, environments: Object.keys(t?.environments || {}), personas: t?.personas || [], schedule: (t?.schedule || []).length });
+  if (!choice) {
+    const v = view(loaded.config?.tester);
+    const has = loaded.config?.tester ? `environments ${v.environments.join(', ') || 'none'}, personas ${v.personas.join(', ') || 'none'}` : 'no tester section in nextlevel.json (docs/acceptance.md shows one)';
+    print({ ok: true, tester: v, section: !!loaded.config?.tester }, `Tester: ${v.on ? 'on' : 'off'} (${has}).`);
+    return 0;
+  }
+  if (!['on', 'off'].includes(choice)) return fail(`team tester is on or off, not "${choice}"`);
+  const session = agentSession();
+  if (session) return fail(ownerOnly(`nextlevel team tester ${choice}`, 'The owner turns it on or off on the dashboard (Team -> Tester) or in their own PowerShell window.', session));
+  const file = path.join(root, CONFIG_FILE);
+  if (!fs.existsSync(file)) return fail(`${CONFIG_FILE} is missing: nextlevel init makes it.`);
+  let raw;
+  let crlf;
+  try {
+    ({ raw, crlf } = readRaw(file));
+  } catch (err) {
+    return fail(`${CONFIG_FILE} is not valid JSON (${err.message}): fix it first (the Setup page shows it).`);
+  }
+  if (loaded.error) return fail(loaded.error);
+  if (!raw.tester || typeof raw.tester !== 'object' || Array.isArray(raw.tester)) return fail(`${CONFIG_FILE} has no tester section: add one with its environments and personas first (docs/acceptance.md shows one), then turn it on.`);
+  const on = choice === 'on';
+  if (!!raw.tester.enabled === on) {
+    print({ ok: true, saved: false, message: `The tester is already ${choice}.`, tester: view(loaded.config.tester) }, `The tester is already ${choice}.`);
+    return 0;
+  }
+  const next = { ...raw, tester: { ...raw.tester, enabled: on } };
+  let checked;
+  try {
+    checked = loadConfig(root, { raw: next });
+  } catch (err) {
+    return fail(err.message.replace(/^Settings problem \([^)]*\):\s*/, ''));
+  }
+  let text = formatConfig(next);
+  if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
+  fs.writeFileSync(file, text);
+  recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
+  const message = on
+    ? 'Saved: the tester is on. The running hub starts acceptance runs from its next look; nextlevel doctor checks its environments and personas.'
+    : 'Saved: the tester is off. A run already going finishes; nothing new starts.';
+  print({ ok: true, saved: true, message, tester: view(checked.config.tester) }, `${message}\nCommit nextlevel.json with your next change.`);
   return 0;
 }
 
