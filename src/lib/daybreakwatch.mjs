@@ -40,7 +40,7 @@ export function readWatch(d) {
     models,
     covered: ids(o.covered),
     news,
-    told: Array.isArray(o.told) ? o.told.filter((k) => typeof k === 'string' && k.length <= 120).slice(-KEEP) : [],
+    told: Array.isArray(o.told) ? o.told.filter((k) => typeof k === 'string' && k.length <= 160).slice(-KEEP) : [],
   };
 }
 
@@ -71,7 +71,7 @@ export function withAnswer(rec, answer, { now, digest }) {
   // again when it drops)
   const told = r.told.filter((k) => {
     const [kind] = k.split(':');
-    const model = k.split(':').slice(2).join(':');
+    const model = k.split(':').slice(2).join(':').split('@')[0]; // (a dropped model's key ends with its project's key)
     return kind === 'new' ? covered.includes(model) : kind === 'dropped' ? !covered.includes(model) : true;
   });
   return { ...r, at, tried: at, digest, ok: true, why: '', fails: 0, models, covered, news: [...kept, ...fresh], told };
@@ -93,10 +93,11 @@ export const seenNews = (rec, model) => {
 };
 
 // What the phone hasn't heard yet (once per PC): [{ key, text }] for the news and a project's dropped model
-export function untold(rec, { account, dropped = '', project = '' }) {
+export function untold(rec, { account, dropped = '', project = '', projectKey = '' }) {
   const r = readWatch(rec);
   const out = r.news.map((n) => ({ key: `new:${account}:${n.model}`, text: `Daybreak Blue now covers ${n.model} for the security engineer's sign-in. Switch to it on Home or the Team page if you want it: nextlevel never switches by itself.` }));
-  if (dropped) out.push({ key: `dropped:${account}:${dropped}`, text: `${project ? `${project}: ` : ''}the security engineer's model ${dropped} no longer takes Daybreak Blue, so its next scan won't start. Choose another model on the Team page.` });
+  // (a dropped model is each project's: one on the same sign-in and model hears it too)
+  if (dropped) out.push({ key: `dropped:${account}:${dropped}@${projectKey}`, text: `${project ? `${project}: ` : ''}the security engineer's model ${dropped} no longer takes Daybreak Blue, so its next scan won't start. Choose another model on the Team page.` });
   return out.filter((x) => !r.told.includes(x.key));
 }
 export const withTold = (rec, keys) => {

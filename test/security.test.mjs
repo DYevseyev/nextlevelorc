@@ -778,8 +778,13 @@ test("the approved policy into the repository as SECURITY.md: one commit with th
     assert.match((await add()).json.message, /^Not added: the main checkout is on side, not main\./);
     p.git('checkout', '-q', 'main');
     fs.writeFileSync(path.join(p.repo, 'SECURITY.md'), 'my own words\n');
+    assert.match((await add()).json.message, /^Not added: a SECURITY\.md that isn't committed is in the project: commit it, or move it aside, first/);
+    p.git('add', 'SECURITY.md');
+    p.git('commit', '-qm', 'the owner\'s own SECURITY.md');
+    fs.writeFileSync(path.join(p.repo, 'SECURITY.md'), 'my own words, changed\n');
     assert.match((await add()).json.message, /^Not added: SECURITY\.md has changes of its own in the project/);
-    fs.rmSync(path.join(p.repo, 'SECURITY.md'));
+    p.git('rm', '-q', '-f', 'SECURITY.md');
+    p.git('commit', '-qm', 'without it again');
     if (process.platform !== 'win32') {
       const target = path.join(p.tmp, 'elsewhere.md');
       fs.writeFileSync(target, 'not to be written\n');

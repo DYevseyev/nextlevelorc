@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { loadConfig } from '../src/lib/config.mjs';
-import { guardDir, guardStore, inProject, linkOnTheWay, recordOwner } from '../src/lib/guard.mjs';
+import { guardDir, guardStore, inProject, linkOnTheWay, ownerWriteProblem, recordOwner } from '../src/lib/guard.mjs';
 import { BUILT_IN, describeChange, isProtected, ownedEntries, protectedList, protectedOwned, visible } from '../src/lib/protect.mjs';
 import { REPO, fileExists, hubRounds, isAlive, makeProject, sleep } from './helpers.mjs';
 import { client, request, startUi, stopUi } from './ui-helpers.mjs';
@@ -307,6 +307,52 @@ const heldRecords = (p) => {
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).items : [];
 };
 const guardCards = (p) => JSON.parse(fs.readFileSync(p.state('handoff.json'), 'utf8')).items.filter((x) => x.guard);
+
+test("an owner's write of nextlevel.json while the orchestrator acts never approves the orchestrator's change with it: the Team page's switches and the doctor's fixes refuse, and the watch holds it", () => {
+  const p = makeProject();
+  const home = p.env.HOME;
+  try {
+    const store = guardStore({ root: p.repo, home });
+    const file = path.join(p.repo, 'nextlevel.json');
+    const team = (args, extraEnv) => JSON.parse(p.hub(['team', ...args, '--json'], { extraEnv }).out);
+    // Outside the watch only the owner acts: an edit by hand, then a switch, both stay
+    p.setConfig((c) => ({ ...c, name: 'edited-by-hand' }));
+    assert.equal(team(['window', 'minimized']).saved, true);
+    assert.equal(p.config().name, 'edited-by-hand');
+    // The watch open, nothing changed since: the switch saves
+    store.open('test:round', { what: 'a test round' });
+    assert.equal(team(['window', 'hidden']).saved, true);
+    // The orchestrator changes nextlevel.json, then the owner clicks a switch before the watch looks
+    // (it drops deployBranches too: the doctor's fix would write them back, approving the rest)
+    const { deployBranches, ...was } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(deployBranches, 'the project names its deploy branches');
+    const theirs = JSON.stringify({ ...was, name: 'orchestratorWasHere' }, null, 2);
+    fs.writeFileSync(file, theirs);
+    const refused = team(['window', 'visible']);
+    assert.equal(refused.saved, false, refused.message);
+    assert.match(refused.message, /^nextlevel\.json changed while the orchestrator is at work, and you haven't approved that change: nothing was saved\./);
+    assert.equal(fs.readFileSync(file, 'utf8'), theirs, 'nothing written');
+    for (const args of [['set', 'guide', '--engine', 'claude'], ['set', 'worker-second', '--engine', 'none'], ['set', 'security', '--engine', 'off'], ['sandbox', 'off']]) {
+      const r = team(args);
+      assert.equal(r.saved || false, false, `${args.join(' ')}: ${r.message}`);
+      assert.match(r.message, /changed while the orchestrator is at work/, args.join(' '));
+    }
+    // the doctor's fix too (it writes deployBranches into nextlevel.json)
+    const fixed = p.hub(['doctor', '--fix', 'project.deploy-branches']);
+    assert.match(fixed.out, /The fix for "[^"]+" failed: nextlevel\.json changed while the orchestrator is at work/);
+    assert.equal(fs.readFileSync(file, 'utf8'), theirs);
+    assert.ok(!store.isApproved('nextlevel.json', createHash('sha256').update(theirs).digest('hex')), 'never approved');
+    // (an agent's session isn't stopped here: its write is the guard's to judge, and recordOwner approves nothing for it)
+    assert.equal(ownerWriteProblem(p.repo, ['nextlevel.json'], { home, env: { NEXTLEVEL_AGENT: 'orchestrator' } }), '');
+    assert.match(ownerWriteProblem(p.repo, ['nextlevel.json'], { home, env: {} }), /changed while the orchestrator is at work/);
+    assert.equal(store.check().held.length, 1, 'the watch holds the change and sets it back');
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /orchestratorWasHere/);
+    assert.equal(team(['window', 'visible']).saved, true, 'set back: the switch saves');
+    store.close('test:round');
+  } finally {
+    p.cleanup();
+  }
+});
 
 test("a task spec that owns a protected path isn't dispatched; a look-alike is", () => {
   const p = makeProject();

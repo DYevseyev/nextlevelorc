@@ -2134,3 +2134,14 @@ One entry each: date, decision, why, alternatives.
   neither the guard nor the push guard holds it. It goes out with the next push. A cut policy, another branch, a file
   with changes of its own, a link and a case twin are refused. Alternative: push it at once, which would be a push the
   owner didn't see on a card.
+- 2026-10-30 — **The owner's own write of a protected file refuses while the orchestrator's unapproved change is on
+  it.** The Team page's switches and the doctor's fixes read nextlevel.json from disk, write it back with their own
+  change, and approve the whole result (`recordOwner`). Clicked during a round, before the guard's watch looked, that
+  approved whatever the orchestrator had just written there too. Now, while the watch is open, the file must be as it
+  was when the watch opened, or as the owner made, approved or committed it (`ownerWriteProblem` in
+  `src/lib/guard.mjs`); else nothing is saved, and the watch holds the change as before. Outside the watch only the
+  owner acts, so a hand edit stays theirs. Alternative: refuse any content the guard never approved, which would also
+  refuse the owner's own uncommitted edits by hand.
+- 2026-10-30 — **A dropped Daybreak model is told once per project, not once per PC.** Two projects on one sign-in
+  and one model each lose their scans, so each hears it (its key names the project's key). A new model stays once per
+  PC: it is news about the sign-in.
