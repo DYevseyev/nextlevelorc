@@ -28,7 +28,7 @@ import { commandArgs } from './lib/commands.mjs';
 import { ADAPTERS, ENGINE_NAMES, accountProblem, engineTitle, profileEnv } from './engines/index.mjs';
 import { CONFIG_FILE, SECOND_TAKES, WINDOW_MODES, findProfile, formatConfig, loadConfig, notReadOnly, roleProfile, withRole } from './lib/config.mjs';
 import { accessFacts } from './checks/argon.mjs';
-import { recordOwner } from './lib/guard.mjs';
+import { ownerWriteProblem, recordOwner } from './lib/guard.mjs';
 import { needsLockTest } from './lib/rolespec.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { resolveBin, runQuiet } from './lib/proc.mjs';
@@ -229,6 +229,8 @@ async function set(key, a, { root, stateDir, hubAlive, loaded, print }) {
   const saved = pick ? withRole(raw, row.role, { ...change, model: pick }) : next;
   let text = formatConfig(saved);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
   const message = `Saved. ${who}${pick ? `, model ${pick} (the first the scanner's Codex lists for it)` : ''}. It applies ${applies}.${warned}`;
@@ -255,6 +257,8 @@ function saveSecurityOff({ root, print, fail }) {
   }
   let text = formatConfig(next);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]);
   const message = 'Saved. The security engineer is off: no scan runs until you turn it on.';
@@ -282,6 +286,8 @@ function saveNoSecond({ root, print, fail }) {
   }
   let text = formatConfig(next);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
   const message = 'Saved. No second worker: every task goes to the workers, or where its spec or the orchestrator sends it.';
@@ -319,6 +325,8 @@ function setWindow(mode, a, { root, loaded, print }) {
   }
   let text = formatConfig(next);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]);
   const w = windowView(next);
@@ -367,6 +375,8 @@ function setSandbox(choice, a, { root, loaded, print }) {
   }
   let text = formatConfig(next);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
   const v = codexWorkersView(next);
@@ -419,6 +429,8 @@ function setTester(choice, a, { root, loaded, print }) {
   }
   let text = formatConfig(next);
   if (crlf) text = text.replace(/\n/g, '\r\n');
+  const unapproved = ownerWriteProblem(root, [CONFIG_FILE]); // (never approve the orchestrator's edit with the owner's)
+  if (unapproved) return fail(unapproved);
   fs.writeFileSync(file, text);
   recordOwner(root, [CONFIG_FILE]); // the owner's change: the guard never holds it (lib/guard.mjs)
   const message = on

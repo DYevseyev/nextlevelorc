@@ -860,7 +860,9 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), w
   codex-rs, where a `-c` lands, so a run that picks a profile also gets `-c profiles.<name>.daybreak=false`. A profile
   picked some way nextlevel doesn't read (Codex's managed config) could still turn Daybreak on for that run. The pin's
   `-c` makes an interactive Codex window say "Running without the shared background server" when Daybreak would
-  otherwise be on (FR-004 #6); the window runs with `--no-daemon` anyway (FR-011).
+  otherwise be on (FR-004 #6); the window runs with `--no-daemon` anyway (FR-011). When `codex --version` can't be read,
+  no pin is passed (it fails open): a Codex that can't say its version may then run with the owner's own Daybreak
+  setting.
 
 ## The tester (part 1)
 - **The sign-ins are sealed for your account, not walled from it.** Any program running as you can ask Windows' DPAPI,

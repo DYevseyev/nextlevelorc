@@ -134,7 +134,7 @@ import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from 
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
 import { asksToMerge, hasConflictMarkers, mergeText } from './lib/slotgit.mjs';
 import { lockNote, readEnv, retryOnLock, retryOnLockAsync } from './lib/gitlock.mjs';
-import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, recordOwner, shownDiff } from './lib/guard.mjs';
+import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, projectKey as guardProjectKey, recordOwner, shownDiff } from './lib/guard.mjs';
 import { describeGitChange, diffGitState, folderName, readGitState, same as sameFolder, stateKey } from './lib/gitguard.mjs';
 import { describeSecretFile, findSecrets, isEnvFile, redactSecrets, secretValues } from './lib/secrets.mjs';
 import { describeChanges, isProtected, pathKey, protectedList, protectedOwned } from './lib/protect.mjs';
@@ -6246,11 +6246,12 @@ function tellWatch(w) {
   let list = [];
   try {
     const rec = readJsonFile(w.file, null);
-    if (!rec || !untold(rec, { account: w.account, dropped: droppedModel(rec, w.role) }).length) return;
+    const pk = guardProjectKey(ROOT);
+    if (!rec || !untold(rec, { account: w.account, dropped: droppedModel(rec, w.role), projectKey: pk }).length) return;
     updateJsonFile(
       w.file,
       (r) => {
-        list = untold(r, { account: w.account, dropped: droppedModel(r, w.role), project: NAME });
+        list = untold(r, { account: w.account, dropped: droppedModel(r, w.role), project: NAME, projectKey: pk });
         return withTold(r, list.map((x) => x.key));
       },
       {},
@@ -6261,7 +6262,7 @@ function tellWatch(w) {
   }
   for (const x of list) {
     queueNotify(`${NAME}: security engineer`, x.text);
-    log(`Daybreak watch: told the phone (${x.key.split(':')[0]} ${x.key.split(':').slice(2).join(':')})`);
+    log(`Daybreak watch: told the phone (${x.key.split(':')[0]} ${x.key.split(':').slice(2).join(':').split('@')[0]})`);
   }
 }
 // ---------- the security engineer's policy (lib/securitypolicy.mjs): a text the owner approves on a card ----------
@@ -6356,6 +6357,7 @@ function commitPolicy(hash) {
   const twins = git(['ls-files', '-z', '--', ':(icase)security.md'], { allowFail: true }).out.split('\0').filter(Boolean);
   if (twins.some((t) => t !== 'SECURITY.md')) return no(`${twins.filter((t) => t !== 'SECURITY.md').join(', ')} is tracked beside it: on Windows they are one file, and the commit would change the other name`);
   const changed = git(['status', '--porcelain', '--', 'SECURITY.md'], { allowFail: true }).out;
+  if (changed.startsWith('??')) return no('a SECURITY.md that isn\'t committed is in the project: commit it, or move it aside, first');
   if (changed) return no('SECURITY.md has changes of its own in the project: commit or undo them first');
   const file = path.join(ROOT, 'SECURITY.md');
   let st = null;

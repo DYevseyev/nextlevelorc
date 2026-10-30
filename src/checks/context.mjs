@@ -47,7 +47,7 @@ import { homeDir, jsonStore, userState } from '../lib/home.mjs';
 import { TOOL_ROOT } from '../lib/project.mjs';
 import { runInConsole } from '../lib/console.mjs';
 import { readEnv } from '../lib/gitlock.mjs';
-import { recordOwner } from '../lib/guard.mjs';
+import { ownerWriteProblem, recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
 import { apiPortOpen } from '../lib/securityrun.mjs';
@@ -131,6 +131,10 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     },
     exists: (f) => fs.existsSync(f),
     write(f, text) {
+      // (a protected file with a change the owner hasn't approved isn't written over: the fix would approve it)
+      const inside = root && !path.relative(root, f).startsWith('..') && !path.isAbsolute(path.relative(root, f));
+      const unapproved = inside ? ownerWriteProblem(root, [path.relative(root, f)]) : '';
+      if (unapproved) throw new Error(unapproved);
       fs.mkdirSync(path.dirname(f), { recursive: true });
       fs.writeFileSync(f, text);
       // a fix's write in the project (nextlevel.json, a role doc) is the owner's: the guard never holds it

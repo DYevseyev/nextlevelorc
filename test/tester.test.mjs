@@ -20,7 +20,7 @@ import { acceptState, acceptWords, awaitsOwner, eventsOf, eventWords } from '../
 import { pathOnly, safeHeaders, safeJson, safeRecord, safeText } from '../src/lib/evidence.mjs';
 import { personaHold, reportSecrets } from '../src/lib/redact.mjs';
 import { everyMinutes, mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
-import { guardDir } from '../src/lib/guard.mjs';
+import { guardDir, guardStore } from '../src/lib/guard.mjs';
 import { resolverRules } from '../src/lib/testerbrowser.mjs';
 import { cookieJar, isSpecialAddress, reachOf, request, urlProblem } from '../src/lib/testernet.mjs';
 import { startProxy } from '../src/lib/testerproxy.mjs';
@@ -1441,6 +1441,17 @@ test("the Team page's switch: nextlevel team tester on|off changes tester.enable
     assert.doesNotMatch(hubLog(p), /held/);
     assert.match(p.git('show', '--name-only', '--format=%s', 'HEAD'), /^chore: the tester on\n+nextlevel\.json$/m);
     assert.match(p.hub(['team', 'tester', 'on']).out, /already on/);
+    // While the orchestrator acts, a switch never approves its edit of the section with the owner's (a new schedule here)
+    const watch = guardStore({ root: p.repo, home: p.env.HOME });
+    watch.open('test:round', { what: 'a test round' });
+    p.setConfig((cfg) => ({ ...cfg, tester: { ...cfg.tester, schedule: [] } }));
+    const theirs = fs.readFileSync(path.join(p.repo, 'nextlevel.json'), 'utf8');
+    const refused = p.hub(['team', 'tester', 'off']);
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /nextlevel\.json changed while the orchestrator is at work, and you haven't approved that change: nothing was saved/);
+    assert.equal(fs.readFileSync(path.join(p.repo, 'nextlevel.json'), 'utf8'), theirs);
+    assert.equal(watch.check().held.length, 1, 'the watch holds it and sets it back');
+    watch.close('test:round');
     // the dashboard's Turn off runs the same command
     ui = await startUi(p, vaultEnv(p));
     const c = client(ui);

@@ -73,7 +73,8 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   how a path is matched (as Windows reads a name), whether a task spec owns one, and what a change does in plain
   words (from code, never an AI). `src/lib/guard.mjs` — its records in `~/.nextlevel/guard/<project>/` (outside the
   project: the orchestrator can't write there): held changes and their content, what the owner approved, and the
-  watch window around what the orchestrator does; `recordOwner` for the owner's own writes (team, doctor, init). The
+  watch window around what the orchestrator does; `recordOwner` for the owner's own writes (team, doctor, init), and
+  `ownerWriteProblem`, which refuses one while the orchestrator's unapproved change is on the file. The
   hub's side is "the guard" in `hub.mjs` (holdStaged, guardMerge, guardDecide); `src/checks/guard.mjs` is `guard.held`.
   `src/lib/gitguard.mjs` — git's own hooks and settings that run a program or redirect a push, for the project and its
   worktrees: read, compared, described (the hub's gitGuard, gitRecordOwn for its own changes, restoreGit).

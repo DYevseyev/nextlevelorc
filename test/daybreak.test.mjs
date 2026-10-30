@@ -182,12 +182,18 @@ test('the watch, pure: when it asks, what is news, what a project makes of it, a
   r = withAnswer(r, models('gpt-6-astra'), { now: T0 + 72 * 3600_000, digest: D });
   assert.equal(droppedModel(r, role), 'gpt-6-sol');
   assert.equal(droppedModel(r, { daybreak: false, model: 'gpt-6-sol' }), '', 'Daybreak off: nothing to lose');
-  const drop = untold(r, { account: 'acc', dropped: 'gpt-6-sol', project: 'proj' });
-  assert.deepEqual(drop.map((x) => x.key), ['dropped:acc:gpt-6-sol']);
+  const drop = untold(r, { account: 'acc', dropped: 'gpt-6-sol', project: 'proj', projectKey: 'pk1' });
+  assert.deepEqual(drop.map((x) => x.key), ['dropped:acc:gpt-6-sol@pk1']);
   assert.match(drop[0].text, /^proj: the security engineer's model gpt-6-sol no longer takes Daybreak Blue, so its next scan won't start/);
-  r = withTold(r, ['dropped:acc:gpt-6-sol']);
+  r = withTold(r, ['dropped:acc:gpt-6-sol@pk1']);
+  // Each project on the same sign-in and model hears it: the key names the project
+  assert.deepEqual(untold(r, { account: 'acc', dropped: 'gpt-6-sol', project: 'other', projectKey: 'pk2' }).map((x) => x.key), ['dropped:acc:gpt-6-sol@pk2']);
+  assert.deepEqual(untold(r, { account: 'acc', dropped: 'gpt-6-sol', project: 'proj', projectKey: 'pk1' }), [], 'once per project');
+  // A key as long as real ones get (a 16-character account and project key, an 80-character model) is kept
+  const long = `dropped:${'a'.repeat(16)}:${'m'.repeat(80)}@${'p'.repeat(16)}`;
+  assert.ok(readWatch(withTold(r, [long])).told.includes(long));
   r = withAnswer(r, models('gpt-6-sol', 'gpt-6-astra'), { now: T0 + 96 * 3600_000, digest: D });
-  assert.ok(!r.told.includes('dropped:acc:gpt-6-sol'), 'it came back: a later drop is told again');
+  assert.ok(!r.told.includes('dropped:acc:gpt-6-sol@pk1'), 'it came back: a later drop is told again');
   // Even on the first answer, a chosen model it doesn't cover is said
   assert.equal(droppedModel(withAnswer({}, models('gpt-6-luna'), { now: T0, digest: D }), role), 'gpt-6-sol');
   // Failed tries: an hour apart, then a day after three in a row
