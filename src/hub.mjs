@@ -113,7 +113,7 @@ import { cmdTeam } from './team.mjs';
 import { approvedPolicy, changePolicy, cmdScanProcess, cmdSecurity, draftSource, pendingRequests, readPolicy, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage } from './security.mjs';
 import { DRAFT_WARNING, POLICY_MAX, POLICY_WHY, mayDraft, policyText, policyWhat } from './lib/securitypolicy.mjs';
 import { listScans, readScan, runningScan } from './lib/securityscan.mjs';
-import { capProblem, cmdAcceptProcess, cmdTester, evidenceFile, hubRequest, listRuns, ownerRun, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runView, runningRun, testerView, writeRun } from './tester.mjs';
+import { capProblem, cmdAcceptProcess, cmdTester, evidenceFile, hubRequest, listRuns, ownerPersona, ownerRun, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runView, runningRun, testerView, writeRun } from './tester.mjs';
 import { VERSION_EVERY_MS, VERSION_WAIT_MS, changesWords, deployEnvs, deployedBySome, failedStep, fixDraft, planChanges, resultKey, specAcceptance, versionNames } from './lib/acceptloop.mjs';
 import { planPathProblem, readPlan } from './lib/acceptance.mjs';
 import { safeText } from './lib/evidence.mjs';
@@ -6384,6 +6384,11 @@ function testerTick() {
   } catch (err) {
     log(`tester: couldn't look at the deploys: ${err.message}`);
   }
+  try {
+    scheduleTick();
+  } catch (err) {
+    log(`tester: couldn't look at the schedule: ${err.message}`);
+  }
   if (accept.child) return;
   const asks = pendingRuns(ROOT, DIR);
   if (!asks.length || updateHold) return; // (it waits for the update, as new tasks do)
@@ -6404,7 +6409,7 @@ function testerTick() {
   const head = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
   if (!/^[0-9a-f]{40}$/.test(head)) return refuse(`no ${CFG.base} branch`);
   recordStart(ROOT, { plan: ask.plan, env: ask.env, by: ask.by, id: ask.id });
-  writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, commit: head, state: 'starting', askedAt: ask.at, ...(ask.card ? { card: ask.card } : {}), ...(ask.task ? { task: ask.task } : {}) });
+  writeRun(DIR, ask.id, { plan: ask.plan, env: ask.env, by: ask.by, commit: head, state: 'starting', askedAt: ask.at, ...(ask.card ? { card: ask.card } : {}), ...(ask.task ? { task: ask.task } : {}), ...(ask.planChanged ? { planChanged: true } : {}) });
   testerCardsRun(ask, 'starting');
   const what = Buffer.from(JSON.stringify({ id: ask.id, plan: ask.plan, env: ask.env, by: ask.by, commit: head })).toString('base64url');
   const child = spawn(process.execPath, [BIN, '_accept', what], { cwd: ROOT, env: acceptEnv(), stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
@@ -6549,8 +6554,8 @@ function testerEnded(ask, r) {
       log(`autopilot: couldn't note that ${what}: ${err.message}`);
     }
   }
-  // The phone: a deploy's run that fails anew (the owner approved the deploy; a pass says nothing)
-  if (ask.by === 'deploy' && r.state === 'failed' && news) testerTell(`${NAME}: acceptance failed after the deploy`, `${ask.plan} on ${ask.env}: step ${step?.n ?? '?'} failed${step?.what ? ` (${step.what})` : ''}. nextlevel tester show ${ask.id}`, 'high');
+  // The phone: a deploy's or a schedule's run that fails anew (nobody waits for it; a pass says nothing)
+  if (['deploy', 'schedule'].includes(ask.by) && r.state === 'failed' && news) testerTell(`${NAME}: acceptance failed ${ask.by === 'deploy' ? 'after the deploy' : 'on its schedule'}`, `${ask.plan} on ${ask.env}: step ${step?.n ?? '?'} failed${step?.what ? ` (${step.what})` : ''}. nextlevel tester show ${ask.id}`, 'high');
 }
 
 // After the owner's approved push to a branch tester.afterDeploy maps to environments: each waits until its version
@@ -6588,12 +6593,17 @@ function testerAfterMerge(job) {
     env = plan?.env?.length === 1 ? plan.env[0] : '';
   }
   if (!env || !t.environments[env]) return log(`tester: task ${job.task}'s spec names ${want.plan}${env ? ` on ${env}, which nextlevel.json's tester doesn't have` : ' without an environment ("on <env>")'}: it isn't run`);
+  // (a fix that changes the plan it is judged by: said in hub.log and on the run, so the card's box says it; a card
+  // added before reads "changed", never "verified", by its plan's hash)
+  const planChanged = gitLines(['diff', '--name-only', 'HEAD^1', 'HEAD', '--', want.plan]).length > 0;
+  if (planChanged) log(`tester: task ${job.task}'s merge changes ${want.plan}, the plan its Acceptance: line names: its run says so`);
+  const extra = planChanged ? { planChanged: true } : {};
   if (!deployedBySome(t, env)) {
-    hubRequest(ROOT, { plan: want.plan, env, by: 'task', task: job.task });
+    hubRequest(ROOT, { plan: want.plan, env, by: 'task', task: job.task, ...extra });
     return log(`tester: task ${job.task} merged: ${want.plan} runs on ${env}`);
   }
   mkdirp(guard().dir);
-  writeJson(afterTasksFile(), [...readList(afterTasksFile()).filter((x) => !(x.task === job.task && x.env === env)), { task: job.task, plan: want.plan, env, commit: head, at: now() }]);
+  writeJson(afterTasksFile(), [...readList(afterTasksFile()).filter((x) => !(x.task === job.task && x.env === env)), { task: job.task, plan: want.plan, env, commit: head, at: now(), ...extra }]);
   log(`tester: task ${job.task} merged: ${want.plan} runs on ${env} after the deploy that carries it`);
 }
 // The committed plans for an environment, on the base branch's head: a plan that names environments runs on those only
@@ -6648,11 +6658,50 @@ function deployTick() {
     const plans = plansFor(d.env);
     for (const plan of plans) {
       const task = covered.find((x) => x.plan === plan);
-      hubRequest(ROOT, { plan, env: d.env, by: task ? 'task' : 'deploy', ...(task ? { task: task.task } : {}) });
+      hubRequest(ROOT, { plan, env: d.env, by: task ? 'task' : 'deploy', ...(task ? { task: task.task } : {}), ...(task?.planChanged === true ? { planChanged: true } : {}) });
     }
     log(`tester: ${d.branch} at ${short(d.sha)} is deployed to ${d.env}${d.seen ? '' : ' (by its wait)'}: ${plans.length} acceptance plan(s) run${covered.length ? `, after task(s) ${covered.map((x) => x.task).join(', ')}` : ''}`);
   }
   writeJson(afterTasksFile(), tasks);
+}
+
+// tester.schedule (part 4): each entry runs its plans (or every committed plan for its environment) every `every`, the
+// first one interval after the hub first sees it; a time missed while the hub was stopped runs once, never once per
+// interval missed. Its state is in the guard's folder (the orchestrator can't move a schedule), its times by
+// lib/clock.mjs. A run of the same plan and environment still asked for isn't asked again.
+const scheduleFile = () => path.join(guard().dir, 'tester-schedule.json');
+const scheduleKey = (s) => `${s.env} every ${s.every}: ${s.plans.length ? s.plans.join(', ') : 'every plan'}`;
+function scheduleTick() {
+  if (!testerOn(CFG.config)) return;
+  const list = CFG.config.tester.schedule || [];
+  const before = readJson(scheduleFile());
+  const kept = before && typeof before === 'object' && !Array.isArray(before) ? before : {};
+  const nowMs = clockNow();
+  const next = {};
+  let changed = Object.keys(kept).some((k) => !list.some((s) => scheduleKey(s) === k));
+  for (const s of list) {
+    const key = scheduleKey(s);
+    const at = isoMs(kept[key]?.next);
+    if (!Number.isFinite(at) || at <= 0) {
+      next[key] = { next: new Date(nowMs + s.minutes * 60_000).toISOString() };
+      changed = true;
+      continue;
+    }
+    if (at > nowMs) {
+      next[key] = kept[key];
+      continue;
+    }
+    const waiting = pendingRuns(ROOT, DIR).filter((a) => a.env === s.env);
+    const plans = (s.plans.length ? s.plans : plansFor(s.env)).filter((plan) => !waiting.some((a) => a.plan === plan));
+    for (const plan of plans) hubRequest(ROOT, { plan, env: s.env, by: 'schedule' });
+    next[key] = { next: new Date(nowMs + s.minutes * 60_000).toISOString(), last: new Date(nowMs).toISOString() };
+    changed = true;
+    log(`tester: the schedule (${key}): ${plans.length} acceptance plan(s) run`);
+  }
+  if (changed) {
+    mkdirp(guard().dir);
+    writeJson(scheduleFile(), next);
+  }
 }
 
 // ---------- releases (safe updates, lib/update.mjs) ----------
@@ -8270,6 +8319,12 @@ function dashboardApi() {
       ask: (b) => {
         refreshConfig();
         return ownerRun(testerCtx(), String(b.plan || ''), String(b.env || ''));
+      },
+      // the persona form (part 4): set or forget a persona's values, here in the dashboard's process (never the hub's
+      // log, never said back)
+      persona: (b) => {
+        refreshConfig();
+        return ownerPersona(testerCtx(), b);
       },
     },
     startHub,

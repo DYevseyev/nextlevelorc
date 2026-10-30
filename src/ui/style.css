@@ -802,6 +802,15 @@ img.shot { display: block; max-width: 100%; height: auto; margin-top: 6px; borde
 ul.personas { margin: 0 0 8px; padding-left: 18px; }
 ul.personas li.ok { color: var(--ok); }
 ul.personas li.warn { color: var(--warn); }
+ul.personas li { overflow-wrap: anywhere; }
+.persona-acts { margin-left: 8px; display: inline-flex; gap: 10px; }
+.tester-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tester-switch p { margin: 0; }
+form.persona-form { margin: 6px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); display: grid; gap: 6px; max-width: 420px; }
+form.persona-form p { margin: 0; }
+.persona-field { display: grid; gap: 2px; }
+.persona-field input { width: 100%; box-sizing: border-box; }
+.persona-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 520px) {
   table.run-steps th:last-child, table.run-steps td:last-child { display: none; }
   table.run-steps td, table.run-steps th { padding: 4px 5px; }

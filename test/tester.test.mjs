@@ -2,7 +2,8 @@
 // guard's words for them, the HTTP client's reach, what evidence keeps, the personas' sign-ins sealed on this PC and kept
 // out of everything that leaves it, and whole runs through the hub against a stand-in web app (test/stubs/webapp.mjs)
 // with three test accounts; part 2, the browser: its install, its proxy, and runs in the stand-in Playwright
-// (test/stubs/playwright), which does with the network what a browser does and reads pages without drawing them.
+// (test/stubs/playwright), which does with the network what a browser does and reads pages without drawing them; part 3,
+// cards closed on proof; part 4, schedules, the Team page's switch and persona form, a fix that changes its own plan.
 //   npm test
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +19,8 @@ import { changesWords, failedStep, fixDraft, planChanges, resultKey, specAccepta
 import { acceptState, acceptWords, awaitsOwner, eventsOf, eventWords } from '../src/lib/cards.mjs';
 import { pathOnly, safeHeaders, safeJson, safeRecord, safeText } from '../src/lib/evidence.mjs';
 import { personaHold, reportSecrets } from '../src/lib/redact.mjs';
-import { mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
+import { everyMinutes, mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
+import { guardDir } from '../src/lib/guard.mjs';
 import { resolverRules } from '../src/lib/testerbrowser.mjs';
 import { cookieJar, isSpecialAddress, reachOf, request, urlProblem } from '../src/lib/testernet.mjs';
 import { startProxy } from '../src/lib/testerproxy.mjs';
@@ -1329,3 +1331,241 @@ test("the page: a run loaded while the Notes page shows redraws the cards, where
   assert.match(app, /ontoggle: \(e\) => \(e\.currentTarget\.open \? !tst\.open\.has\(r\.id\) && \(tst\.open\.add\(r\.id\), renderAll\(\)\)/);
 });
 
+
+// ---------- part 4: schedules, the Team page's switch and persona form, a fix that changes its own plan ----------
+test("settings: a schedule runs from an hour to a week apart, on an environment the owner named, plans under docs/acceptance/; the guard's words", () => {
+  const env = { staging: { url: 'https://staging.example.com' } };
+  const merged = (schedule) => {
+    const problems = { errors: [], warnings: [] };
+    const t = mergeTester({ enabled: true, environments: env, personas: ['member'], schedule }, problems);
+    return { t, problems };
+  };
+  assert.deepEqual([everyMinutes('90m'), everyMinutes('6h'), everyMinutes('1d'), everyMinutes('7d')], [90, 360, 1440, 10080]);
+  for (const bad of ['30m', '59m', '8d', '6', 'h', '0h', '-1h', '1.5h', ' 6h', 6]) assert.equal(everyMinutes(bad), 0, String(bad));
+  const ok = merged([{ every: '6h', env: 'staging' }, { every: '1d', env: 'staging', plans: ['docs/acceptance/a.yaml', 'docs/acceptance/a.yaml'] }]);
+  assert.deepEqual(ok.problems, { errors: [], warnings: [] });
+  assert.deepEqual(ok.t.schedule, [{ every: '6h', minutes: 360, env: 'staging', plans: [] }, { every: '1d', minutes: 1440, env: 'staging', plans: ['docs/acceptance/a.yaml'] }]);
+  assert.deepEqual(merged(undefined).t.schedule, [], 'none by default');
+  const errs = (schedule) => merged(schedule).problems.errors.join('\n');
+  assert.match(errs([{ every: '30m', env: 'staging' }]), /schedule\[0\]\.every" is how often, from an hour to a week/);
+  assert.match(errs([{ every: '6h', env: 'prod' }]), /schedule\[0\]\.env" names an environment/);
+  for (const plans of [['docs/acceptance/../x.yaml'], ['notes/x.yaml'], ['docs/acceptance/x.sh'], 'docs/acceptance/x.yaml']) assert.match(errs([{ every: '6h', env: 'staging', plans }]), /schedule\[0\]\.plans" lists plans under docs\/acceptance\//, JSON.stringify(plans));
+  assert.match(errs({ every: '6h' }), /"schedule" is a list/);
+  assert.match(errs(Array.from({ length: 21 }, () => ({ every: '6h', env: 'staging' }))), /at most 20/);
+  assert.deepEqual(merged([{ every: '6h', env: 'staging', when: 'night' }]).problems.warnings, ['unknown setting "tester.schedule[0].when" (ignored)']);
+  const before = { enabled: true, environments: env, personas: ['member'] };
+  assert.deepEqual(testerChangeWords(before, { ...before, schedule: [{ every: '6h', env: 'staging' }] }), ['runs every plan on staging every 6h']);
+  assert.deepEqual(testerChangeWords({ ...before, schedule: [{ every: '6h', env: 'staging', plans: ['docs/acceptance/a.yaml'] }] }, before), ['no longer runs docs/acceptance/a.yaml on staging every 6h']);
+});
+
+test("a schedule: the first run one interval after the hub first sees it, none caught up after the hub stopped, a scheduled run's end a real event only when its result is new, a new failure tells the phone once", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { schedule: [{ every: '6h', env: 'staging' }] } });
+  const clock = path.join(p.tmp, 'clock.json');
+  const at = (iso) => fs.writeFileSync(clock, JSON.stringify({ at: iso }));
+  const hubEnv = () => ({ ...vaultEnv(p), NEXTLEVEL_TEST_CLOCK: clock });
+  const run = () => assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+  const scheduled = () => listRunsOf(p).filter((r) => r.by === 'schedule');
+  const accepts = () => (fs.existsSync(p.state('rounds.json')) ? roundsOf(p).pending.filter((t) => t.type === 'accept').length : 0);
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    at('2026-10-30T08:00:00Z');
+    run();
+    assert.deepEqual(scheduled(), [], 'nothing at once');
+    const kept = inHome(p, () => JSON.parse(fs.readFileSync(path.join(guardDir(p.repo), 'tester-schedule.json'), 'utf8')));
+    assert.deepEqual(kept, { 'staging every 6h: every plan': { next: '2026-10-30T14:00:00.000Z' } }, 'kept in the guard\'s folder');
+    at('2026-10-30T13:59:00Z');
+    run();
+    assert.deepEqual(scheduled(), []);
+    // the hub was stopped for three intervals: one run, not three
+    at('2026-10-31T08:30:00Z');
+    run();
+    run();
+    assert.deepEqual(scheduled().map((r) => [r.plan, r.state]), [['docs/acceptance/who-reads.yaml', 'passed']], hubLog(p));
+    assert.match(hubLog(p), /tester: the schedule \(staging every 6h: every plan\): 1 acceptance plan\(s\) run/);
+    assert.equal(accepts(), 1, 'the first result is new: a real event');
+    assert.equal(inHome(p, () => JSON.parse(fs.readFileSync(path.join(guardDir(p.repo), 'tester-schedule.json'), 'utf8')))['staging every 6h: every plan'].next, '2026-10-31T14:30:00.000Z');
+    // the same result again: no event; the round already noted stays one
+    at('2026-10-31T14:30:00Z');
+    run();
+    run();
+    assert.equal(scheduled().length, 2);
+    assert.equal(accepts(), 1, 'the same pass again is no event');
+    // a failure: the phone hears it once, and a real event; the same failure again neither
+    commitPlan(p, 'spec-lines.yaml', FAILING);
+    for (const t of ['2026-10-31T20:30:00Z', '2026-11-01T02:30:00Z']) {
+      at(t);
+      run();
+      run();
+    }
+    const fails = scheduled().filter((r) => r.plan === 'docs/acceptance/spec-lines.yaml');
+    assert.deepEqual(fails.map((r) => r.state), ['failed', 'failed'], hubLog(p));
+    assert.equal(hubLog(p).match(/tester: phone: .*acceptance failed on its schedule/g)?.length, 1, hubLog(p));
+    assert.equal(accepts(), 2);
+    // the schedule is gone from nextlevel.json: its state goes with it, and nothing runs
+    p.setConfig((c) => ({ ...c, tester: { ...c.tester, schedule: [] } }));
+    at('2026-11-02T02:30:00Z');
+    run();
+    assert.equal(scheduled().length, 6);
+    assert.deepEqual(inHome(p, () => JSON.parse(fs.readFileSync(path.join(guardDir(p.repo), 'tester-schedule.json'), 'utf8'))), {});
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("the Team page's switch: nextlevel team tester on|off changes tester.enabled only, as the owner's change; refused without a section and in an agent's session", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { enabled: false } });
+  let ui = null;
+  try {
+    assert.match(p.hub(['team', 'tester']).out, /Tester: off \(environments staging, personas admin, member, outsider\)/);
+    const agent = p.hub(['team', 'tester', 'on'], { extraEnv: { NEXTLEVEL_AGENT: 'orchestrator' } });
+    assert.equal(agent.code, 1, agent.out);
+    assert.match(agent.out, /nextlevel team tester on is the owner's, so it doesn't run in an agent's session/);
+    assert.equal(p.config().tester.enabled, false);
+    for (const bad of [['team', 'tester', 'maybe'], ['team', 'tester', 'on', 'now']]) assert.notEqual(p.hub(bad).code, 0, bad.join(' '));
+    const before = p.config().tester;
+    const on = p.hub(['team', 'tester', 'on']);
+    assert.equal(on.code, 0, on.out);
+    assert.match(on.out, /Saved: the tester is on/);
+    assert.deepEqual(p.config().tester, { ...before, enabled: true }, 'nothing else of the section changes');
+    // the owner's change: it goes in without a card
+    fs.mkdirSync(p.state(), { recursive: true });
+    fs.writeFileSync(p.state('hub.json'), JSON.stringify({ pid: process.pid, heartbeatAt: new Date().toISOString() }));
+    const commit = p.hub(['commit', '-m', 'chore: the tester on', '--no-wait']);
+    fs.rmSync(p.state('hub.json'), { force: true });
+    assert.equal(commit.code, 0, commit.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    assert.doesNotMatch(hubLog(p), /held/);
+    assert.match(p.git('show', '--name-only', '--format=%s', 'HEAD'), /^chore: the tester on\n+nextlevel\.json$/m);
+    assert.match(p.hub(['team', 'tester', 'on']).out, /already on/);
+    // the dashboard's Turn off runs the same command
+    ui = await startUi(p, vaultEnv(p));
+    const c = client(ui);
+    assert.equal((await c.post('/api/team', { tester: 'off' })).status, 400);
+    const off = await c.post('/api/team', { tester: false });
+    assert.equal(off.status, 200, off.text);
+    assert.match(off.json.message, /the tester is off/);
+    assert.equal(p.config().tester.enabled, false);
+    assert.equal((await c.get('/api/tester')).json.section, true);
+    // no section: nothing to turn on
+    await stopUi(ui);
+    ui = null;
+    p.setConfig((cfg) => {
+      const { tester, ...rest } = cfg;
+      return rest;
+    });
+    const none = p.hub(['team', 'tester', 'on']);
+    assert.equal(none.code, 1);
+    assert.match(none.out, /no tester section: add one with its environments and personas first/);
+    assert.equal(p.config().tester, undefined);
+  } finally {
+    await stopUi(ui);
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("the Team page's persona form: the values in the request only, kept as nextlevel tester persona set keeps them; never logged, said back or kept in the page's data; the page's key or nothing", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { enabled: false } });
+  let ui = null;
+  const password = USERS.member.password;
+  try {
+    ui = await startUi(p, vaultEnv(p));
+    const c = client(ui);
+    const form = (body) => c.post('/api/tester', body);
+    // the page's key or nothing
+    assert.notEqual((await uiRequest(ui.port, { method: 'POST', path: '/api/tester', body: { action: 'persona', env: 'staging', persona: 'member', values: { password } } })).status, 200);
+    // the same checks as the command
+    assert.equal((await form({ action: 'persona', env: 'staging', persona: 'member' })).status, 400);
+    assert.equal((await form({ action: 'persona', env: '../x', persona: 'member', values: {} })).status, 400);
+    assert.match((await form({ action: 'persona', env: 'prod', persona: 'member', values: { password } })).json.message, /no environment prod/);
+    assert.match((await form({ action: 'persona', env: 'staging', persona: 'boss', values: { password } })).json.message, /no persona boss/);
+    assert.match((await form({ action: 'persona', env: 'staging', persona: 'member', values: { password: 'short' } })).json.message, /at least 8 characters.*Nothing was kept/);
+    assert.match((await form({ action: 'persona', env: 'staging', persona: 'member', values: { token: 'a-token-value-1234' } })).json.message, /doesn't use a token/);
+    assert.match((await form({ action: 'persona', env: 'staging', persona: 'member', values: { password: `two\nlines-here` } })).json.message, /one line/);
+    assert.match((await form({ action: 'persona', env: 'staging', persona: 'member', values: {} })).json.message, /nothing typed/);
+    assert.deepEqual(inHome(p, () => listPersonas(p.repo)), [], 'nothing kept by a refusal');
+    const set = await form({ action: 'persona', env: 'staging', persona: 'member', values: { username: USERS.member.email, password } });
+    assert.equal(set.status, 200, set.text);
+    assert.equal(set.json.message, 'Set member on staging (username, password), kept with the stand-in store.');
+    const got = inHome(p, () => readPersona(p.repo, { env: 'staging', origin: app.url, persona: 'member' }));
+    assert.deepEqual(got.values, { username: USERS.member.email, password });
+    // the Team card's data: set, and no value
+    const view = await c.get('/api/tester');
+    assert.equal(view.json.environments[0].personas.find((x) => x.persona === 'member').set, true);
+    assert.deepEqual(view.json.environments[0].fields, ['username', 'password']);
+    assert.doesNotMatch(view.text, new RegExp(password));
+    // a run uses it (the tester turned on by the owner)
+    assert.equal(p.hub(['team', 'tester', 'on']).code, 0);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    const asked = await form({ action: 'run', plan: 'docs/acceptance/who-reads.yaml', env: 'staging' });
+    assert.equal(asked.status, 200, asked.text);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    assert.equal(listRunsOf(p).find((r) => r.id === asked.json.id)?.state, 'passed', hubLog(p));
+    // forget
+    const gone = await form({ action: 'forget', env: 'staging', persona: 'member' });
+    assert.equal(gone.json.message, 'Forgot member on staging.');
+    assert.deepEqual(inHome(p, () => listPersonas(p.repo)), []);
+    // the audit line says who did what, never a value; nothing anywhere has the password
+    const audit = inHome(p, () => fs.readFileSync(path.join(guardDir(p.repo), 'tester.jsonl'), 'utf8'));
+    assert.match(audit, /"by":"owner","from":"dashboard","persona":"set","env":"staging","personas":\["member"\],"fields":\["username","password"\]/);
+    assert.match(audit, /"persona":"forget"/);
+    const everywhere = [ui.out, audit, hubLog(p), ...listRunsOf(p).map((r) => JSON.stringify(r))].join('\n');
+    assert.doesNotMatch(everywhere, new RegExp(password));
+    for (const f of fs.readdirSync(p.state(), { recursive: true })) {
+      const file = p.state(String(f));
+      if (fs.statSync(file).isFile()) assert.doesNotMatch(fs.readFileSync(file, 'utf8'), new RegExp(password), String(f));
+    }
+  } finally {
+    await stopUi(ui);
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("a fix that changes its own plan: the merge is said in hub.log and on the task's run; a card added before reads changed, never verified", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false });
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    const card = addCard(p, 'who-reads.yaml');
+    assert.equal(card.code, 0, card.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    const merge = (id, { plan }) => {
+      p.git('checkout', '-qb', `task/${id}`);
+      fs.mkdirSync(path.join(p.repo, 'docs', 'tasks'), { recursive: true });
+      fs.writeFileSync(path.join(p.repo, 'docs', 'tasks', `${id}.md`), `# ${id}\n\nKind: code\nAcceptance: docs/acceptance/who-reads.yaml on staging\n`);
+      if (plan) fs.writeFileSync(path.join(p.repo, 'docs', 'acceptance', 'who-reads.yaml'), plan);
+      p.git('add', '-A');
+      p.git('commit', '-qm', `${id}: the fix`);
+      p.git('checkout', '-q', 'main');
+      fs.writeFileSync(p.state('hub.json'), JSON.stringify({ pid: process.pid, heartbeatAt: new Date().toISOString() }));
+      const m = p.hub(['merge', id, '--no-wait']);
+      fs.rmSync(p.state('hub.json'), { force: true });
+      assert.equal(m.code, 0, m.out);
+      assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+      return listRunsOf(p).find((r) => r.by === 'task' && r.task === id);
+    };
+    const plain = merge('T1', {});
+    assert.equal(plain?.state, 'passed', hubLog(p));
+    assert.equal(plain.planChanged, undefined);
+    assert.doesNotMatch(hubLog(p), /T1's merge changes/);
+    const easier = merge('T2', { plan: PASSING.replace('text: Quarterly plan', 'text: Quarterly') });
+    assert.equal(easier?.state, 'passed', hubLog(p));
+    assert.equal(easier.planChanged, true);
+    assert.match(hubLog(p), /tester: task T2's merge changes docs\/acceptance\/who-reads\.yaml, the plan its Acceptance: line names: its run says so/);
+    assert.equal(acceptState(cardOf(p, card.id)).state, 'changed', 'the plan the card was added with is not the one that passed');
+    // (a team's request can't say it: only the hub's own folder carries planChanged)
+    const page = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'app.js'), 'utf8');
+    assert.match(page, /run\.planChanged && run\.task \? h\('p\.small\.warn', \{\}, `Task \$\{run\.task\}'s merge changed this plan/);
+    assert.match(page, /if \(!force && tform\.open && root\.querySelector\('form\.persona-form'\)\) return;/, "the Team page doesn't redraw under the persona form");
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});

@@ -75,6 +75,7 @@ export const COMMANDS = {
       ['nextlevel team models <engine>', "the models an engine's CLI lists"],
       ['nextlevel team window hidden|minimized|visible', "how a worker's process shows on Windows"],
       ['nextlevel team sandbox [on|off]', "Codex workers in Codex's sandbox (on), or without it like your other workers (off)"],
+      ['nextlevel team tester [on|off]', 'the tester: whether it is on, and turning it on or off'],
       ['nextlevel team runner status|on [--repo owner/name]', "the project's GitHub checks on this PC: offered and recommended, and setting it up"],
     ],
     options: {
@@ -89,7 +90,7 @@ export const COMMANDS = {
       anyway: B('set: save it although a check warns'),
       repo: S('<owner/name>', "runner: a GitHub repository other than the project's origin"),
     },
-    subs: { '': { options: ['json'], args: [0, 0] }, set: { options: ['engine', 'model', 'effort', 'profile', 'takes', 'daybreak', 'check', 'anyway', 'json'], args: [1, 1] }, models: { options: ['json'], args: [1, 1] }, window: { options: ['json'], args: [1, 1] }, sandbox: { options: ['json'], args: [0, 1] }, runner: { options: ['repo', 'json'], args: [1, 1] } },
+    subs: { '': { options: ['json'], args: [0, 0] }, set: { options: ['engine', 'model', 'effort', 'profile', 'takes', 'daybreak', 'check', 'anyway', 'json'], args: [1, 1] }, models: { options: ['json'], args: [1, 1] }, window: { options: ['json'], args: [1, 1] }, sandbox: { options: ['json'], args: [0, 1] }, tester: { options: ['json'], args: [0, 1] }, runner: { options: ['repo', 'json'], args: [1, 1] } },
   },
   ask: {
     group: 'owner',

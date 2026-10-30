@@ -120,9 +120,10 @@ function statusData({ root, stateDir, config }, { runs: n = 10 } = {}) {
     url: e.url,
     production: !!e.production,
     mutations: (t.allowMutations || []).includes(name),
+    fields: recipeFields(signInFor(t, name)).length ? recipeFields(signInFor(t, name)) : PERSONA_FIELDS,
     personas: (t.personas || []).map((p) => ({ persona: p, set: kept.some((k) => k.env === name && k.persona === p && k.origin === originOf(e.url)), old: kept.some((k) => k.env === name && k.persona === p && k.origin !== originOf(e.url)) })),
   }));
-  return { on: testerOn(config), store: storeKind(), environments: envs, runs: runs.map(runLine) };
+  return { on: testerOn(config), section: !!t, schedule: (t?.schedule || []).map((x) => ({ every: x.every, env: x.env, plans: x.plans })), store: storeKind(), environments: envs, runs: runs.map(runLine) };
 }
 // The dashboard's: statusData, the committed plans (on the base branch's head) with the environments each may run on,
 // whether a run runs, and what the browser is (tester part 3: Home's Run acceptance, the Team page's Tester card)
@@ -178,6 +179,39 @@ export function ownerRun(ctx, plan, env) {
   if (c.problem) return { problem: c.problem };
   return { id: writeRequest(ownerRequests(ctx.root), { plan: c.rel, env }), plan: c.rel, env, head: c.head };
 }
+// The dashboard's persona form (part 4): the owner sets or forgets a persona's values in the dashboard's process (the
+// owner's, behind the page's key), with the same checks as `nextlevel tester persona set`. Nothing it was given is
+// logged, kept elsewhere or said back: the answer names the persona, the environment and the fields only.
+export function ownerPersona({ root, config }, { action, env, persona, values }) {
+  const t = config.tester;
+  if (!t) return { problem: 'nextlevel.json has no tester section' };
+  if (!t.environments?.[env]) return { problem: `no environment ${env || '(none given)'} in nextlevel.json's tester` };
+  if (!(t.personas || []).includes(persona)) return { problem: `no persona ${persona || '(none given)'} in nextlevel.json's tester (${(t.personas || []).join(', ') || 'none'})` };
+  if (action === 'forget') {
+    const gone = forgetPersona(root, { env, origin: '', persona });
+    if (gone) audit(root, { at: new Date().toISOString(), by: 'owner', from: 'dashboard', persona: 'forget', env, personas: [persona] });
+    return { message: gone ? `Forgot ${persona} on ${env}.` : `${persona} on ${env} wasn't set.` };
+  }
+  const store = storeKind();
+  if (store.problem) return { problem: `Can't keep sign-ins on this PC: ${store.problem}` };
+  const fields = recipeFields(signInFor(t, env));
+  const ask = fields.length ? fields : PERSONA_FIELDS;
+  const given = values && typeof values === 'object' && !Array.isArray(values) ? values : {};
+  const kept = {};
+  for (const [f, v] of Object.entries(given)) {
+    if (!ask.includes(f)) return { problem: `${env}'s sign-in doesn't use a ${f} (it uses ${ask.join(', ')})` };
+    if (typeof v !== 'string') return { problem: `the ${f} is text` };
+    const bad = valueProblem(f, v);
+    if (bad) return { problem: `${bad}. Nothing was kept` };
+    if (v) kept[f] = v;
+  }
+  if (!Object.keys(kept).length) return { problem: 'nothing typed: nothing kept' };
+  const problem = setPersona(root, { env, origin: originOf(t.environments[env].url), persona, values: kept });
+  if (problem) return { problem: `Not kept: ${problem}` };
+  audit(root, { at: new Date().toISOString(), by: 'owner', from: 'dashboard', persona: 'set', env, personas: [persona], fields: Object.keys(kept) });
+  return { message: `Set ${persona} on ${env} (${Object.keys(kept).join(', ')}), kept with ${storeWords(store.kind)}.` };
+}
+const storeWords = (kind) => (kind === 'dpapi' ? "Windows' own protection for your account" : kind === 'keychain' ? 'your login keychain' : kind === 'secret-service' ? 'your keyring' : 'the stand-in store');
 
 function status(a, ctx) {
   const data = statusData(ctx);
@@ -462,7 +496,7 @@ async function persona(a, { root, config }) {
     console.error(`Not kept: ${problem}`);
     return 1;
   }
-  console.log(`Set ${name} on ${env} (${Object.keys(values).join(', ')}), kept with ${store.kind === 'dpapi' ? "Windows' own protection for your account" : store.kind === 'keychain' ? 'your login keychain' : store.kind === 'secret-service' ? 'your keyring' : 'the stand-in store'}, ${new Date().toISOString().slice(0, 10)}.`);
+  console.log(`Set ${name} on ${env} (${Object.keys(values).join(', ')}), kept with ${storeWords(store.kind)}, ${new Date().toISOString().slice(0, 10)}.`);
   return 0;
 }
 // A line typed in this window; echo off unless asked (the username shows as it is typed)
@@ -519,12 +553,14 @@ export function pendingRuns(root, stateDir) {
       const file = path.join(dir, n);
       const r = readJson(file);
       if (r && typeof r === 'object' && RUN_ID.test(String(r.id)) && `${r.id}.json` === n && typeof r.plan === 'string' && !planPathProblem(r.plan) && typeof r.env === 'string') {
-        // (who asked: the owner's folder holds the hub's own requests too, after a deploy or a task's merge; the team's,
+        // (who asked: the owner's folder holds the hub's own requests too, after a deploy, a task's merge or on a schedule; the team's,
         // the orchestrator's and its cards'. A card's run is held to the orchestrator's hourly cap like its own.)
         const card = typeof r.card === 'string' && /^H\d{1,7}$/.test(r.card) ? r.card : '';
-        const who = by === 'owner' ? (['deploy', 'task'].includes(r.by) ? r.by : 'owner') : card ? 'card' : 'orchestrator';
+        const who = by === 'owner' ? (['deploy', 'task', 'schedule'].includes(r.by) ? r.by : 'owner') : card ? 'card' : 'orchestrator';
         const task = typeof r.task === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(r.task) ? r.task : '';
-        out.push({ id: r.id, plan: r.plan, env: r.env, by: who, at: String(r.at || ''), file, ...(card ? { card } : {}), ...(task ? { task } : {}) });
+        // (planChanged: the hub's own word that a task's merge changed the plan it is judged by)
+        const planChanged = who === 'task' && task && r.planChanged === true;
+        out.push({ id: r.id, plan: r.plan, env: r.env, by: who, at: String(r.at || ''), file, ...(card ? { card } : {}), ...(task ? { task } : {}), ...(planChanged ? { planChanged } : {}) });
       }
       else fs.rmSync(file, { force: true });
     }

@@ -452,6 +452,7 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
     if (b.window !== undefined) return teamWindow(b.window);
     if (b.codexSandbox !== undefined) return teamSandbox(b.codexSandbox);
     if (b.githubChecks !== undefined) return teamChecks(b.githubChecks);
+    if (b.tester !== undefined) return teamTester(b.tester);
     const role = String(b.role || '');
     if (!TEAM_ROWS.some((r) => r.key === role)) return [400, { ok: false, message: 'which role?' }];
     const word = (v, re) => v === undefined || v === null || v === '' || (typeof v === 'string' && re.test(v));
@@ -497,6 +498,21 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
     teamBusy = true;
     try {
       const r = await runTool(['team', 'sandbox', on ? 'on' : 'off', '--json'], 60_000, { json: true });
+      if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'no answer'}` }];
+      return [r.json.ok ? 200 : 409, r.json];
+    } finally {
+      teamBusy = false;
+      pushBuild();
+    }
+  }
+
+  // The tester on or off (tester.enabled): nextlevel team tester on|off, the owner's change (tester part 4)
+  async function teamTester(on) {
+    if (typeof on !== 'boolean') return [400, { ok: false, message: 'tester is true (on) or false (off)' }];
+    if (teamBusy) return [409, { ok: false, message: 'Another change is being checked: wait for it.' }];
+    teamBusy = true;
+    try {
+      const r = await runTool(['team', 'tester', on ? 'on' : 'off', '--json'], 60_000, { json: true });
       if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'no answer'}` }];
       return [r.json.ok ? 200 : 409, r.json];
     } finally {
@@ -712,6 +728,21 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         return reply(res, [200, { ok: true, record: parsed }]);
       }
       case 'POST /api/tester': {
+        // The Team page's persona form (part 4): a persona's values set or forgotten. They are in this request's body
+        // only: never logged, never in the answer, never pushed to the page again.
+        if (b.action === 'persona' || b.action === 'forget') {
+          const word = (v) => typeof v === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(v);
+          if (!api.tester?.persona || !word(b.env) || !word(b.persona) || (b.action === 'persona' && (!b.values || typeof b.values !== 'object' || Array.isArray(b.values)))) return reply(res, [400, { ok: false, message: 'an environment, a persona and, to set it, its values' }]);
+          try {
+            const r = api.tester.persona({ action: b.action === 'forget' ? 'forget' : 'set', env: b.env, persona: b.persona, values: b.values });
+            return reply(res, r.problem ? [409, { ok: false, message: r.problem }] : [200, { ok: true, message: r.message }]);
+          } catch {
+            // (an error's words could carry what was typed: none are said back)
+            return reply(res, [409, { ok: false, message: "The persona couldn't be kept." }]);
+          } finally {
+            pushBuild();
+          }
+        }
         // Run acceptance on Home: the owner's run of a committed plan on an environment nextlevel.json names
         if (b.action !== 'run' || typeof b.plan !== 'string' || typeof b.env !== 'string' || b.plan.length > 300 || b.env.length > 60) return reply(res, [400, { ok: false, message: 'action run, with a plan and an environment' }]);
         try {

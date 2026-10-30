@@ -12,7 +12,9 @@ installed once on this PC (below); without it they end **incomplete** and HTTP s
 The tester is off until `nextlevel.json` has a `tester` section with `"enabled": true`. `nextlevel.json` is a protected
 file: the change waits for the owner's approval on the dashboard, which says in plain words what it does ("adds the
 environment staging at https://staging.example.com", "mutations allowed on staging", "sign-in now sends username and
-password to POST /api/session"). With it off, nothing changes anywhere.
+password to POST /api/session"). With it off, nothing changes anywhere. Once the section is there, the Team page's Tester
+card turns it on and off (Turn on / Turn off), as `nextlevel team tester on|off` does in PowerShell: that switch is your
+own change and needs no approval.
 
 ```json
 "tester": {
@@ -49,6 +51,10 @@ password to POST /api/session"). With it off, nothing changes anywhere.
   `{{password}}` and `{{token}}` are the persona's values; `capture` takes a value from a JSON answer for the next
   request; `keep` is `cookie` (the default: the session cookie) or `bearer:$.path` (a token sent as
   `Authorization: Bearer`). The values go only where the recipe puts them, never into a path.
+- **schedule:** plans that run by themselves, like `[{ "every": "6h", "env": "staging" }]` (every committed plan for
+  staging every 6 hours) or with `"plans": ["docs/acceptance/<plan>.yaml"]`. `every` is `90m`, `6h`, `1d`: from an hour
+  to a week. The first run comes one interval after the hub first sees it; after the hub was stopped, one run, not one
+  per interval missed. A new failure sends one phone message.
 - **maxRunsPerHour** (6): how many runs of one plan on one environment the orchestrator may start in an hour (the
   owner's own runs aren't counted). **runMinutes** (15): a run's time limit. **keepRuns** (20): the runs kept per plan
   and environment.
@@ -67,6 +73,10 @@ What is typed isn't shown. The values are sealed on this PC (`~/.nextlevel/vault
 that only Windows' protection for your account (DPAPI), the macOS login keychain or the Linux Secret Service opens,
 and bound to that environment's URL: change the URL and they must be set again. `nextlevel tester persona list` shows
 which are set (never a value), `persona forget` removes one. A password or token has at least 8 characters.
+
+Or on the dashboard: the Team page's Tester card has Set (and Set again, Forget) by each persona, with the fields that
+environment's sign-in uses. The values go to this PC's store the same way and are never shown again; the card says only
+which personas are set.
 
 The passwords and tokens are kept out of everything that leaves the PC or reaches an agent, like the `.env` values:
 evidence, logs, reports, phone messages, commits and pushes (a file that holds one is held on a card). When the store
@@ -180,13 +190,14 @@ and anything else is a string.
   drafts for the same step since the plan last passed, the card waits for you. A run that couldn't finish (the
   environment down, a sign-in not set, the browser missing) waits for you too: that isn't the team's to fix.
 - **A task's `Acceptance:` line.** A task spec with `Acceptance: docs/acceptance/<plan>.yaml on <env>` has its plan run
-  after its merge: at once when no branch deploys that environment, else after the deploy that carries the merge.
+  after its merge: at once when no branch deploys that environment, else after the deploy that carries the merge. When
+  the task's merge changed that plan itself, its run says so: read what changed before trusting the pass.
 - **After a deploy.** `"afterDeploy": { "main": ["staging"] }` names the environments a pushed branch deploys to. After
   a push of that branch, every committed plan for those environments runs once the environment's `version` path (like
   `"version": "/version"`) answers the pushed commit (asked every 30 seconds, up to 15 minutes), or after
   `deployWaitMinutes` (10) when it has none. A failure after a deploy sends one phone message.
 - Home's Acceptance card runs a committed plan on an environment and shows the last runs, step by step, with their
-  screenshots; the Team page shows the environments and which personas are set.
+  screenshots; the Team page shows the environments, which personas are set and the schedules.
 
 ## Commands
 
@@ -198,7 +209,8 @@ and anything else is a string.
 | `nextlevel tester wait <run id>` / `show <run id>` | the owner, the orchestrator | how it ended, step by step |
 | `nextlevel tester stop [<run id>]` | the owner | stops a run at its next step |
 | `nextlevel handoff add ... --plan <plan> --env <name>` | the orchestrator | a card the tester checks |
-| `nextlevel tester persona set\|list\|forget` | the owner, in their own window | the personas' sign-ins |
+| `nextlevel tester persona set\|list\|forget` | the owner, in their own window | the personas' sign-ins (or the Team page) |
+| `nextlevel team tester [on\|off]` | the owner | whether the tester is on; turning it on or off (or the Team page) |
 | `nextlevel tester browser [status]` / `browser install` | anyone / the owner, in their own window | whether the browser is ready; installing it |
 
 A worker, a verify command and the assistant can't start a run. Each run is in `.nextlevel/evidence/<run id>/`
