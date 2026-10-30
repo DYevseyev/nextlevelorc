@@ -80,7 +80,7 @@ import { dailyReport } from './daily-report.mjs';
 import { reopenDashboard, startDashboard } from './dashboard.mjs';
 import { doctorOptions, runDoctor } from './doctor.mjs';
 import { cmdFix, fixStore, followFixes } from './fix.mjs';
-import { accountDir, accountProblem, engine, engineTitle, gitByHub, profileEnv, sessionArgs, windowArgs, workerCaveat, workerIsolation } from './engines/index.mjs';
+import { accountDir, accountProblem, engine, engineTitle, gitByHub, profileEnv, sessionArgs, standardPin, windowArgs, workerCaveat, workerIsolation } from './engines/index.mjs';
 import { ROLE_AGENTS, WORKER_AGENT_FILE, roleAgentFile } from './engines/agy.mjs';
 import { lockLines, lockWords, runLockTest } from './locktest.mjs';
 import { accessFacts } from './checks/argon.mjs';
@@ -6962,6 +6962,9 @@ async function cmdRunTask(id) {
     return finish({ exitCode: 1, error });
   }
   if (iso.args.length) out.line(`Without your own add-ons (workers.addons in nextlevel.json can keep some): ${iso.args.join(' ')}`);
+  // (security engineer 1b-1: what keeps OpenAI's Daybreak off it, as on every Codex run but the scans)
+  const pin = standardPin(profile, { version, args: engineArgs });
+  if (pin.length) out.line(`OpenAI's Daybreak off for this run (${pin.join(' ')}), whatever Codex's config.toml says: only the security engineer's scans use it`);
   if (!bin) {
     out.line(`${eng.title} (${eng.command}) was not found. Run START.cmd -> 1 (Doctor).`);
     return finish({ exitCode: 127, error: `${eng.command} not found` });

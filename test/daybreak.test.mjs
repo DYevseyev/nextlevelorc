@@ -137,6 +137,7 @@ test("a Codex worker on a model Daybreak doesn't cover works though config.toml 
     assert.equal(lastFor(worker, 'daybreak'), 'daybreak=false');
     assert.equal(overrides(worker).at(-1), 'daybreak=false', 'last among its overrides');
     assert.equal(p.status('M1-01-pin-ok').state, 'done', p.status('M1-01-pin-ok').detail || '');
+    assert.match(fs.readFileSync(p.jobFile('M1-01-pin-ok', 'worker.log'), 'utf8'), /OpenAI's Daybreak off for this run \(-c daybreak=false\), whatever Codex's config\.toml says/, 'its log says so');
     // Without the pin (a Codex before 0.163 has no Daybreak: the stub plays it off), the same model works too, and no -c
     // daybreak is passed
     spec('M1-02-old-ok');
