@@ -13,6 +13,7 @@ export const TESTER_DEFAULTS = {
   signIn: null,
   afterDeploy: {},
   deployWaitMinutes: 10,
+  schedule: [],
   autoClose: false,
   maxRunsPerHour: 6,
   maxFixes: 2,
@@ -103,8 +104,40 @@ export function mergeTester(v, problems) {
   t.alsoAllow = Array.isArray(t.alsoAllow) ? t.alsoAllow.map(originOf) : [];
   if (t.signIn !== null) t.signIn = checkSignIn(t.signIn, 'signIn', err);
   if (!isObj(t.afterDeploy) || !Object.values(t.afterDeploy).every((l) => Array.isArray(l) && l.every((x) => envNames.includes(x)))) err('"afterDeploy" maps a deploy branch to the environments it deploys to, like { "main": ["staging"] }');
+  t.schedule = checkSchedule(t.schedule, envNames, err, problems.warnings);
   if (t.enabled && !envNames.length) err('"enabled" is true but no environment is named');
   return t;
+}
+
+// A schedule's "every": "90m", "6h", "1d" -> minutes, or 0 when it isn't one (at least an hour, at most a week: §8)
+export function everyMinutes(v) {
+  const m = /^([1-9][0-9]{0,3})(m|h|d)$/.exec(String(v ?? ''));
+  if (!m) return 0;
+  const n = Number(m[1]) * { m: 1, h: 60, d: 1440 }[m[2]];
+  return n >= 60 && n <= 7 * 1440 ? n : 0;
+}
+// tester.schedule: [{ "every": "6h", "env": "staging", "plans": ["docs/acceptance/x.yaml"] }] (no plans: every committed
+// plan for that environment). Nothing timed starts a round: a scheduled run's end is a real event only when its result
+// is new (FR-019).
+const SCHEDULE_PLAN = /^docs\/acceptance\/[A-Za-z0-9][A-Za-z0-9._/-]{0,200}\.(ya?ml|json)$/;
+function checkSchedule(list, envNames, err, warnings) {
+  if (!Array.isArray(list) || list.length > 20) {
+    err('"schedule" is a list (at most 20) like [{ "every": "6h", "env": "staging" }]');
+    return [];
+  }
+  const out = [];
+  list.forEach((x, i) => {
+    const at = `schedule[${i}]`;
+    if (!isObj(x)) return err(`"${at}" is { "every": "6h", "env": "<environment>", "plans": [...] }`);
+    for (const k of Object.keys(x)) if (!k.startsWith('$') && !['every', 'env', 'plans'].includes(k)) warnings.push(`unknown setting "tester.${at}.${k}" (ignored)`);
+    const minutes = everyMinutes(x.every);
+    if (!minutes) err(`"${at}.every" is how often, from an hour to a week: "90m", "6h", "1d"`);
+    if (!envNames.includes(x.env)) err(`"${at}.env" names an environment of "environments"`);
+    const plans = x.plans === undefined ? [] : x.plans;
+    if (!Array.isArray(plans) || plans.length > 50 || !plans.every((p) => typeof p === 'string' && SCHEDULE_PLAN.test(p) && !p.split('/').includes('..'))) err(`"${at}.plans" lists plans under docs/acceptance/ (left out: every plan for the environment)`);
+    else out.push({ every: String(x.every), minutes, env: x.env, plans: [...new Set(plans)] });
+  });
+  return out;
 }
 
 // What an environment's URL may be: an origin, https (http only on this PC), no login, path, query or fragment
@@ -234,6 +267,9 @@ export function testerChangeWords(before, after) {
   for (const p of added('personas')) out.push(`adds the persona ${p}`);
   if (JSON.stringify(a.signIn ?? null) !== JSON.stringify(b?.signIn ?? null)) out.push(...recipeWords(a.signIn, 'sign-in'));
   if (!!a.autoClose !== !!b?.autoClose) out.push(a.autoClose ? 'a card whose plan passes closes itself' : 'cards with a plan wait for the owner to close them');
+  const runs = (x) => (Array.isArray(x?.schedule) ? x.schedule.filter(isObj).map((r) => `${Array.isArray(r.plans) && r.plans.length ? r.plans.join(', ') : 'every plan'} on ${r.env} every ${r.every}`) : []);
+  for (const r of runs(a)) if (!runs(b).includes(r)) out.push(`runs ${r}`);
+  for (const r of runs(b)) if (!runs(a).includes(r)) out.push(`no longer runs ${r}`);
   return out;
 }
 function recipeWords(recipe, what) {

@@ -38,8 +38,9 @@ Acceptance runs of plans in `docs/acceptance/` against a running copy of the app
 (`docs/design/tester.md`, `docs/acceptance.md`). Part 1, plans and HTTP runs from PowerShell with the sign-ins sealed on
 this PC, is done; part 2, the browser (Playwright installed by you at a pinned version, a fresh context per persona,
 screenshots with masks), is done; part 3, closing the loop (cards with plans verified or closed on a pass, a fix draft
-for a failure, runs after a task's merge and after a deploy, Home's Acceptance card), is built.
-- **4, on the dashboard:** turning it on from the Team page, the sign-ins form, schedules.
+for a failure, runs after a task's merge and after a deploy, Home's Acceptance card), is done; part 4 (schedules,
+turning it on from the Team page, the sign-ins form there, a fix that changes its own plan said) is built.
+- **Later:** a fix task dispatched by itself (`autoFix`), and an engine that only explains a failure.
 
 ## GitHub checks on your PC
 - **The self-hosted runner, part B**: for a personal account's private repository, run its checks on a runner on this

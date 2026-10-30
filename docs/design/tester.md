@@ -485,5 +485,33 @@ Where part 3 differs from §8 and §9, and why (`docs/DECISIONS.md` has each):
 - **Who asked a run** is part of its record (`by`: owner, orchestrator, card, deploy, task). Only the orchestrator's and
   a card's count in `maxRunsPerHour`: a deploy's and a task's are the hub's.
 - **Deferred to part 4:** turning the tester on from the Team page (the card says how to add the section), and the merge
-  card saying when a fix changes its own plan (a card's plan hash catches it: the pass reads "changed").
+  card saying when a fix changes its own plan (a card's plan hash catches it: the pass reads "changed"). Both are in §18.
 
+
+## 18. As built: part 4
+
+Where part 4 differs from §8, §10 and §12, and why (`docs/DECISIONS.md` has each):
+
+- **Schedules.** `tester.schedule: [{ "every": "6h", "env": "staging", "plans": [...] }]` (no `plans`: every committed
+  plan for that environment). `every` is minutes, hours or days (`90m`, `6h`, `1d`), from an hour to a week; at most 20
+  entries; an unknown key is a warning. The hub's `scheduleTick` (in `testerTick`) keeps each entry's next time in the
+  guard's folder (`tester-schedule.json`, keyed by the entry's words, so a changed entry starts again): the first run
+  one interval after the hub first sees the entry, and one run, never one per interval, after the hub was stopped. A
+  plan still asked for isn't asked again. Its runs are the hub's (`by: 'schedule'`, outside `maxRunsPerHour`); a
+  scheduled run's end is a real event only when its result is new, and a new failure sends one phone message, as after a
+  deploy. Its times are `lib/clock.mjs`'s.
+- **Turning it on:** `nextlevel team tester on|off` (the owner's: refused in an agent's session), Turn on / Turn off on
+  the Team page's Tester card. It changes `tester.enabled` only, checked by `loadConfig` and recorded as the owner's
+  change, so the guard doesn't hold it; with no `tester` section it refuses, since environments and personas are the
+  owner's to write and to approve.
+- **The persona form** is on the Team page's Tester card (Set, Set again, Forget per persona, with the fields that
+  environment's sign-in uses), not a separate page. Its values go in one request's body to `POST /api/tester`
+  (`action: 'persona'` or `'forget'`, the page's key) and are kept by the dashboard's process with the same checks as
+  `nextlevel tester persona set` (`ownerPersona` in `src/tester.mjs`). The answer names the persona, the environment
+  and the fields; nothing logs or keeps a value elsewhere, the page empties the inputs whatever the answer, and the Team
+  page doesn't redraw under an open form. An audit line in the guard's folder says the owner set or forgot it, with the
+  fields' names. Setting personas works with the tester off.
+- **A fix that changes its own plan:** when a task's merge changes the plan its `Acceptance:` line names, hub.log says
+  so and the task's run carries `planChanged`, which the run's table shows. Only the hub's own requests carry it. A card
+  added before reads "changed" by its plan's hash, as in part 3; the merge itself isn't held.
+- **Still later:** `autoFix`, and an engine that only explains a failure from redacted evidence.
