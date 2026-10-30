@@ -769,7 +769,7 @@ function personaForm(e, persona) {
     }
     setPersona(e.name, persona, values);
   } },
-  h('p.muted.small', {}, `The sign-in of ${persona} on ${e.name}. Use a test account made for this, never a real person's. It is kept on this PC with your account's own protection; a value left empty is left out.`),
+  h('p.muted.small', {}, `The sign-in of ${persona} on ${e.name}. Use a test account made for this, never a real person's. It is kept on this PC with your account's own protection. Type every value: Set again replaces them all.`),
   inputs,
   h('div.persona-buttons', {}, h('button.btn.primary', { type: 'submit', disabled: tform.busy }, tform.busy ? 'Keeping…' : 'Keep it'), h('button.btn', { type: 'button', disabled: tform.busy, onclick: () => openPersona('') }, 'Cancel')));
 }

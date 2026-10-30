@@ -206,6 +206,9 @@ export function ownerPersona({ root, config }, { action, env, persona, values })
     if (v) kept[f] = v;
   }
   if (!Object.keys(kept).length) return { problem: 'nothing typed: nothing kept' };
+  // (a set replaces every value: one the sign-in uses and left empty would be gone, and the sign-in fail with "set" shown)
+  const missing = fields.filter((f) => !kept[f]);
+  if (missing.length) return { problem: `${env}'s sign-in uses ${fields.join(', ')}: type each one (${missing.join(', ')} left empty), since a set replaces them all. Nothing was kept` };
   const problem = setPersona(root, { env, origin: originOf(t.environments[env].url), persona, values: kept });
   if (problem) return { problem: `Not kept: ${problem}` };
   audit(root, { at: new Date().toISOString(), by: 'owner', from: 'dashboard', persona: 'set', env, personas: [persona], fields: Object.keys(kept) });
@@ -490,6 +493,11 @@ async function persona(a, { root, config }) {
   if (!Object.keys(values).length) {
     console.log('Nothing typed: nothing kept.');
     return 0;
+  }
+  const missing = fields.filter((f) => !values[f]);
+  if (missing.length) {
+    console.error(`Not kept: ${env}'s sign-in uses ${fields.join(', ')}: type each one (${missing.join(', ')} left empty), since a set replaces them all.`);
+    return 1;
   }
   const problem = setPersona(root, { env, origin, persona: name, values });
   if (problem) {

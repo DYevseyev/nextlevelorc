@@ -1494,6 +1494,11 @@ test("the Team page's persona form: the values in the request only, kept as next
     assert.equal(set.json.message, 'Set member on staging (username, password), kept with the stand-in store.');
     const got = inHome(p, () => readPersona(p.repo, { env: 'staging', origin: app.url, persona: 'member' }));
     assert.deepEqual(got.values, { username: USERS.member.email, password });
+    // Set again with the username left empty: refused, never a username dropped under "set"
+    const half = await form({ action: 'persona', env: 'staging', persona: 'member', values: { password: `${password}-new` } });
+    assert.equal(half.status, 409, half.text);
+    assert.match(half.json.message, /type each one \(username left empty\).*Nothing was kept/);
+    assert.deepEqual(inHome(p, () => readPersona(p.repo, { env: 'staging', origin: app.url, persona: 'member' })).values, { username: USERS.member.email, password });
     // the Team card's data: set, and no value
     const view = await c.get('/api/tester');
     assert.equal(view.json.environments[0].personas.find((x) => x.persona === 'member').set, true);
