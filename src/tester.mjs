@@ -109,10 +109,12 @@ export async function cmdTester(argv, ctx) {
 
 const offWords = 'The tester is off: nextlevel.json has no "tester" section with "enabled": true (docs/acceptance.md shows one; the owner approves the change on the dashboard).';
 
-function status(a, { root, stateDir, config }) {
+// The tester as status, the dashboard and the Team page show it: on or off, the secret store, each environment with its
+// personas (set or not), the last runs
+function statusData({ root, stateDir, config }, { runs: n = 10 } = {}) {
   const t = config.tester;
   const kept = listPersonas(root);
-  const runs = listRuns(stateDir).slice(0, 10);
+  const runs = listRuns(stateDir).slice(0, n);
   const envs = Object.entries(t?.environments || {}).map(([name, e]) => ({
     name,
     url: e.url,
@@ -120,12 +122,72 @@ function status(a, { root, stateDir, config }) {
     mutations: (t.allowMutations || []).includes(name),
     personas: (t.personas || []).map((p) => ({ persona: p, set: kept.some((k) => k.env === name && k.persona === p && k.origin === originOf(e.url)), old: kept.some((k) => k.env === name && k.persona === p && k.origin !== originOf(e.url)) })),
   }));
-  const data = { on: testerOn(config), store: storeKind(), environments: envs, runs: runs.map(runLine) };
+  return { on: testerOn(config), store: storeKind(), environments: envs, runs: runs.map(runLine) };
+}
+// The dashboard's: statusData, the committed plans (on the base branch's head) with the environments each may run on,
+// whether a run runs, and what the browser is (tester part 3: Home's Run acceptance, the Team page's Tester card)
+export function testerView(ctx) {
+  const { config, base, git } = ctx;
+  const data = statusData(ctx, { runs: 20 });
+  const head = String(git(['rev-parse', `refs/heads/${base}`]) || '').trim();
+  let plans = [];
+  if (data.on && /^[0-9a-f]{40}$/.test(head)) {
+    const files = String(git(['ls-tree', '-r', '--name-only', head, '--', PLAN_DIR]) || '').split(/\r?\n/).map((l) => l.trim()).filter((f) => f && !planPathProblem(f)).slice(0, 100);
+    const envs = Object.keys(config.tester.environments || {});
+    plans = files.map((file) => {
+      const r = readPlan(String(git(['show', `${head}:${file}`]) || ''), { file });
+      return { file, name: r.plan?.name || '', envs: r.plan ? (r.plan.env || envs).filter((e) => envs.includes(e)) : [], problem: r.plan ? '' : r.problems[0]?.message || "doesn't read" };
+    });
+  }
+  return { ...data, base, head: head.slice(0, 12), plans, running: runningRun(ctx.stateDir)?.id || '', browser: browserNow() };
+}
+// The browser as the dashboard shows it, looked at once a minute at most (its files are many)
+let browserSeen = { at: 0, value: null };
+function browserNow() {
+  if (!browserSeen.value || Date.now() - browserSeen.at > 60_000) {
+    const b = browserState(undefined, { quick: true });
+    browserSeen = { at: Date.now(), value: { installed: !!b.record, ok: b.ok, problem: b.ok ? '' : b.problem, version: b.record?.version || '' } };
+  }
+  return browserSeen.value;
+}
+// One run for the dashboard: its record, and the evidence files it kept (their names)
+export function runView(stateDir, id) {
+  const r = readRun(stateDir, id);
+  if (!r) return null;
+  let files = [];
+  try {
+    files = fs.readdirSync(evidenceDir(stateDir, id)).filter((f) => EVIDENCE_FILE.test(f)).sort((x, y) => x.localeCompare(y, 'en', { numeric: true }));
+  } catch {
+    // none
+  }
+  return { ...r, pid: undefined, pidStart: undefined, files };
+}
+export const EVIDENCE_FILE = /^step-\d{1,3}\.(png|json)$/;
+// One evidence file of a run, for the dashboard (its name checked: a step's picture or record, nothing else)
+export function evidenceFile(stateDir, id, name) {
+  if (!RUN_ID.test(String(id)) || !EVIDENCE_FILE.test(String(name))) return null;
+  try {
+    return fs.readFileSync(path.join(evidenceDir(stateDir, id), name));
+  } catch {
+    return null;
+  }
+}
+// The owner's run from the dashboard (its process is the owner's): as nextlevel tester run does it -> { id } or { problem }
+export function ownerRun(ctx, plan, env) {
+  const c = committedPlan(ctx, plan, env);
+  if (c.problem) return { problem: c.problem };
+  return { id: writeRequest(ownerRequests(ctx.root), { plan: c.rel, env }), plan: c.rel, env, head: c.head };
+}
+
+function status(a, ctx) {
+  const data = statusData(ctx);
+  const envs = data.environments;
+  const runs = data.runs;
   if (a.json) {
     console.log(JSON.stringify({ ok: true, ...data }, null, 2));
     return 0;
   }
-  const lines = [testerOn(config) ? 'The tester is on.' : offWords];
+  const lines = [data.on ? 'The tester is on.' : offWords];
   if (data.store.problem) lines.push(`Secret store: ${data.store.problem}`);
   for (const e of envs) {
     lines.push(`  ${e.name}  ${e.url}${e.production ? ' (production)' : ''}${e.mutations ? ', steps that mutate may run' : ', read-only'}`);
@@ -207,35 +269,43 @@ export function planFitProblems(plan, config) {
 // A run of a committed plan, asked for: the owner's request goes to the guard's folder (the orchestrator's sandbox can't
 // write there), the orchestrator's to the state folder; the hub reads both at its next look and holds the orchestrator's
 // to the hourly cap
-function askForRun(a, { root, stateDir, config, base, hubAlive, git }, by) {
-  if (!testerOn(config)) {
-    console.error(`${offWords} Nothing was asked.`);
-    return 1;
-  }
-  const rel = String(a._[1] || '').replace(/\\/g, '/');
-  const env = a.env || '';
+// A committed plan, as a run will read it: on the base branch's head, reading, fitting nextlevel.json's tester and the
+// environment. -> { rel, env, head, text, plan, hash } or { problem } (in words that follow "Can't ...: ")
+export function committedPlan({ config, base, git }, relIn, env) {
+  if (!testerOn(config)) return { problem: offWords };
+  const rel = String(relIn || '').replace(/\\/g, '/');
   const problem = planPathProblem(rel) || (!env ? 'name the environment: --env <name>' : !config.tester.environments[env] ? `nextlevel.json's tester has no environment ${env} (${Object.keys(config.tester.environments).join(', ')})` : '');
-  if (problem) {
-    console.error(`Can't ask for the run: ${problem}.`);
-    return 1;
-  }
-  const head = git(['rev-parse', `refs/heads/${base}`]).trim();
+  if (problem) return { problem: `${problem}.` };
+  const head = String(git(['rev-parse', `refs/heads/${base}`]) || '').trim();
   const text = /^[0-9a-f]{40}$/.test(head) ? git(['show', `${head}:${rel}`], { allowFail: true }) : '';
-  if (!text) {
-    console.error(`Can't ask for the run: ${rel} isn't committed on ${base} (a run reads the plan as ${base} has it, never a working tree or a task's branch).`);
-    return 1;
-  }
+  if (!text) return { problem: `${rel} isn't committed on ${base} (a run reads the plan as ${base} has it, never a working tree or a task's branch).` };
   const r = readPlan(text, { file: rel });
   const problems = [...r.problems, ...(r.plan ? planFitProblems(r.plan, config) : [])];
   if (r.plan?.env && !r.plan.env.includes(env)) problems.push({ line: 0, message: `the plan runs on ${r.plan.env.join(', ')}, not ${env}` });
-  if (problems.length) {
-    console.error(`Can't ask for the run: ${rel} as ${base} has it doesn't read:\n${problems.map((p) => `  ${p.line ? `line ${p.line}: ` : ''}${p.message}`).join('\n')}`);
+  if (problems.length) return { problem: `${rel} as ${base} has it doesn't read:\n${problems.map((p) => `  ${p.line ? `line ${p.line}: ` : ''}${p.message}`).join('\n')}` };
+  return { rel, env, head, text, plan: r.plan, hash: planHash(text) };
+}
+// A request for a run, where the hub reads it (`extra`: the card it is for, the task whose merge asked for it, and from
+// the hub itself who started it). -> its id
+export function writeRequest(dir, { plan, env, ...extra }) {
+  const id = newRunId();
+  fs.mkdirSync(dir, { recursive: true });
+  writeJson(path.join(dir, `${id}.json`), { id, plan, env, at: new Date().toISOString(), ...extra });
+  return id;
+}
+// The team's requests (the orchestrator's runs and its cards' runs): in the state folder
+export const teamRequestDir = (stateDir) => teamRequests(stateDir);
+// The hub's own (after a deploy, after a task's merge) go where the owner's do, in the guard's folder
+export const hubRequest = (root, ask) => writeRequest(ownerRequests(root), ask);
+
+function askForRun(a, { root, stateDir, config, base, hubAlive, git }, by) {
+  const c = committedPlan({ config, base, git }, a._[1], a.env || '');
+  if (c.problem) {
+    console.error(c.problem === offWords ? `${offWords} Nothing was asked.` : `Can't ask for the run: ${c.problem}`);
     return 1;
   }
-  const id = newRunId();
-  const dir = by === 'owner' ? ownerRequests(root) : teamRequests(stateDir);
-  fs.mkdirSync(dir, { recursive: true });
-  writeJson(path.join(dir, `${id}.json`), { id, plan: rel, env, at: new Date().toISOString() });
+  const { rel, env, head } = c;
+  const id = writeRequest(by === 'owner' ? ownerRequests(root) : teamRequests(stateDir), { plan: rel, env });
   console.log(`Asked for an acceptance run (${id}) of ${rel} on ${env}, at ${base}'s ${head.slice(0, 8)}. ${hubAlive() ? 'The hub starts it at its next look' : 'The hub starts it when it runs (START.cmd -> 4)'}; nextlevel tester wait ${id} shows how it ends.`);
   return 0;
 }
@@ -448,7 +518,14 @@ export function pendingRuns(root, stateDir) {
     for (const n of names) {
       const file = path.join(dir, n);
       const r = readJson(file);
-      if (r && typeof r === 'object' && RUN_ID.test(String(r.id)) && `${r.id}.json` === n && typeof r.plan === 'string' && !planPathProblem(r.plan) && typeof r.env === 'string') out.push({ id: r.id, plan: r.plan, env: r.env, by, at: String(r.at || ''), file });
+      if (r && typeof r === 'object' && RUN_ID.test(String(r.id)) && `${r.id}.json` === n && typeof r.plan === 'string' && !planPathProblem(r.plan) && typeof r.env === 'string') {
+        // (who asked: the owner's folder holds the hub's own requests too, after a deploy or a task's merge; the team's,
+        // the orchestrator's and its cards'. A card's run is held to the orchestrator's hourly cap like its own.)
+        const card = typeof r.card === 'string' && /^H\d{1,7}$/.test(r.card) ? r.card : '';
+        const who = by === 'owner' ? (['deploy', 'task'].includes(r.by) ? r.by : 'owner') : card ? 'card' : 'orchestrator';
+        const task = typeof r.task === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(r.task) ? r.task : '';
+        out.push({ id: r.id, plan: r.plan, env: r.env, by: who, at: String(r.at || ''), file, ...(card ? { card } : {}), ...(task ? { task } : {}) });
+      }
       else fs.rmSync(file, { force: true });
     }
   }
@@ -477,15 +554,15 @@ export function audit(root, line) {
     // (the run's record has it too)
   }
 }
-// Only the newest keepRuns runs of each plan and environment stay
-export function pruneRuns(stateDir, keep) {
+// Only the newest keepRuns runs of each plan and environment stay, and those a card still shows (`kept`: their ids)
+export function pruneRuns(stateDir, keep, kept = new Set()) {
   const groups = new Map();
   for (const r of listRuns(stateDir)) {
     if (RUNNING.includes(r.state)) continue;
     const k = `${r.plan}|${r.env}`;
     groups.set(k, [...(groups.get(k) || []), r]);
   }
-  for (const list of groups.values()) for (const r of list.slice(keep)) fs.rmSync(evidenceDir(stateDir, r.id), { recursive: true, force: true });
+  for (const list of groups.values()) for (const r of list.slice(keep)) if (!kept.has(r.id)) fs.rmSync(evidenceDir(stateDir, r.id), { recursive: true, force: true });
 }
 // A run the last hub left: ended as stopped
 export function recoverRuns(stateDir, running = null) {

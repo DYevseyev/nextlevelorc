@@ -13,6 +13,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_DENIED, judge, planPathProblem, readPlan } from '../src/lib/acceptance.mjs';
+import { changesWords, failedStep, fixDraft, planChanges, resultKey, specAcceptance, versionNames } from '../src/lib/acceptloop.mjs';
+import { acceptState, acceptWords, awaitsOwner, eventsOf, eventWords } from '../src/lib/cards.mjs';
 import { pathOnly, safeHeaders, safeJson, safeRecord, safeText } from '../src/lib/evidence.mjs';
 import { personaHold, reportSecrets } from '../src/lib/redact.mjs';
 import { mergeTester, testerChangeWords } from '../src/lib/testerconfig.mjs';
@@ -23,6 +25,7 @@ import { DPAPI_OPEN, DPAPI_SEAL, forgetCache, listPersonas, readPersona, redacti
 import { parseYamlSubset } from '../src/lib/yamlsub.mjs';
 import { notify } from '../src/notify.mjs';
 import { makeProject, waitUntil } from './helpers.mjs';
+import { client, request as uiRequest, startUi, stopUi } from './ui-helpers.mjs';
 import { SPA_TOKEN, startWebApp, USERS } from './stubs/webapp.mjs';
 
 const steps = (body) => `plan: x\nsteps:\n${body}`;
@@ -930,6 +933,345 @@ steps:
     assert.deepEqual(broken.run.steps.map((s) => s.status), ['passed', 'incomplete', 'passed']);
     assert.match(broken.shown, /the browser didn't start \(browserType\.launch: Executable doesn't exist/);
   } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+// ---------- part 3: closing the loop on cards ----------
+const handoff = (p) => JSON.parse(fs.readFileSync(p.state('handoff.json'), 'utf8')).items;
+const cardOf = (p, id) => handoff(p).find((x) => x.id === id);
+const hubLog = (p) => fs.readFileSync(p.state('logs', 'hub.log'), 'utf8');
+const roundsOf = (p) => JSON.parse(fs.readFileSync(p.state('rounds.json'), 'utf8'));
+// The orchestrator's card with a plan: the request in a file, as ORCHESTRATOR.md says
+function addCard(p, plan, { text = 'The notes page shows who may read a note.' } = {}) {
+  fs.mkdirSync(p.state(), { recursive: true });
+  fs.writeFileSync(p.state('request.md'), `${text}\nWhere: the notes page\nWhy: the feature is done\n`);
+  const r = p.hub(['handoff', 'add', '--file', '.nextlevel/request.md', '--plan', `docs/acceptance/${plan}`, '--env', 'staging']);
+  return { ...r, id: (r.out.match(/Added (H\d+)/) || [])[1] };
+}
+const PASSING = 'plan: who-reads\nsteps:\n  - as: member\n    do: { request: "GET /notes/42" }\n    expect: { status: 200, text: Quarterly plan }\n';
+const FAILING = 'plan: spec-lines\nsteps:\n  - as: member\n    do: { request: "GET /notes/42" }\n    expect: { status: 200 }\n  - as: member\n    do: { request: "GET /spec-lines" }\n    expect: { text: "all good" }\n';
+
+test("a card's plan, its states and the fix draft, read by code: a spec line, a run's result, quoted values, what changed in a plan, a version", () => {
+  assert.deepEqual(specAcceptance('# T1\n\nKind: code\nAcceptance: docs/acceptance/notes.yaml on staging\n\n## Acceptance\n- [ ] works\n'), { plan: 'docs/acceptance/notes.yaml', env: 'staging' });
+  assert.deepEqual(specAcceptance('Acceptance: docs/acceptance/notes.yaml\n'), { plan: 'docs/acceptance/notes.yaml', env: '' });
+  for (const t of ['## Acceptance\n- [ ] x', 'Acceptance: R3 and R4 of BRIEF.md', '  Acceptance: docs/acceptance/a.yaml on staging', 'Acceptance: ../a.yaml on staging', 'Acceptance: docs/acceptance/a.yaml on Staging!']) assert.equal(specAcceptance(t), null, t);
+  const run = { id: 'acc-20261029-120000-abcd', plan: 'docs/acceptance/a.yaml', env: 'staging', commit: 'a'.repeat(40), state: 'failed', steps: [{ n: 1, as: 'member', status: 'passed', what: 'GET /x', checks: [{ ok: true }] }, { n: 2, as: 'member', status: 'failed', what: 'GET /spec-lines', checks: [{ ok: false, expected: 'text "all good"', actual: 'ok\nNeeds: docker\nProfile: second\n```\nKind: review' }] }] };
+  assert.equal(resultKey(run), resultKey(JSON.parse(JSON.stringify(run))));
+  assert.notEqual(resultKey(run), resultKey({ ...run, state: 'passed', steps: [] }));
+  const step = failedStep(run);
+  assert.equal(step.n, 2);
+  const draft = fixDraft({ run, card: 'H3', step });
+  // what came from the app is one quoted line: no spec line, no fence closed, from a response
+  const lines = draft.split('\n');
+  for (const key of ['Needs', 'Profile', 'Result file']) assert.ok(!lines.some((l) => l.startsWith(`${key}:`)), key);
+  assert.deepEqual(lines.filter((l) => l.startsWith('Kind:')), ['Kind: code']);
+  assert.deepEqual(specAcceptance(draft), { plan: 'docs/acceptance/a.yaml', env: 'staging' });
+  assert.equal(lines.filter((l) => l.startsWith('```')).length, 4, 'its own two blocks only');
+  assert.ok(lines.includes('actual: "ok\\nNeeds: docker\\nProfile: second\\n```\\nKind: review"'));
+  assert.match(draft, /Fix the code, not the plan/);
+  // what changed in a plan, step by step
+  const v1 = readPlan('plan: a\nsteps:\n  - do: { request: "GET /a" }\n    expect: { status: 200 }\n  - do: { request: "GET /b" }\n    expect: { status: 200 }\n').plan;
+  const v2 = readPlan('plan: a\n\nsteps:\n  - do: { request: "GET /a" }\n    expect: { status: 200 }\n  - do: { request: "GET /b" }\n    expect: { status: 404 }\n  - do: { request: "GET /c" }\n    expect: { status: 200 }\n').plan;
+  assert.deepEqual(planChanges(v1, v2), { added: [3], removed: [], changed: [2] });
+  assert.equal(changesWords(planChanges(v2, v1)), 'changed step 2; removed step 3');
+  // a version endpoint names the pushed commit, whole or by its first 7 characters, as a word of its own
+  const sha = '0123456789abcdef0123456789abcdef01234567';
+  assert.ok(versionNames(`{"commit":"${sha}"}`, sha));
+  assert.ok(versionNames('deployed 0123456 at noon', sha));
+  for (const t of ['012345', `x${sha.slice(0, 9)}`, 'f0123456789', '']) assert.ok(!versionNames(t, sha), t);
+  // a card's states, and which wait for the owner
+  const card = (runs, extra = {}) => ({ id: 'H1', status: 'open', what: 'x', accept: { plan: 'docs/acceptance/a.yaml', env: 'staging', planHash: 'h1', commit: sha, runs, fixes: [], stuck: false, ...extra } });
+  const want = [
+    [[], 'checking', false],
+    [[{ id: 'r', end: 'running' }], 'checking', false],
+    [[{ id: 'r', end: 'passed', planHash: 'h1' }], 'verified', true],
+    [[{ id: 'r', end: 'passed', planHash: 'h2' }], 'changed', true],
+    [[{ id: 'r', end: 'failed', planHash: 'h1', step: { n: 2 } }], 'fixing', false],
+    [[{ id: 'r', end: 'incomplete', why: 'the environment did not answer' }], 'blocked', true],
+    [[{ id: 'r', end: 'refused', why: 'the hourly cap' }], 'blocked', true],
+  ];
+  for (const [runs, state, owner] of want) {
+    assert.equal(acceptState(card(runs)).state, state, state);
+    assert.equal(awaitsOwner(card(runs)), owner, state);
+  }
+  assert.equal(acceptState(card([{ id: 'r', end: 'failed', step: { n: 2 } }], { stuck: true })).state, 'stuck');
+  assert.match(acceptWords(card([{ id: 'r', end: 'failed', step: { n: 2, as: 'member', what: 'GET /x' } }], { fixes: [{ run: 'r', step: 2, file: '.nextlevel/tester/fixes/r.md' }] })), /step 2 \(as member\) failed: GET \/x; a fix draft waits in \.nextlevel\/tester\/fixes\/r\.md/);
+  assert.equal(acceptState({ id: 'H2', status: 'open' }), null, 'a card without a plan');
+  assert.equal(awaitsOwner({ id: 'H2', status: 'open' }), true);
+  // a card the tester closed: its event, and the words for it
+  const closed = { id: 'H1', status: 'done', closedBy: 'tester', note: 'run r', doneAt: '2026-10-29T10:00:00Z' };
+  assert.deepEqual(eventsOf(closed).map((e) => [e.kind, e.by, e.note]), [['closed', 'tester', 'run r']]);
+  assert.match(eventWords(eventsOf(closed)[0], () => 'then'), /^Verified and closed by the tester then \(run r\)$/);
+});
+
+test('a card with a plan: added with the plan the base branch has, checked by the tester with no owner click, Verified on a pass; with autoClose, closed by the tester and reopened by the owner', async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false });
+  try {
+    setAll(p, app.url);
+    // refusals: a plan that isn't committed, an environment nextlevel.json doesn't have, half of the pair
+    assert.match(addCard(p, 'who-reads.yaml').out, /the card wasn't added: docs\/acceptance\/who-reads\.yaml isn't committed on main/);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    fs.writeFileSync(p.state('request.md'), 'x\nWhere: y\nWhy: z\n');
+    assert.match(p.hub(['handoff', 'add', '--file', '.nextlevel/request.md', '--plan', 'docs/acceptance/who-reads.yaml', '--env', 'prod']).out, /no environment prod/);
+    assert.match(p.hub(['handoff', 'add', '--file', '.nextlevel/request.md', '--plan', 'docs/acceptance/who-reads.yaml']).out, /both, or neither/);
+    assert.ok(!fs.existsSync(p.state('handoff.json')) || handoff(p).length === 0, 'no card');
+
+    const add = addCard(p, 'who-reads.yaml');
+    assert.equal(add.code, 0, add.out);
+    assert.match(add.out, /The hub runs it \(acc-\d{8}-\d{6}-[0-9a-f]{4}\)/);
+    assert.match(add.out, /Don't tell the owner yet/);
+    let card = cardOf(p, add.id);
+    assert.equal(card.accept.plan, 'docs/acceptance/who-reads.yaml');
+    assert.match(card.accept.planHash, /^[0-9a-f]{64}$/);
+    assert.equal(acceptState(card).state, 'checking');
+    assert.equal(awaitsOwner(card), false, 'the tester is checking it: not the owner\'s yet');
+
+    const hub = p.runUntilIdle([], { extraEnv: vaultEnv(p) });
+    assert.equal(hub.code, 0, hub.out);
+    card = cardOf(p, add.id);
+    const last = card.accept.runs.at(-1);
+    assert.equal(last.end, 'passed', hubLog(p));
+    assert.equal(last.by, 'card');
+    assert.equal(acceptState(card).state, 'verified');
+    assert.equal(card.status, 'open', 'autoClose is off: the owner closes it');
+    assert.equal(awaitsOwner(card), true);
+    assert.match(hubLog(p), new RegExp(`tester: phone: .*${add.id} verified`));
+    // the run's end is a real event, and waits to start a round
+    const rs = roundsOf(p);
+    assert.ok(rs.pending.some((t) => t.type === 'accept' && /ended \(passed\)/.test(t.what)), JSON.stringify(rs.pending));
+    assert.match(rs.real.what, /acceptance run/);
+    // what the team reads, and the Markdown
+    assert.match(p.hub(['handoff', 'list']).out, new RegExp(`acceptance: docs/acceptance/who-reads\\.yaml on staging: verified by run ${last.id}: ready to close`));
+    assert.match(fs.readFileSync(path.join(p.repo, 'docs', 'HANDOFF.md'), 'utf8'), /- Acceptance: docs\/acceptance\/who-reads\.yaml on staging: verified by run/);
+
+    // autoClose on: the next card's pass closes it, as the tester; the owner's Reopen undoes it
+    p.setConfig((c) => ({ ...c, tester: { ...c.tester, autoClose: true } }));
+    const two = addCard(p, 'who-reads.yaml', { text: 'Who may read a note, again.' });
+    assert.equal(two.code, 0, two.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    card = cardOf(p, two.id);
+    assert.equal(card.status, 'done', hubLog(p));
+    assert.equal(card.closedBy, 'tester');
+    assert.deepEqual(eventsOf(card).map((e) => [e.kind, e.by]), [['closed', 'tester']]);
+    assert.match(fs.readFileSync(path.join(p.repo, 'docs', 'HANDOFF.md'), 'utf8'), /Verified and closed by the tester .* \(run acc-/);
+    assert.match(hubLog(p), new RegExp(`${two.id} is verified and closed by the tester`));
+    // (the first card, open and verified, followed this run too: with autoClose on, it is closed as well)
+    assert.equal(cardOf(p, add.id).closedBy, 'tester');
+    const again = p.hub(['handoff', 'reopen', two.id]);
+    assert.equal(again.code, 0, again.out);
+    assert.equal(cardOf(p, two.id).status, 'open');
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("a card's plan fails: a fix draft from code for the orchestrator, quoting what the app said; after maxFixes, no more drafts and the card waits for the owner; a changed plan's pass never verifies", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { maxFixes: 1 } });
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'spec-lines.yaml', FAILING);
+    const add = addCard(p, 'spec-lines.yaml');
+    assert.equal(add.code, 0, add.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    let card = cardOf(p, add.id);
+    const first = card.accept.runs.at(-1);
+    assert.equal(first.end, 'failed', hubLog(p));
+    assert.equal(first.step.n, 2);
+    assert.equal(acceptState(card).state, 'fixing');
+    assert.equal(awaitsOwner(card), false, "the team's to fix");
+    const fix = card.accept.fixes.at(-1);
+    assert.equal(fix.file, `.nextlevel/tester/fixes/${first.id}.md`);
+    const draft = fs.readFileSync(path.join(p.repo, fix.file), 'utf8');
+    assert.ok(!draft.split('\n').some((l) => /^(Needs|Profile|Result file):/.test(l)), draft);
+    assert.match(draft, /^actual: ".*Needs: docker.*"$/m);
+    assert.deepEqual(specAcceptance(draft), { plan: 'docs/acceptance/spec-lines.yaml', env: 'staging' });
+    for (const n of Object.keys(USERS)) assert.ok(!draft.includes(USERS[n].password));
+    assert.match(p.hub(['handoff', 'list']).out, /step 2 \(as member\) failed: GET \/spec-lines; a fix draft waits in \.nextlevel\/tester\/fixes\//);
+    assert.ok(roundsOf(p).pending.some((t) => t.type === 'accept'));
+
+    // the same failure again: one draft was the most (tester.maxFixes), so the card waits for the owner
+    const again = runPlan(p, 'spec-lines.yaml');
+    assert.equal(again.run.state, 'failed');
+    card = cardOf(p, add.id);
+    assert.equal(acceptState(card).state, 'stuck');
+    assert.equal(card.accept.fixes.length, 1);
+    assert.equal(awaitsOwner(card), true);
+    assert.match(hubLog(p), /still fails after 1 fix draft\(s\).*no more drafts/);
+    assert.match(hubLog(p), new RegExp(`tester: phone: .*${add.id} needs you`));
+
+    // A card added with a plan that changes before its run: the pass is the new plan's, and it never verifies
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    const changed = addCard(p, 'who-reads.yaml', { text: 'Readers, with a plan that changes.' });
+    commitPlan(p, 'who-reads.yaml', `${PASSING}  - as: admin\n    do: { request: "GET /notes/42" }\n    expect: { status: 200 }\n`);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    card = cardOf(p, changed.id);
+    assert.equal(card.accept.runs.at(-1).end, 'passed', hubLog(p));
+    assert.equal(acceptState(card).state, 'changed');
+    assert.equal(card.status, 'open');
+    assert.match(p.hub(['handoff', 'show', changed.id]).out, /the plan changed since the card was added/);
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("after a task's merge and after a deploy: a spec's Acceptance line runs its plan once the environment has the merge; a deploy waits for the version endpoint to name the pushed commit, or its wait; a deploy's new failure tells the phone", async () => {
+  const versionFile = path.join(fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'nl-version-')), 'version');
+  fs.writeFileSync(versionFile, 'old');
+  const app = await startWebApp({ versionFile });
+  const p = testerProject(app, { mutations: false });
+  const clock = path.join(p.tmp, 'clock.json');
+  const at = (iso) => fs.writeFileSync(clock, JSON.stringify({ at: iso }));
+  const hubEnv = () => ({ ...vaultEnv(p), NEXTLEVEL_TEST_CLOCK: clock });
+  try {
+    at('2026-10-29T10:00:00Z');
+    setAll(p, app.url);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    // a task branch whose spec names the plan; staging is deployed by no branch yet: the run follows the merge
+    const task = (id, env = 'staging') => {
+      p.git('checkout', '-qb', `task/${id}`);
+      fs.mkdirSync(path.join(p.repo, 'docs', 'tasks'), { recursive: true });
+      fs.writeFileSync(path.join(p.repo, 'docs', 'tasks', `${id}.md`), `# ${id}\n\nKind: code\nAcceptance: docs/acceptance/who-reads.yaml on ${env}\n`);
+      p.git('add', '-A');
+      p.git('commit', '-qm', `${id}: the spec`);
+      p.git('checkout', '-q', 'main');
+      // (a git job is queued only while a hub runs: one is said to, for the command, and runUntilIdle runs it)
+      fs.mkdirSync(p.state(), { recursive: true });
+      fs.writeFileSync(p.state('hub.json'), JSON.stringify({ pid: process.pid, heartbeatAt: new Date().toISOString() }));
+      const m = p.hub(['merge', id, '--no-wait']);
+      fs.rmSync(p.state('hub.json'), { force: true });
+      assert.equal(m.code, 0, m.out);
+    };
+    task('T1');
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.match(hubLog(p), /tester: task T1 merged: docs\/acceptance\/who-reads\.yaml runs on staging/);
+    const byTask = listRunsOf(p).find((r) => r.by === 'task');
+    assert.ok(byTask && byTask.task === 'T1' && byTask.state === 'passed', JSON.stringify(listRunsOf(p)));
+
+    // now a branch deploys staging (a branch that isn't a deploy branch: no approval needed for the test's push)
+    p.setConfig((c) => ({ ...c, deployBranches: ['prod'], tester: { ...c.tester, afterDeploy: { release: ['staging'] }, environments: { staging: { ...c.tester.environments.staging, version: '/version' } } } }));
+    p.git('add', '-A');
+    p.git('commit', '-qm', 'staging is deployed from release');
+    // (the owner's own settings, on origin already: a push that changed nextlevel.json would wait for their approval)
+    p.git('push', '-q', 'origin', 'main');
+    task('T2');
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.match(hubLog(p), /task T2 merged: docs\/acceptance\/who-reads\.yaml runs on staging after the deploy that carries it/);
+    const before = listRunsOf(p).length;
+    const sha = p.git('rev-parse', 'main').trim();
+    assert.equal(p.hub(['push', 'release']).code, 0);
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.match(hubLog(p), /tester: release went out at .*: acceptance runs on staging once it is deployed/);
+    assert.equal(listRunsOf(p).length, before, 'the version endpoint still names the old commit: nothing runs');
+    // the endpoint is asked at most every 30 s: the commit it names now is seen at the next ask
+    fs.writeFileSync(versionFile, sha);
+    at('2026-10-29T10:00:10Z');
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.equal(listRunsOf(p).length, before, 'not asked again yet');
+    at('2026-10-29T10:00:45Z');
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    assert.match(hubLog(p), new RegExp(`staging answers ${sha.slice(0, 7)} at /version`));
+    assert.match(hubLog(p), /release at .* is deployed to staging: 1 acceptance plan\(s\) run, after task\(s\) T2/);
+    const after = listRunsOf(p).filter((r) => r.by === 'task' && r.task === 'T2');
+    assert.equal(after.length, 1, 'the plan the task named, as the task\'s run');
+    assert.equal(after[0].state, 'passed');
+
+    // a deploy whose plan fails anew: the phone hears it, once
+    commitPlan(p, 'spec-lines.yaml', FAILING);
+    const sha2 = p.git('rev-parse', 'main').trim();
+    fs.writeFileSync(versionFile, sha2);
+    assert.equal(p.hub(['push', 'release']).code, 0);
+    at('2026-10-29T10:05:00Z');
+    for (let i = 0; i < 3; i++) assert.equal(p.runUntilIdle([], { extraEnv: hubEnv() }).code, 0);
+    const deploys = listRunsOf(p).filter((r) => r.by === 'deploy');
+    assert.deepEqual(deploys.map((r) => [r.plan, r.state]).sort(), [['docs/acceptance/spec-lines.yaml', 'failed'], ['docs/acceptance/who-reads.yaml', 'passed']], hubLog(p));
+    assert.equal(hubLog(p).match(/tester: phone: .*acceptance failed after the deploy/g)?.length, 1);
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+const listRunsOf = (p) => {
+  const dir = p.state('evidence');
+  return (fs.existsSync(dir) ? fs.readdirSync(dir) : []).map((n) => JSON.parse(fs.readFileSync(path.join(dir, n, 'run.json'), 'utf8')));
+};
+
+test("the tester off: a card with a plan isn't added; the orchestrator's cap holds a card's run like its own", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false, extra: { maxRunsPerHour: 1 } });
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    assert.equal(addCard(p, 'who-reads.yaml').code, 0);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    const over = addCard(p, 'who-reads.yaml', { text: 'Once more.' });
+    assert.notEqual(over.code, 0);
+    assert.match(over.out, /the card wasn't added: the tester ran 1 runs of docs\/acceptance\/who-reads\.yaml on staging in the last hour \(tester\.maxRunsPerHour is 1\)/);
+    p.setConfig((c) => ({ ...c, tester: { ...c.tester, enabled: false } }));
+    const off = addCard(p, 'who-reads.yaml', { text: 'With the tester off.' });
+    assert.notEqual(off.code, 0);
+    assert.match(off.out, /the card wasn't added: The tester is off/);
+    assert.equal(handoff(p).length, 1);
+  } finally {
+    await app.close();
+    p.cleanup();
+  }
+});
+
+test("the dashboard's tester: the committed plans, a run's table and its evidence with the page's key only, the owner's Run acceptance, and a verified card's Close on Home", async () => {
+  const app = await startWebApp();
+  const p = testerProject(app, { mutations: false });
+  let ui = null;
+  try {
+    setAll(p, app.url);
+    commitPlan(p, 'who-reads.yaml', PASSING);
+    const card = addCard(p, 'who-reads.yaml');
+    assert.equal(card.code, 0, card.out);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    const done = listRunsOf(p).find((r) => r.by === 'card');
+    assert.equal(done?.state, 'passed', hubLog(p));
+    ui = await startUi(p, vaultEnv(p));
+    const c = client(ui);
+    const view = (await c.get('/api/tester')).json;
+    assert.equal(view.ok, true);
+    assert.deepEqual(view.plans.map((x) => [x.file, x.envs]), [['docs/acceptance/who-reads.yaml', ['staging']]]);
+    assert.ok(view.runs.some((r) => r.id === done.id));
+    const run = (await c.get(`/api/tester/run?id=${done.id}`)).json.run;
+    assert.deepEqual(run.files, ['step-1.json']);
+    assert.equal(run.steps[0].status, 'passed');
+    const rec = await c.get(`/api/tester/evidence?id=${done.id}&file=step-1.json`);
+    assert.equal(rec.json.record.status, 200);
+    // the key or nothing; a step's files and nothing else
+    assert.notEqual((await uiRequest(ui.port, { path: `/api/tester/evidence?id=${done.id}&file=step-1.json` })).status, 200);
+    assert.notEqual((await uiRequest(ui.port, { path: '/api/tester' })).status, 200);
+    for (const file of ['run.json', '../run.json', 'step-1.json.bak']) assert.equal((await c.get(`/api/tester/evidence?id=${done.id}&file=${encodeURIComponent(file)}`)).status, 404, file);
+    // a picture comes as one
+    fs.writeFileSync(p.state('evidence', done.id, 'step-1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const png = await uiRequest(ui.port, { path: `/api/tester/evidence?id=${done.id}&file=step-1.png`, headers: { 'x-nextlevel-token': ui.token } });
+    assert.equal(png.status, 200);
+    assert.equal(png.headers['content-type'], 'image/png');
+    // Home: the verified card's Close
+    const need = (await c.get('/api/state')).json.needs.find((n) => n.kind === 'accept' && n.id === card.id);
+    assert.ok(need, JSON.stringify((await c.get('/api/state')).json.needs));
+    assert.equal(need.action.label, 'Close');
+    // Run acceptance: a committed plan on a named environment, the owner's run; anything else refused
+    assert.equal((await c.post('/api/tester', { action: 'run', plan: 'docs/acceptance/none.yaml', env: 'staging' })).status, 409);
+    assert.equal((await c.post('/api/tester', { action: 'run', plan: 'docs/acceptance/who-reads.yaml', env: 'prod' })).status, 409);
+    assert.equal((await c.post('/api/tester', { action: 'delete', plan: 'docs/acceptance/who-reads.yaml', env: 'staging' })).status, 400);
+    const asked = await c.post('/api/tester', { action: 'run', plan: 'docs/acceptance/who-reads.yaml', env: 'staging' });
+    assert.equal(asked.status, 200, asked.text);
+    assert.equal(p.runUntilIdle([], { extraEnv: vaultEnv(p) }).code, 0);
+    const mine = listRunsOf(p).find((r) => r.id === asked.json.id);
+    assert.equal(mine?.by, 'owner');
+    assert.equal(mine.state, 'passed');
+  } finally {
+    await stopUi(ui);
     await app.close();
     p.cleanup();
   }

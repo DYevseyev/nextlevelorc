@@ -2093,3 +2093,16 @@ One entry each: date, decision, why, alternatives.
   failing `security.login` or `security.probe` step instead of Run a security scan. Those checks run Docker and aren't
   kept for the build data (only the probe's verdict is, by image), so the card shows the newest scan's words and why it
   couldn't run (which names the doctor's row), and the Setup page has the step.
+- 2026-10-30 — **A run's end reaches every open card with its plan and environment,** not only the card it was asked
+  for: two cards about the same feature are proved by the same run, and a later deploy's pass verifies a card whose own
+  run failed. With `autoClose` each verified one closes.
+- 2026-10-30 — **Fix drafts are counted per failing step since the plan last passed.** The design counted fix tasks,
+  but the hub can't tell which merged task was the fix; the step and the last pass it can.
+- 2026-10-30 — **A refused, incomplete or broken run makes the card "blocked", the owner's turn.** Neither a fix nor a
+  retry by the team helps with an environment that is down or a sign-in that isn't set.
+- 2026-10-30 — **A task's merge runs its plan at once when no branch deploys the environment.** Such an environment
+  serves what is merged (a preview, a local stand-in); waiting for a deploy that never comes would hide the result.
+- 2026-10-30 — **A plan's hash ignores trailing whitespace.** The hub reads git's output trimmed and the command didn't;
+  the same committed plan must give the same hash either way, or every card reads "changed".
+- 2026-10-30 — **Turning the tester on stays a change to `nextlevel.json` approved on the dashboard** in part 3: the
+  Team card says how. A writer for it on the Team page is part 4's, with the sign-ins form.

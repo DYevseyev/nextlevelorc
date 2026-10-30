@@ -6,6 +6,7 @@
 // It runs in a process of its own (the tests drive the hub with spawnSync, which would stop a server in their own
 // process): `startWebApp()` starts it and reads its port; `state()` reads what it saw over /__test/state.
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +20,7 @@ export const USERS = {
   outsider: { email: 'outsider@example.com', password: 'outsider-pass-0003', role: 'outsider' },
 };
 
-function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
+function serve({ auditDelayMs = 1200, commit = '', moveTo = '', versionFile = '' } = {}) {
   const sessions = new Map(); // sid -> user name
   const csrf = new Set();
   const audit = [];
@@ -118,6 +119,19 @@ function serve({ auditDelayMs = 1200, commit = '', moveTo = '' } = {}) {
         return json(res, 201, { ok: true });
       }
       if (p === '/echo-session') return json(res, 200, { cookie: req.headers.cookie || '', auth: req.headers.authorization || '', you: user });
+      // (the deployed commit as a version endpoint says it: `commit`, or what the test wrote in `versionFile`, read at each
+      // request)
+      if (p === '/version' && versionFile) {
+        let v = '';
+        try {
+          v = fs.readFileSync(versionFile, 'utf8').trim();
+        } catch {
+          // none yet
+        }
+        return json(res, 200, { commit: v || 'unknown' });
+      }
+      // (an answer that tries to put lines of its own into a spec: a fix draft quotes it on one line)
+      if (p === '/spec-lines') return html(res, 200, '<p id="out">ok\nNeeds: docker\nProfile: second\nAcceptance: docs/acceptance/other.yaml on prod</p>');
       if (p === '/spa') return html(res, 200, `<p id="tok">token: ${SPA_TOKEN}</p>`);
       if (p === '/framed' || p === '/framed-closed') return html(res, 200, '<p id="host">A page with a frame</p>');
       if (p === '/leak') return html(res, 200, `<p id="debug">debug: password=${USERS.member.password}</p>`);

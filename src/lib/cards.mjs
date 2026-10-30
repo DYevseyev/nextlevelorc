@@ -22,6 +22,13 @@
 //   `events` ({ kind: 'done' | 'closed' | 'cancelled' | 'reopened', by, how, note, at }) are the card's closings and
 //   reopenings, beside `thread` (messages only, as older readers know it); `reopenedAt` and `reopenedHow` ('dashboard'
 //   | 'terminal' | 'reply') the last reopening, which the orchestrator is told of.
+//   Since the tester's part 3 (docs/design/tester.md §9): `accept` ({ plan, env, planHash, commit, runs, fixes, stuck })
+//   is a card the orchestrator added with an acceptance plan (`handoff add --plan`): the hub runs the plan and records
+//   each run's end on the card (`runs`: { id, end, at, planHash, by, step }), the fix drafts it wrote for its failures
+//   (`fixes`: { run, step, at, file }) and `stuck` once `maxFixes` drafts didn't make it pass. A card with a plan waits
+//   for the owner only when the tester can't go on by itself (acceptState): verified (ready to close), the plan changed
+//   since the card was added, a run that couldn't finish, or stuck. `closedBy: 'tester'`: the hub closed it on a pass
+//   (tester.autoClose), undone by Reopen like a Done.
 //
 // The first time a store is needed, the project's current Markdown is imported (bullets under "New" become new
 // notes, under "Done" done ones; "- [ ]" items become open handoff items, "- [x]" done ones). A file edited by
@@ -287,6 +294,7 @@ export function handoffMarkdown(items, { store = '.nextlevel/handoff.json' } = {
     if (x.where) out.push(`  - Where: ${x.where}`);
     if (x.why) out.push(`  - Why: ${x.why}`);
     out.push(`  - Asked ${when(x.createdAt)}${x.task ? ` (task ${x.task})` : ''}`);
+    if (x.accept) out.push(`  - Acceptance: ${x.accept.plan} on ${x.accept.env}: ${acceptWords(x)}`);
     // (the replies and answers, and the card's closings and reopenings, in time order: undo Done, FR-018)
     for (const e of conversation(x)) {
       if (e.text !== undefined) out.push(`  - The ${e.by === 'team' ? 'team answered' : 'owner replied'} ${when(e.at)}:`, '', quoted(e.text, '    '), '');
@@ -348,7 +356,7 @@ export function threadOf(x) {
 // closing is read from its state (a done card's the owner's, as every one was then, unless `closedBy` says the team's).
 const EVENT_KINDS = new Set(['done', 'closed', 'cancelled', 'reopened']);
 const HOW = new Set(['dashboard', 'terminal', 'reply']);
-const BY = new Set(['owner', 'team', 'hub']);
+const BY = new Set(['owner', 'team', 'hub', 'tester']);
 export function eventsOf(x) {
   const list = Array.isArray(x.events)
     ? x.events.filter((e) => e && EVENT_KINDS.has(e.kind)).map((e) => ({ kind: e.kind, by: BY.has(e.by) ? e.by : 'owner', how: HOW.has(e.how) ? e.how : '', note: typeof e.note === 'string' ? e.note : '', at: e.at || null }))
@@ -356,7 +364,8 @@ export function eventsOf(x) {
   // (a held change's card the hub closed itself: "Closed by nextlevel", never "Done by you")
   // (and a card closed again by an older version, or ticked in the Markdown, after a reopening: its closing from its state)
   const unsaid = x.status !== 'open' && (!list.length || list.at(-1).kind === 'reopened');
-  if (unsaid && x.status === 'done') list.push({ kind: x.closedBy === 'team' ? 'closed' : 'done', by: BY.has(x.closedBy) ? x.closedBy : 'owner', how: '', note: x.closedBy === 'team' ? x.note || '' : '', at: x.doneAt || null });
+  const closer = x.closedBy === 'team' || x.closedBy === 'tester';
+  if (unsaid && x.status === 'done') list.push({ kind: closer ? 'closed' : 'done', by: BY.has(x.closedBy) ? x.closedBy : 'owner', how: '', note: closer ? x.note || '' : '', at: x.doneAt || null });
   if (unsaid && x.status === 'cancelled') list.push({ kind: 'cancelled', by: 'team', how: '', note: x.note || '', at: x.doneAt || null });
   return list;
 }
@@ -369,14 +378,55 @@ export function conversation(x) {
 export function eventWords(e, at = when) {
   const t = at(e.at);
   if (e.kind === 'done') return e.by === 'hub' ? `Closed by nextlevel ${t}` : `Done ${t} by the owner`;
-  if (e.kind === 'closed') return `Closed by the team ${t}${e.note ? `: ${e.note}` : ''}`;
+  if (e.kind === 'closed') return e.by === 'tester' ? `Verified and closed by the tester ${t}${e.note ? ` (${e.note})` : ''}` : `Closed by the team ${t}${e.note ? `: ${e.note}` : ''}`;
   if (e.kind === 'cancelled') return `Cancelled ${t}: ${e.note || 'no longer needed'}`;
   return `Reopened ${t} by the owner${e.how === 'reply' ? ' (by a reply)' : e.how === 'terminal' ? ' (from the terminal)' : ''}`;
 }
 // The team answered after the owner's last reply, and after the owner marked the card done or read the answer
 export const unreadAnswer = (x) => x.status !== 'cancelled' && !!x.answeredAt && ms(x.answeredAt) > Math.max(ms(x.repliedAt), x.status === 'done' ? ms(x.doneAt) : 0, ms(x.readAt));
-// What waits for the owner: an open card, or one the team answered since the owner last replied or marked it done
-export const awaitsOwner = (x) => x.status === 'open' || (!x.guard && unreadAnswer(x));
+// What waits for the owner: an open card (one with a plan only when the tester can't go on by itself: acceptState), or
+// one the team answered since the owner last replied or marked it done
+export const awaitsOwner = (x) => (x.status === 'open' && (!x.accept || OWNER_TURN.has(acceptState(x)?.state))) || (!x.guard && unreadAnswer(x));
+
+// ---------- a card with an acceptance plan (the tester's part 3) ----------
+const RUNNING_ENDS = new Set(['asked', 'starting', 'running']);
+const OWNER_TURN = new Set(['verified', 'changed', 'stuck', 'blocked']);
+// Where a card with a plan is, from its last run: checking (no run has ended), verified (a pass of the plan the card was
+// added with), changed (a pass of another version of the plan: the owner reads it), fixing (a failure, its fix draft
+// with the team), stuck (failures `maxFixes` fix drafts didn't mend), blocked (a run that couldn't finish: incomplete,
+// broken, stopped or refused, which is not the team's to fix). -> { state, last } or null for a card without a plan
+export function acceptState(x) {
+  const a = x?.accept;
+  if (!a || typeof a !== 'object') return null;
+  const last = (Array.isArray(a.runs) ? a.runs : []).filter((r) => r && typeof r === 'object').at(-1) || null;
+  if (!last || RUNNING_ENDS.has(last.end)) return { state: 'checking', last };
+  if (last.end === 'passed') return { state: last.planHash === a.planHash ? 'verified' : 'changed', last };
+  if (last.end === 'failed') return { state: a.stuck ? 'stuck' : 'fixing', last };
+  return { state: 'blocked', last };
+}
+// The same in words, for the Markdown, the team's list and the terminal (the step's words are the plan's, cut)
+export function acceptWords(x) {
+  const s = acceptState(x);
+  if (!s) return '';
+  const step = s.last?.step ? `step ${s.last.step.n}${s.last.step.as ? ` (as ${s.last.step.as})` : ''} failed: ${String(s.last.step.what || '').slice(0, 120)}` : 'a step failed';
+  const fix = (x.accept.fixes || []).at(-1);
+  if (s.state === 'checking') return 'the tester is checking it';
+  if (s.state === 'verified') return `verified by run ${s.last.id}: ready to close`;
+  if (s.state === 'changed') return `run ${s.last.id} passed, but the plan changed since the card was added: the owner reads the run and closes the card, or not`;
+  if (s.state === 'fixing') return `${step}${fix ? `; a fix draft waits in ${fix.file}` : ''}`;
+  if (s.state === 'stuck') return `${step}; ${(x.accept.fixes || []).length} fix draft(s) didn't make it pass, so no more are written: the owner looks`;
+  return `run ${s.last.id} ended ${s.last.end}${s.last.why ? ` (${String(s.last.why).slice(0, 160)})` : ''}: the owner looks`;
+}
+// A plan on a card, as the store takes it from the command (the command checked it against the base branch)
+const PLAN_RE = /^docs\/acceptance\/[A-Za-z0-9._/-]{1,200}\.(ya?ml|json)$/;
+function acceptOf(a) {
+  if (!a) return null;
+  if (!PLAN_RE.test(String(a.plan || '')) || String(a.plan).includes('..')) throw new Error('the plan is a file under docs/acceptance/');
+  if (!/^[a-z0-9-]{1,40}$/.test(String(a.env || ''))) throw new Error('the environment is a name nextlevel.json gives');
+  if (!/^[0-9a-f]{64}$/.test(String(a.planHash || '')) || !/^[0-9a-f]{40}$/.test(String(a.commit || ''))) throw new Error("the plan's hash and commit");
+  return { plan: a.plan, env: a.env, planHash: a.planHash, commit: a.commit, runs: [], fixes: [], stuck: false };
+}
+const MAX_RUNS = 30;
 export const firstLine = (s) => String(s ?? '').split('\n')[0].trim();
 
 // The project's stores. `stateDir`: .nextlevel/; `files`: { notes, handoff } Markdown paths from the
@@ -609,10 +659,11 @@ export function cardStore({ root, stateDir, files, onLock }) {
   };
   const handoff = {
     list: () => settled().items,
-    add({ what, where, why, task = '' }) {
+    add({ what, where, why, task = '', accept = null }) {
+      const plan = acceptOf(accept);
       return change('handoff', (data) => {
         const at = now();
-        const item = { id: `H${data.next}`, what: request(what), where: line(where, 'where'), why: line(why, 'why'), task, status: 'open', createdAt: at, updatedAt: at, doneAt: null, thread: [], reply: '', repliedAt: null, answeredAt: null, readAt: null, seenAt: at, note: '', from: 'team' };
+        const item = { id: `H${data.next}`, what: request(what), where: line(where, 'where'), why: line(why, 'why'), task, status: 'open', createdAt: at, updatedAt: at, doneAt: null, thread: [], reply: '', repliedAt: null, answeredAt: null, readAt: null, seenAt: at, note: '', from: 'team', ...(plan ? { accept: plan } : {}) };
         data.items.push(item);
         data.next += 1;
         return item;
@@ -759,6 +810,52 @@ export function cardStore({ root, stateDir, files, onLock }) {
         if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
         const said = whole(note, 'what resolved it', MAX_MESSAGE, 'put the long part in a file under docs/, commit it, and name it here');
         return closeIn(x, said, now());
+      });
+    },
+    // The hub's, for a card with a plan (no command does these): a run of its plan asked for or ended (the same run id
+    // again replaces its entry); a fix draft written for a failure; no more drafts. None is the owner's act.
+    acceptRun(id, run) {
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        if (!x.accept) throw new Error(`${x.id} has no acceptance plan`);
+        const entry = { id: String(run.id), end: String(run.end), at: run.at || now(), planHash: String(run.planHash || ''), by: String(run.by || ''), ...(run.step ? { step: run.step } : {}), ...(run.why ? { why: String(run.why).slice(0, 400) } : {}) };
+        const runs = (Array.isArray(x.accept.runs) ? x.accept.runs : []).filter((r) => r?.id !== entry.id);
+        x.accept.runs = [...runs, entry].slice(-MAX_RUNS);
+        if (entry.end === 'passed') x.accept.stuck = false;
+        x.updatedAt = now();
+        return x;
+      });
+    },
+    acceptFix(id, fix) {
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        if (!x.accept) throw new Error(`${x.id} has no acceptance plan`);
+        x.accept.fixes = [...(Array.isArray(x.accept.fixes) ? x.accept.fixes : []), { run: String(fix.run), step: Number(fix.step) || 0, at: now(), file: String(fix.file || '') }].slice(-MAX_RUNS);
+        x.updatedAt = now();
+        return x;
+      });
+    },
+    acceptStuck(id) {
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        if (x.accept) Object.assign(x.accept, { stuck: true });
+        return x;
+      });
+    },
+    // A pass of the plan the card was added with, and tester.autoClose on: the hub closes the card, as the tester. The
+    // owner's Reopen undoes it, as it does a Done.
+    testerClose(id, { run }) {
+      settleFirst(id);
+      return change('handoff', (data) => {
+        const x = find(data, id);
+        guarded(x);
+        settleCard(data, x);
+        if (x.status !== 'open') return null;
+        if (acceptState(x)?.state !== 'verified') return null;
+        const at = now();
+        const note = `run ${String(run)}`;
+        x.events = [...eventsOf(x), { kind: 'closed', by: 'tester', how: '', note, at }];
+        return Object.assign(x, { status: 'done', closedBy: 'tester', note, doneAt: at, updatedAt: at });
       });
     },
     // Make every Done past its Undo final, in a write (the hub's tick, the dashboard): nothing is written when none is

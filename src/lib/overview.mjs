@@ -264,6 +264,13 @@ export function ownerNeeds(b, checks = {}) {
       needs.push({ kind: 'answer', level: 'warn', id: x.id, text: `${x.id}: the team answered: ${what}`, why: x.why || '', action: { label: 'Read the answer', page: 'notes', focus: x.id }, more: null });
       continue;
     }
+    // (a card with a plan: what the tester found, and the card's own Close or a look at it, tester part 3)
+    if (x.accept && x.id && x.status === 'open') {
+      const verified = x.acceptState === 'verified';
+      const said = { verified: 'verified, ready to close', changed: 'passed, but its plan changed since the card was added', stuck: "the fixes didn't make it pass", blocked: "the tester's run couldn't finish" }[x.acceptState] || 'the tester needs you';
+      needs.push({ kind: 'accept', level: verified ? 'info' : 'warn', id: x.id, text: `${x.id}: ${said}: ${what}`, why: '', action: verified ? { label: 'Close', post: '/api/handoff', body: { action: 'done', id: x.id } } : { label: 'Look at the run', page: 'notes', focus: x.id }, more: verified ? { label: 'Look at the run', page: 'notes', focus: x.id } : null });
+      continue;
+    }
     const text = [x.id ? `${x.id}: ` : '', what, x.where ? ` (where: ${x.where})` : ''].join('');
     needs.push({ kind: 'handoff', level: 'warn', id: x.id || '', text, why: x.why || '', action: x.id ? { label: 'Done', post: '/api/handoff', body: { action: 'done', id: x.id } } : { label: 'Open Notes', page: 'notes' }, more: x.id ? { label: 'Reply', page: 'notes' } : null });
   }

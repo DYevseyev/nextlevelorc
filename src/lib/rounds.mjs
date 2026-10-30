@@ -36,6 +36,7 @@ const HOUR = 3_600_000;
 export const REASONS = {
   owner: { title: 'You (a reply, a note, a decision, Run a round now)', always: true },
   task: { title: 'A task attempt ended', always: true },
+  accept: { title: 'An acceptance run ended' },
   job: { title: 'A check, push or merge ended' },
   wake: { title: 'A wake-up the orchestrator asked for' },
   retry: { title: 'Again, after a round was cut off' },

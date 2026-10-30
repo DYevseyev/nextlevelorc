@@ -587,6 +587,156 @@ function orchestratorTile(b) {
 const tile = (label, kind, title, text, sub, button) =>
   h(`div.tile.k-${kind}`, {}, h('div.tile-label', {}, label), h('div.tile-title', {}, h('span.dot'), title), text ? h('p.tile-text', {}, text) : null, sub ? h('p.tile-sub', {}, sub) : null, button ? h('div.tile-actions', {}, button) : null);
 
+// ---------- the tester (tester part 3): Home's Acceptance card, a card's runs, the Team page's Tester card ----------
+// What a run kept is the app's words (made safe when the run wrote it): text nodes only. Screenshots come with the page's
+// key like every request, as data: URLs (the page's own policy takes no other images).
+const tst = { data: null, at: 0, loading: false, pick: { plan: '', env: '' }, runs: new Map(), loadingRun: new Set(), open: new Set(), shots: new Map() };
+async function loadTester(force = false) {
+  if (tst.loading || (!force && Date.now() - tst.at < 20_000)) return;
+  tst.loading = true;
+  const res = await api('/api/tester');
+  tst.loading = false;
+  tst.at = Date.now();
+  tst.data = res.ok ? res : { ok: false, message: res.message || "The tester's state couldn't be read." };
+  if (['home', 'team'].includes(currentTab())) renderAll();
+}
+async function loadRun(id, force = false) {
+  if (!id || tst.loadingRun.has(id) || (!force && tst.runs.has(id))) return;
+  tst.loadingRun.add(id);
+  const res = await api(`/api/tester/run?id=${encodeURIComponent(id)}`);
+  tst.loadingRun.delete(id);
+  tst.runs.set(id, res.ok ? res.run : { id, missing: res.message || 'This run is gone (only the newest runs are kept).' });
+  renderAll();
+}
+async function loadShot(id, file) {
+  const key = `${id}/${file}`;
+  if (tst.shots.has(key)) return;
+  tst.shots.set(key, '');
+  try {
+    const res = await fetch(`/api/tester/evidence?id=${encodeURIComponent(id)}&file=${encodeURIComponent(file)}`, { headers: { 'x-nextlevel-token': sessionKey } });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const blob = await res.blob();
+    const url = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+    tst.shots.set(key, /^data:image\/png;base64,/.test(url) ? url : 'gone');
+  } catch {
+    tst.shots.set(key, 'gone');
+  }
+  renderAll();
+}
+const RUN_KIND = { passed: 'good', failed: 'bad', incomplete: 'warn', broken: 'bad', stopped: 'idle', refused: 'warn', asked: 'info', starting: 'info', running: 'info' };
+const STEP_KIND = { passed: 'good', failed: 'bad', incomplete: 'warn', refused: 'warn', skipped: 'idle' };
+// A run's table: step, persona, status, what it did, expected and actual where a check failed, its time, its evidence
+function runTable(run) {
+  if (!run) return h('p.muted.small', {}, 'Reading the run…');
+  if (run.missing) return h('p.muted.small', {}, run.missing);
+  const files = new Set(run.files || []);
+  const rows = (run.steps || []).map((st) => {
+    const bad = (st.checks || []).filter((c) => !c.ok);
+    const shot = `step-${st.n}.png`;
+    const key = `${run.id}/${shot}`;
+    const src = tst.shots.get(key);
+    return h(`tr.k-${STEP_KIND[st.status] || 'idle'}`, {},
+      h('td', {}, String(st.n)), h('td', {}, st.as || '-'), h('td.state', {}, st.status || ''),
+      h('td', {}, h('div', {}, st.what || ''), bad.map((c) => h('div.small', {}, `expected ${c.expected}; got ${c.actual}`)), st.why ? h('div.small.muted', {}, st.why) : null,
+        files.has(shot) ? (src && src !== 'gone' ? h('img.shot', { src, alt: `What step ${st.n} showed (secrets masked)` }) : src === 'gone' ? h('div.small.muted', {}, 'The screenshot is gone.') : h('button.linkish', { type: 'button', onclick: () => loadShot(run.id, shot) }, src === '' ? 'Loading the screenshot…' : 'Show the screenshot')) : null),
+      h('td.small.muted', {}, st.ms !== undefined ? `${st.ms} ms` : ''));
+  });
+  return h('div.run-table', {},
+    h(`p.small.k-${RUN_KIND[run.state] || 'idle'}`, {}, h('span.dot'), `Run ${run.id}: ${run.state}${run.why ? ` (${run.why})` : ''} · ${run.plan} on ${run.env}${run.commit ? ` at ${run.commit.slice(0, 8)}` : ''}${run.by ? ` · asked by ${run.by}` : ''}`),
+    rows.length ? h('table.run-steps', {}, h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'As'), h('th', {}, 'Status'), h('th', {}, 'Step'), h('th', {}, 'Time'))), h('tbody', {}, rows)) : null,
+    h('p.small.muted', {}, 'What a step expected and got comes from the plan and the app. Passwords, tokens and cookies were taken out before anything was kept.'));
+}
+// The words a card with a plan says (lib/cards.mjs acceptState, as the page says it)
+const ACCEPT_BADGE = {
+  checking: ['info', 'The tester is checking this'],
+  fixing: ['info', 'A step failed: a fix goes to the team'],
+  verified: ['good', 'Verified, ready to close'],
+  changed: ['warn', 'Passed, but the plan changed'],
+  stuck: ['warn', 'Needs you: the fixes didn\'t make it pass'],
+  blocked: ['warn', "Needs you: the run couldn't finish"],
+};
+function acceptBox(x) {
+  const a = x.accept;
+  const st = x.acceptState || 'checking';
+  const last = (a.runs || []).at(-1);
+  const fix = (a.fixes || []).at(-1);
+  const open = tst.open.has(x.id);
+  if (open && last?.id && !['asked', 'starting', 'running'].includes(last.end)) loadRun(last.id);
+  return h(`div.accept-box.k-${ACCEPT_BADGE[st]?.[0] || 'info'}`, {},
+    h('p', {}, h('strong', {}, ACCEPT_BADGE[st]?.[1] || st), h('span.muted', {}, ` · ${a.plan} on ${a.env}, as committed at ${String(a.commit || '').slice(0, 8)}`)),
+    st === 'changed' ? h('p.small', {}, `The plan changed since this card was added${x.planChange ? `: ${x.planChange}` : ''}. Read the run before you close the card: its pass doesn't close it by itself.`) : null,
+    st === 'fixing' && fix ? h('p.small', {}, `Step ${last?.step?.n ?? '?'} failed. The fix draft for the team is ${fix.file}; the plan runs again once the fix is merged and deployed.`) : null,
+    st === 'stuck' ? h('p.small', {}, `${plural((a.fixes || []).length, 'fix draft')} didn't make step ${last?.step?.n ?? '?'} pass, so the tester writes no more. Look at the run, then reply to the team or close the card.`) : null,
+    st === 'blocked' && last ? h('p.small', {}, `The run ended ${last.end}${last.why ? `: ${last.why}` : ''}. That is not the team's to fix (an environment down, the browser missing, a stop): run it again from Home once it is sorted.`) : null,
+    last ? h('details', { open, ontoggle: (e) => (e.currentTarget.open ? (tst.open.add(x.id), renderAll()) : tst.open.delete(x.id)) }, h('summary', {}, `The last run (${plural((a.runs || []).length, 'run')} in all)`), open ? runTable(tst.runs.get(last.id)) : null) : null);
+}
+// Home's Acceptance card: the plans on the base branch, an environment, Run acceptance; the last runs
+function testerCard() {
+  loadTester();
+  const d = tst.data;
+  if (!d) return null;
+  const card = h('div.card.tester-card', {}, h('h2', {}, 'Acceptance'));
+  if (!d.ok) return card.append(h('p.muted', {}, d.message)), card;
+  if (!d.on) {
+    card.append(h('p.muted', {}, "The tester is off. It runs the project's acceptance plans as the test accounts you name, and closes cards on proof. ", h('button.linkish', { type: 'button', onclick: () => goTo('team') }, 'On the Team page')));
+    return card;
+  }
+  const plans = (d.plans || []).filter((p) => !p.problem && p.envs.length);
+  if (!plans.length) card.append(h('p.muted', {}, `No plan on ${d.base} yet: the team writes them in docs/acceptance/ with the features.`));
+  else {
+    if (!plans.some((p) => p.file === tst.pick.plan)) tst.pick.plan = plans[0].file;
+    const plan = plans.find((p) => p.file === tst.pick.plan);
+    if (!plan.envs.includes(tst.pick.env)) tst.pick.env = plan.envs[0];
+    const busy = pending.has('tester');
+    card.append(h('div.row.tester-pick', {},
+      h('label', {}, 'Plan ', h('select', { onchange: (e) => { tst.pick.plan = e.target.value; renderAll(); } }, plans.map((p) => h('option', { value: p.file, selected: p.file === tst.pick.plan }, p.name ? `${p.name} (${p.file.replace(/^docs\/acceptance\//, '')})` : p.file.replace(/^docs\/acceptance\//, ''))))),
+      h('label', {}, 'on ', h('select', { onchange: (e) => { tst.pick.env = e.target.value; } }, plan.envs.map((e) => h('option', { value: e, selected: e === tst.pick.env }, e)))),
+      h('button.btn.primary', { type: 'button', disabled: busy || !!d.running, title: d.running ? `${d.running} runs now: one at a time` : null, onclick: async (e) => {
+        await control('tester', '/api/tester', { action: 'run', plan: tst.pick.plan, env: tst.pick.env }, e.currentTarget);
+        loadTester(true);
+      } }, busy ? '…' : 'Run acceptance')));
+  }
+  const runs = (d.runs || []).slice(0, 4);
+  if (runs.length) {
+    card.append(h('ul.runs', {}, runs.map((r) => {
+      const open = tst.open.has(r.id);
+      if (open) loadRun(r.id, ['asked', 'starting', 'running'].includes(r.state));
+      return h('li', {}, h('details', { open, ontoggle: (e) => (e.currentTarget.open ? (tst.open.add(r.id), renderAll()) : tst.open.delete(r.id)) },
+        h('summary', {}, h(`span.k-${RUN_KIND[r.state] || 'idle'}`, {}, h('span.dot'), r.state), ` ${r.plan.replace(/^docs\/acceptance\//, '')} on ${r.env}`, h('span.muted.small', {}, ` · ${ago2(r.at)}${r.by ? ` · ${r.by}` : ''}`)),
+        open ? runTable(tst.runs.get(r.id)) : null));
+    })));
+  } else card.append(h('p.muted.small', {}, 'No run yet.'));
+  return card;
+}
+// The Team page's Tester card: on or off, each environment with its personas (set or not), the browser
+function testerTeamCard() {
+  loadTester();
+  const d = tst.data;
+  if (!d?.ok) return null;
+  const card = h('div.card.role.tester-team', { id: 'tester' },
+    h('div.role-head', {}, h('div', {}, h('h2', {}, 'Tester'), h('p.muted.small', {}, 'A program, not a model: it walks each acceptance plan itself, with no tokens, and no AI ever holds a test account\'s password.'))));
+  if (!d.on) {
+    card.append(h('p', {}, 'Off.'), h('p.small', {}, 'To turn it on, add a "tester" section to nextlevel.json (docs/acceptance.md in nextlevel shows one): your approval of that change on the dashboard turns it on. Then set each test account once:'), command('PowerShell, in the project folder', 'nextlevel tester persona set <environment> <persona>'));
+    return card;
+  }
+  card.append(h('p', {}, h('strong', {}, 'On'), d.store?.problem ? h('span.warn', {}, ` · the secret store: ${d.store.problem}`) : null));
+  for (const e of d.environments || []) {
+    card.append(h('p.small', {}, h('strong', {}, e.name), ` ${e.url}${e.production ? ' (production)' : ''} · ${e.mutations ? 'steps that change data may run' : 'read-only'}`),
+      h('ul.small.personas', {}, e.personas.map((p) => h(`li.${p.set ? 'ok' : 'warn'}`, {}, `${p.persona}: ${p.set ? 'set' : p.old ? 'set for an old URL: set it again' : 'not set'}`))));
+    const unset = e.personas.find((p) => !p.set);
+    if (unset) card.append(command('PowerShell, in the project folder', `nextlevel tester persona set ${e.name} ${unset.persona}`));
+  }
+  const br = d.browser || {};
+  card.append(h('p.small', {}, `Browser: ${br.ok ? `Playwright ${br.version}, installed` : br.installed ? br.problem : 'not installed (only browser steps need it)'}`));
+  if (!br.ok) card.append(command('PowerShell, in the project folder', 'nextlevel tester browser install'));
+  return card;
+}
+
 // ---------- the security engineer (1a-2): Home's Security card and the Security page ----------
 // Everything a scan wrote is the scanner's words about code an attacker may have written: text nodes only, paths and
 // URLs as text, never links (P7). Nothing here approves a policy: that is its card's Approve (the guard).
@@ -823,6 +973,8 @@ function renderHome() {
   const b = build;
   const root = $('#home');
   if (!b || selecting(root)) return;
+  // (a list open in the Acceptance card stays open: Home is drawn again once it closes)
+  if (document.activeElement?.tagName === 'SELECT' && root.contains(document.activeElement)) return;
   if (usagePicking && Date.now() - usagePicking < PICKING_MS) {
     usageHeld = true;
     return;
@@ -876,7 +1028,7 @@ function renderHome() {
   }
   progress.append(h('p.muted.small', {}, `Last activity ${b.lastActivity}. `, h('button.linkish', { type: 'button', onclick: () => goTo('project') }, 'The roadmap')));
 
-  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, switchesCard(b)), h('div.col', {}, blockersCard(b), securityCard(b), progress, usageCard(b)))].filter(Boolean));
+  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, testerCard(), switchesCard(b)), h('div.col', {}, blockersCard(b), securityCard(b), progress, usageCard(b)))].filter(Boolean));
 }
 
 // The update in progress, paused or just done (src/updater.mjs): its steps, what it waits for, and the owner's buttons
@@ -1776,10 +1928,10 @@ function renderTeam(force = false) {
   const b = build;
   const root = $('#team');
   if (!b?.ok || !b.team) return;
-  const text = JSON.stringify([b.team, b.teamChoices, b.workerWindow, b.codexWorkers, b.githubChecks, windowBusy, sandboxBusy, checksBusy]);
+  const text = JSON.stringify([b.team, b.teamChoices, b.workerWindow, b.codexWorkers, b.githubChecks, windowBusy, sandboxBusy, checksBusy, tst.data]);
   if (!force && text === lastTeam) return;
   lastTeam = text;
-  root.replaceChildren(h('div.roles', {}, b.team.map((row) => teamCard(row, b)), windowCard(b), codexWorkersCard(b), githubChecksCard(b)),
+  root.replaceChildren(h('div.roles', {}, b.team.map((row) => teamCard(row, b)), testerTeamCard(), windowCard(b), codexWorkersCard(b), githubChecksCard(b)),
     h('p.muted.small', {}, 'Saved in nextlevel.json: commit it with your next change. From PowerShell: nextlevel team, and nextlevel team set <role> --engine codex|claude|agy --model <name> --effort <level>.'));
 }
 
@@ -2084,6 +2236,7 @@ function closedWords(x) {
   if (x.status === 'cancelled') return 'Cancelled by the team';
   if (x.closedBy === 'team') return 'Closed by the team';
   if (x.closedBy === 'hub') return 'Closed by nextlevel';
+  if (x.closedBy === 'tester') return 'Verified and closed by the tester';
   if (x.guard || x.from === 'guard') {
     const last = String((Array.isArray(x.thread) ? x.thread : []).filter((e) => e.by === 'owner').at(-1)?.text || '');
     return /^approved/i.test(last) ? 'Approved by you' : /^rejected/i.test(last) ? 'Rejected by you' : 'Decided by you';
@@ -2093,6 +2246,7 @@ function closedWords(x) {
 const handoffBadge = (x) =>
   x.pending ? ['info', x.pending.was === 'done' ? 'Marked read' : 'Marked done']
   : x.unread ? ['warn', 'The team answered']
+  : x.status === 'open' && x.accept ? ACCEPT_BADGE[x.acceptState] || ACCEPT_BADGE.checking
   : x.status === 'open' ? ['warn', x.reopenedAt ? 'Reopened' : 'Needs you']
   : [x.status === 'cancelled' ? 'idle' : 'good', `${closedWords(x)} ${ago2(x.doneAt)}`];
 // An Undo's seconds, counted from the server's time (GET /api/cards and the build data say it), never this PC's clock
@@ -2121,7 +2275,7 @@ const startTicker = () => {
 const eventLabel = (e) =>
   e.kind === 'reopened' ? (e.how === 'reply' ? 'Reopened by your reply' : e.how === 'terminal' ? 'Reopened from the terminal' : 'Reopened by you')
   : e.kind === 'done' ? (e.by === 'hub' ? 'Closed by nextlevel' : 'Done by you')
-  : e.kind === 'closed' ? 'Closed by the team'
+  : e.kind === 'closed' ? (e.by === 'tester' ? `Verified and closed by the tester${e.note ? ` (${e.note})` : ''}` : 'Closed by the team')
   : `Cancelled by the team${e.note ? `: ${e.note}` : ''}`;
 
 // A handoff card: one conversation (FR-014). The request (its first line is the title), where, why and when, then the
@@ -2130,15 +2284,18 @@ const eventLabel = (e) =>
 function handoffCard(x) {
   const open = x.status === 'open';
   const waits = open || !!x.unread;
+  // (a card with a plan the tester is still working on doesn't wait for the owner: it shows where the tester is)
+  const testerTurn = open && x.accept && ['checking', 'fixing'].includes(x.acceptState);
   const key = `h:${x.id}`;
   const req = requestParts(x.what);
   const badge = handoffBadge(x);
-  if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits ? '.waits' : '', x.pending ? countdown(x.pending.finalAt) : null);
+  if (cards.openId !== x.id) return cardLine(x.id, req.title, badge, lastAt(x), waits && !testerTurn ? '.waits' : '', x.pending ? countdown(x.pending.finalAt) : null);
   const card = h(`div.cardx.handoff.s-${waits ? 'open' : x.status}${x.unread ? '.answered' : ''}.is-open`, { id: `card-${x.id}` },
     cardBar(x.id, req.title, badge, waits && !x.pending ? jumpTo(x.id) : null, 'Reply'),
     requestBlock(x.id, req.rest),
     h('dl.facts', {}, x.where ? [h('dt', {}, 'Where'), h('dd', {}, x.where)] : null, x.why ? [h('dt', {}, 'Why'), h('dd', {}, x.why)] : null,
       h('dt', {}, 'Asked'), h('dd', {}, ago2(x.createdAt), x.task ? [' · ', taskLink(x.task)] : null)),
+    x.accept ? acceptBox(x) : null,
     threadView(x, { when: ago2, fold: 2, open: cards.unfolded.has(x.id), onToggle: (on) => (on ? cards.unfolded.add(x.id) : cards.unfolded.delete(x.id)), events: x.guard ? [] : x.events, eventLabel }),
     x.reopenedAt && open ? h('p.small.muted', {}, "Reopening doesn't undo what the team already did: it sees the card open again at its next start or round.") : null);
   // A Done that can still be undone (undo Done): nothing reached the team yet
@@ -2180,7 +2337,7 @@ function handoffCard(x) {
       h('button.btn.primary', { type: 'button', disabled: busy, title: open ? null : "The answer is read: the card goes back to what's done", onclick: async () => {
         const res = await cardPost('/api/handoff', { action: 'done', id: x.id, reply: cards.replies.get(x.id) || '' }, key);
         if (res?.ok) cards.replies.delete(x.id);
-      } }, busy ? '…' : open ? `Mark ${x.id} done` : `Mark ${x.id}'s answer read`),
+      } }, busy ? '…' : open ? (x.accept && x.acceptState === 'verified' ? `Close ${x.id}: verified` : `Mark ${x.id} done`) : `Mark ${x.id}'s answer read`),
       h('button.btn', { type: 'button', disabled: busy, onclick: async () => {
         const text = (cards.replies.get(x.id) || '').trim();
         if (!text) return toast('Type the reply first.', 'error');

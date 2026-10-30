@@ -8,6 +8,7 @@
 //                 nextlevel handoff list [--all] [--json]
 //                 nextlevel handoff show <id> [--from <line>] [--json]   one card whole, with its replies and answers
 //                 nextlevel handoff add --file <path> [--task <task-id>]  the request, with lines "Where: ..." and "Why: ..."
+//                               [--plan docs/acceptance/<plan>.yaml --env <env>]  a card the tester checks (tester part 3)
 //                               (or: add "what to do" --where "which window, panel or file" --why "why")
 //                 nextlevel handoff answer <id> --file <path>             an answer on the card (--file -: from stdin)
 //                 nextlevel handoff seen <id>...
@@ -19,11 +20,12 @@
 // an answer only does (FR-014): on Windows the orchestrator runs nextlevel through nextlevel.cmd, where an argument ends
 // at its first line break and % ^ & ! and quotes may change. An answer is redacted like a report before it is kept
 // (`redact`, from the hub): the owner reads it on the dashboard, and the cards' Markdown goes into Git.
-import { conversation, eventWords, eventsOf, firstLine, noteGroups, when } from './lib/cards.mjs';
+import { acceptWords, conversation, eventWords, eventsOf, firstLine, noteGroups, when } from './lib/cards.mjs';
 import { commandArgs } from './lib/commands.mjs';
 import { OUTPUT_BUDGET, cutSaid, head, sizeOf, sizeText } from './lib/reports.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cleanText, readTextFile } from './lib/textin.mjs';
+import { capProblem, committedPlan, teamRequestDir, writeRequest } from './tester.mjs';
 
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 // A worker runs in a slot (NEXTLEVEL_TASK_ID is set there): its notes would land in the slot's copy of the files and
@@ -205,6 +207,7 @@ function cardLines(x, { handled = false, short = false } = {}) {
     if (!handled && isNew(x, e) && !short && !oneLine) out.push(`${top}, ${plural(e.text.length, 'character')}, whole:`, ...quoted(e.text, PAD));
     else out.push(`${top}: "${said(e.text, handled || !isNew(x, e) ? 200 : 600)}"`);
   }
+  if (x.accept && !handled) out.push(`${PAD}acceptance: ${x.accept.plan} on ${x.accept.env}: ${acceptWords(x)}`);
   if (x.status === 'cancelled' && x.note) out.push(`${PAD}cancelled: ${said(x.note, 120)}`);
   if (x.status === 'done' && x.closedBy === 'team' && x.note) out.push(`${PAD}closed by the team: ${said(x.note, 120)}`);
   const again = reopened(x);
@@ -272,6 +275,7 @@ function cardText(x) {
   const out = [`${x.id} · ${stateOf(x)} · asked ${when(x.createdAt)}${x.task ? ` · task ${x.task}` : ''}`, '', 'The request:', ...quoted(x.what)];
   if (x.where) out.push(`where: ${x.where}`);
   if (x.why) out.push(`why: ${x.why}`);
+  if (x.accept) out.push(`acceptance: ${x.accept.plan} on ${x.accept.env} (as committed at ${x.accept.commit.slice(0, 8)}): ${acceptWords(x)}`, ...(x.accept.runs || []).map((r) => `  run ${r.id}: ${r.end}${r.step ? ` at step ${r.step.n}` : ''} (${when(r.at)}, asked by ${r.by || '?'}): nextlevel tester show ${r.id}`));
   // (the replies and answers, and the card's closings and reopenings, in time order)
   for (const e of conversation(x)) {
     if (e.text === undefined) out.push('', `${eventWords(e)}.`);
@@ -329,7 +333,27 @@ export async function cmdHandoff(argv, ctx) {
       need(what.trim() && where.trim() && why.trim(), `${usage}; or: add "what the owner should do" --where "which window, panel or file" --why "why the team needs it" [--task <task-id>]`);
       const task = (flag(a, 'task') || fromFile?.task || '').trim();
       if (task && !ID_RE.test(task)) throw new Error(`--task takes a task id, not "${task}"`);
-      const x = store.handoff.add({ what, where, why, task });
+      // A card the tester checks (docs/design/tester.md §9): the plan as the base branch has it now, its hash kept on the
+      // card; the hub runs it at once (held to the orchestrator's hourly cap), and the card waits for the owner only when
+      // the tester can't go on by itself
+      const plan = flag(a, 'plan').trim();
+      const env = flag(a, 'env').trim();
+      let accept = null;
+      if (plan || env) {
+        need(plan && env, `${usage} --plan docs/acceptance/<plan>.yaml --env <env>   (both, or neither)`);
+        const c = ctx.tester ? committedPlan(ctx.tester, plan, env) : { problem: "the tester's settings couldn't be read." };
+        if (c.problem) throw new Error(`the card wasn't added: ${c.problem}`);
+        const cap = capProblem(store.root, { plan: c.rel, env, max: ctx.tester.config.tester.maxRunsPerHour });
+        if (cap) throw new Error(`the card wasn't added: the tester ran ${cap}. Add the card later, or without --plan.`);
+        accept = { plan: c.rel, env, planHash: c.hash, commit: c.head };
+      }
+      let x = store.handoff.add({ what, where, why, task, accept });
+      if (accept) {
+        const run = writeRequest(teamRequestDir(ctx.tester.stateDir), { plan: accept.plan, env, card: x.id });
+        x = store.handoff.acceptRun(x.id, { id: run, end: 'asked', planHash: accept.planHash, by: 'card' });
+        print({ ok: true, item: x, run }, `Added ${x.id}, with ${accept.plan} on ${env} as ${ctx.tester.base} has it now (${accept.commit.slice(0, 8)}). The hub runs it (${run}): a pass makes the card "Verified" for the owner, a failure leaves a fix draft for you. Don't tell the owner yet: the hub does when the card needs them.`);
+        return 0;
+      }
       const tell = fromFile
         ? `nextlevel notify "Needs you: ${x.id}" --file ${argOf(a.file)} high`
         : `nextlevel notify "Needs you: ${cut(quote(firstLine(x.what)), 60).replace(/"/g, "'")}" "${quote(x.what).replace(/"/g, "'")} (where: ${quote(x.where).replace(/"/g, "'")}; why: ${quote(x.why).replace(/"/g, "'")})" high`;
