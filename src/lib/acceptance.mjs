@@ -27,7 +27,8 @@ class Plain {
 }
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Plain);
 
-export const planHash = (text) => createHash('sha256').update(String(text ?? '').replace(/\r\n/g, '\n')).digest('hex');
+// (line ends as LF and the end's blank lines left out: git's output, read whole or trimmed, gives one hash)
+export const planHash = (text) => createHash('sha256').update(String(text ?? '').replace(/\r\n/g, '\n').replace(/\s+$/, '')).digest('hex');
 
 // Where a plan may be: a file under docs/acceptance/, .yaml, .yml or .json, named plainly. -> '' or what is wrong
 export function planPathProblem(rel) {

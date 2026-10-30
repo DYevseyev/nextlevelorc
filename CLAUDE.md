@@ -117,6 +117,12 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   key the OS store holds, and `redactionValues`, which every redaction set and the guard's commit and push scans take
   (`personaHold` in `src/lib/redact.mjs` when it can't be read). `src/checks/tester.mjs` — `tester.config`, `.vault`,
   `.plans`, `.reach`, `.browser`. The hub's side is "the tester's runs" in `hub.mjs` (testerTick, acceptContext, acceptEnv).
+  Part 3, closing the loop: `src/lib/acceptloop.mjs` (pure: a spec's `Acceptance:` line, a run's result key, the fix
+  draft with the app's words quoted on one line, what changed in a plan, `afterDeploy`, a version answer); a card's
+  `accept` in `src/lib/cards.mjs` (`acceptState`; the hub-only `acceptRun`, `acceptFix`, `acceptStuck`, `testerClose`);
+  the hub's "the tester's part 3" (testerEnded, testerAfterPush, testerAfterMerge, deployTick, its lists in the guard's
+  folder); `handoff add --plan --env`; the dashboard's `/api/tester` routes, Home's Acceptance card and the Team page's
+  Tester card.
 - `src/lib/usage.mjs` — the usage ledger (`docs/design/token-usage.md`): one line per ended run in
   `.nextlevel/usage/<YYYY-MM>.jsonl`, appended under the month's lock, read through a shape check; the ranges (last hour,
   today, this week from Monday, this month, all time), the sums by field, the per-day series, what an older version
@@ -282,7 +288,10 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   and part 2 with a stand-in Playwright (`test/stubs/playwright`: a small DOM, every request through the run's proxy,
   route() seeing a navigation's first request only, screenshots as the texts they would show, what it saw in
   `~/.fake-playwright/log.jsonl`) installed by the stand-in npm: the proxy's refusals, the install and its record, a
-  browser run end to end, a read-only environment, a missing or broken browser;
+  browser run end to end, a read-only environment, a missing or broken browser; and part 3 (a card verified, closed by
+  itself and reopened; a failure's fix draft, stuck, a changed plan; a task's `Acceptance:` line and a deploy waiting
+  for the version endpoint with the test clock, one phone message; the cap and the tester off; the dashboard's tester
+  routes with and without the key);
   `test/close.test.mjs` covers FR-021 (`nextlevel close` with a hub: refusals, `--discard`, the page, the doctor, status, one real event each, a
   reopen, bridge tasks) and `test/project.test.mjs` its counts (a fixture shaped like a real project); `test/ui-helpers.mjs`
   starts and drives the dashboard. A stopped worker's processes and its held slot are in `test/hub.test.mjs` (FR-013),

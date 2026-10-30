@@ -220,7 +220,7 @@ export const COMMANDS = {
     group: 'owner',
     lines: [
       ['nextlevel handoff done <id> [--reply "..."] | reply <id> "..." | reopen <id>', 'a step the team asked you for is done; answer it; or open a closed card again'],
-      ['nextlevel handoff list [--all] | show <id> | add --file <path> [--task T] | answer <id> --file <path> | seen <id>... | close <id> --file <path> | cancel <id> --reply "why"', 'what the team asks the owner for, and its answers on the cards', 'orchestrator'],
+      ['nextlevel handoff list [--all] | show <id> | add --file <path> [--task T] [--plan <plan> --env <env>] | answer <id> --file <path> | seen <id>... | close <id> --file <path> | cancel <id> --reply "why"', 'what the team asks the owner for, and its answers on the cards (--plan: a card the tester checks)', 'orchestrator'],
     ],
     text: 'Free text comes from a file with --file <path> (on Windows a line break ends a command\'s argument). docs/HANDOFF.md is written from the cards: never edit it by hand. A card that holds a change for your approval is decided on the dashboard only.',
     options: {
@@ -231,13 +231,15 @@ export const COMMANDS = {
       task: S('<task-id>', 'add: the task it is about'),
       where: S('<text>', 'add: which window, panel or file'),
       why: S('<text>', 'add: why the team needs it'),
+      plan: S('<plan>', 'add: an acceptance plan (docs/acceptance/...) the tester runs for the card'),
+      env: S('<env>', "add: the plan's environment, as nextlevel.json names it"),
       reply: S('<text>', 'done, cancel, reply: the words that go with it'),
     },
     subs: {
       '': { options: ['json', 'all'], args: [0, 0] },
       list: { options: ['json', 'all'], args: [0, 0] },
       show: { options: ['from', 'json'], args: [1, 1] },
-      add: { options: ['file', 'task', 'where', 'why', 'json'], args: [0, ANY] },
+      add: { options: ['file', 'task', 'where', 'why', 'plan', 'env', 'json'], args: [0, ANY] },
       answer: { options: ['file', 'json'], args: [1, 1], hint: 'answer <id> --file <path>   (write the answer to a file first, for example .nextlevel/answer.md; --file - reads it from stdin. Never the text in the command: on Windows it would end at its first line break.)' },
       seen: { options: ['json'], args: [1, ANY] },
       cancel: { options: ['reply', 'file', 'json'], args: [1, 1] },

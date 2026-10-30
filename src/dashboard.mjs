@@ -534,6 +534,8 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
     thread: (x.thread || []).map((e) => (e.by === 'team' ? { ...e, text: clean(e.text ?? '') } : e)),
     // (its closings and reopenings: the team's notes redacted, undo Done and FR-018)
     events: (x.events || []).map((e) => (e.by === 'team' ? { ...e, note: clean(e.note ?? '') } : e)),
+    // (a card's plan and runs: the plan's path and the app's words, redacted like the rest)
+    ...(x.accept ? { accept: clean(x.accept) } : {}),
   });
   function cardsView() {
     const v = api.cards.view();
@@ -683,6 +685,42 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
         try {
           const r = api.security.act(b);
           return reply(res, [r.ok ? 200 : 409, r]);
+        } catch (err) {
+          return reply(res, [409, { ok: false, message: err.message }]);
+        } finally {
+          pushBuild();
+        }
+      }
+      case 'GET /api/tester':
+        // Home's Run acceptance and the Team page's Tester card (tester part 3): the plans on the base branch, the
+        // environments and their personas, the last runs. Their words are the app's: redacted like the rest.
+        if (!api.tester) return reply(res, [404, { ok: false, message: 'no tester here' }]);
+        return reply(res, [200, { ok: true, ...api.tester.view() }]);
+      case 'GET /api/tester/run': {
+        // A run's table for a card or Home: each step, expected and actual (made safe when the run wrote it)
+        const run = api.tester?.run(String(url.searchParams.get('id') || ''));
+        return reply(res, run ? [200, { ok: true, run }] : [404, { ok: false, message: 'no such run' }]);
+      }
+      case 'GET /api/tester/evidence': {
+        // A step's screenshot or record, with the page's key like every request: never sent to the phone or an engine
+        const name = String(url.searchParams.get('file') || '');
+        const body = api.tester?.file(String(url.searchParams.get('id') || ''), name);
+        if (!body) return reply(res, [404, { ok: false, message: 'no such evidence' }]);
+        if (name.endsWith('.png')) return send(res, 200, body, 'image/png');
+        let parsed = null;
+        try {
+          parsed = JSON.parse(body.toString('utf8'));
+        } catch {
+          // shown as it is
+        }
+        return reply(res, [200, { ok: true, record: parsed }]);
+      }
+      case 'POST /api/tester': {
+        // Run acceptance on Home: the owner's run of a committed plan on an environment nextlevel.json names
+        if (b.action !== 'run' || typeof b.plan !== 'string' || typeof b.env !== 'string' || b.plan.length > 300 || b.env.length > 60) return reply(res, [400, { ok: false, message: 'action run, with a plan and an environment' }]);
+        try {
+          const r = api.tester.ask(b);
+          return reply(res, r.problem ? [409, { ok: false, message: `Not asked: ${r.problem}` }] : [200, { ok: true, id: r.id, message: `Asked for a run of ${r.plan} on ${r.env} (${r.id}): the hub starts it at its next look.` }]);
         } catch (err) {
           return reply(res, [409, { ok: false, message: err.message }]);
         } finally {
