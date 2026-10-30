@@ -21,6 +21,8 @@
 //   fresh              ask everything again (doctor --fresh, the dashboard's Check again), kept answers or not
 //   which(cmd)         -> { file, all } | null
 //   tcpOpen(ports)     -> the first of these ports on 127.0.0.1 that answers, or 0 (lib/securityrun.mjs apiPortOpen)
+//   signInLease(fn)    -> fn()'s answer under the PC's security lease, or { busy: who holds it } without running it: a
+//                      check that mounts the scanner's sign-in volume (lib/securityscan.mjs withLease, 1b-1)
 //   getUrl(url)        -> { status } | { problem, refused }: one GET of an environment's URL by the tester's rules
 //                      (lib/testernet.mjs: that origin only, its checked address, never the dashboard), no sign-in
 //   browser            the tester's browser (lib/browsertools.mjs): state({ quick }) -> { ok, problem, record },
@@ -49,6 +51,7 @@ import { recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
 import { apiPortOpen } from '../lib/securityrun.mjs';
+import { withLease } from '../lib/securityscan.mjs';
 import { probeBrowser } from '../lib/testerbrowser.mjs';
 import { reachOf, request } from '../lib/testernet.mjs';
 import { parseEnvFile } from '../notify.mjs';
@@ -93,6 +96,7 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     forget: () => memo.clear(), // after a fix changed something
     which: (cmd) => resolveBin(cmd),
     tcpOpen: (ports) => apiPortOpen({ ports }),
+    signInLease: (fn) => withLease(os.homedir(), { root: root || '', who: 'check' }, fn),
     async getUrl(url) {
       const port = (f) => {
         try {

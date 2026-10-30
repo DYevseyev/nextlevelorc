@@ -93,10 +93,16 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   the copy-out); `src/lib/securityscan.mjs` — the scan's checkout (steering files aside, links out, tracked secrets
   files), the PC's one-scan lease and the scans' records; `src/lib/findings.mjs` — the manifest's seal and the findings,
   made safe (pure); `src/lib/securitypolicy.mjs` — the policy (1a-2, pure): a text made safe, its kept state's shape
-  check, when a draft may come, its card's words; `src/checks/security.mjs` — `security.docker`, `.image`, `.login`,
-  `.probe`, `.daybreak`. The hub's side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans,
+  check, when a draft may come, its card's words; `src/lib/daybreakwatch.mjs` — the Daybreak model watch (1b-1, pure:
+  its record per sign-in in `~/.nextlevel/security/daybreak-watch/`, when it asks, its news, what a project makes of
+  it), whose one look is `_daybreak` in `src/security.mjs`, under the PC's lease like every container that mounts the
+  sign-in (`withLease` in `src/lib/securityscan.mjs`); `src/checks/security.mjs` — `security.docker`, `.image`,
+  `.login`, `.probe`, `.daybreak`. Every other Codex run gets Daybreak off (`standardPin` in `src/engines/index.mjs`,
+  by Codex's version: `engineVersion` in `src/lib/proc.mjs`; the doctor's `codex.daybreak`). The hub's side is "the security engineer's scans" in `hub.mjs` (securityTick, recoverScans,
   scanBusy; securitySummary for Home's card, securityAct for its buttons) and "the security engineer's policy"
-  (holdPolicy, proposeDraft, proposeSecurityFile, policyDecide: a guard record of kind `policy`, no file). The
+  (holdPolicy, proposeDraft, proposeSecurityFile, policyDecide: a guard record of kind `policy`, no file; commitPolicy,
+  the approved text into the repository as SECURITY.md through the hub's own commit job) and "the Daybreak model watch"
+  (daybreakWatchTick, tellWatch). The
   dashboard's routes are `GET /api/security` (the Security page) and `POST /api/security`.
 - `src/tester.mjs` — the tester (`docs/design/tester.md`, `docs/acceptance.md`): `nextlevel tester
   status|check|run|wait|show|stop|persona|browser` and `_accept`, one run as the hub's child (no job; `NEXTLEVEL_AGENT=tester`,
@@ -269,7 +275,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   a scanner error, a stop, a planted `.env` value, the seccomp fallback, and who may scan; the policy (1a-2: a draft
   on a card approved on the dashboard and read by the next scan exactly, its blob changed, a new draft rejected and
   never back, the root SECURITY.md once per text, a link or a nested one never, a threat model changed after the
-  copy-out, Home's buttons, the Security page's code with no links);
+  copy-out, Home's buttons, the Security page's code with no links; 1b-1: the policy into the repository and each of
+  its refusals, a push that carries it, the checks under the lease); `test/daybreak.test.mjs` covers 1b-1's standard
+  pin (every Codex command line, by version, with a profile, a worker on a model Daybreak doesn't cover with the stub
+  Codex playing Daybreak: `STUB_CODEX_VERSION`, `STUB_CODEX_NO_DAYBREAK`) and the Daybreak watch (pure, and through the
+  hub with the test clock, the stand-in ntfy, `STUB_DOCKER_MODELS` and the dashboard's Seen);
   `test/tester.test.mjs` covers the tester's part 1 with a stand-in web app in a process of its own
   (`test/stubs/webapp.mjs`: three test accounts, a CSRF sign-in, a delayed audit log, a page that prints a password, a
   redirect off the origin): the YAML subset against fixtures a full YAML reader made (`test/fixtures/tester-yaml`), the

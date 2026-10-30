@@ -443,6 +443,7 @@ export const COMMANDS = {
   _trial: { group: 'internal', lines: [['nextlevel _trial <what>', "the model check's trial before tasks start on Antigravity (the hub starts it, FR-022)"]], args: [1, 1] },
   _accept: { group: 'internal', lines: [['nextlevel _accept <what>', 'one acceptance run (the hub starts it)']], args: [1, 1] },
   _scan: { group: 'internal', lines: [['nextlevel _scan <what>', "one security scan, in OpenAI's scanner container (the hub starts it)"]], args: [1, 1] },
+  _daybreak: { group: 'internal', lines: [['nextlevel _daybreak', "the Daybreak model watch's one look at the scanner's models (the hub starts it)"]], args: [0, 0] },
   _locktest: { group: 'internal', lines: [['nextlevel _locktest <what>', "the lock test of a role on Antigravity (the hub starts it)"]], args: [1, 1] },
   _locktry: { group: 'internal', lines: [['nextlevel _locktry <what>', "one session of the lock test, in its own throwaway project (the lock test starts it)"]], args: [1, 1] },
   _update: { group: 'internal', lines: [['nextlevel _update <id>', 'the one-click update itself (the dashboard or nextlevel update starts it)']], args: [1, 1] },

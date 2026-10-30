@@ -850,6 +850,17 @@ Measured on Windows 11 with Docker Desktop (Step 0 and 0b, 26 and 27 October), w
   holds nothing secret.
 - **The Security page and Home's buttons are the dashboard's:** an agent running as the owner with the dashboard's
   session key could ask for a scan there as from the command (FR-017 part 2A: the key is in the page's tab only).
+- **A SECURITY.md added to the repository is public on a public repository.** Add it to the repository commits the
+  approved text as it is, and GitHub shows a root SECURITY.md to everyone as the project's security policy. A threat
+  model can name weak spots. The confirmation says so; nothing else stops it.
+- **The Daybreak watch's only proof is the model list.** A model counts as covered when the scanner's `codex debug
+  models` lists `daybreak_blue` for it. No run confirms that Blue applied (see above), and a model that lists no
+  programs never counts.
+- **The standard pin and Codex profiles (unverified on a real Codex).** A profile's own fields win over the root in
+  codex-rs, where a `-c` lands, so a run that picks a profile also gets `-c profiles.<name>.daybreak=false`. A profile
+  picked some way nextlevel doesn't read (Codex's managed config) could still turn Daybreak on for that run. The pin's
+  `-c` makes an interactive Codex window say "Running without the shared background server" when Daybreak would
+  otherwise be on (FR-004 #6); the window runs with `--no-daemon` anyway (FR-011).
 
 ## The tester (part 1)
 - **The sign-ins are sealed for your account, not walled from it.** Any program running as you can ask Windows' DPAPI,

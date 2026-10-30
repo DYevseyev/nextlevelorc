@@ -31,7 +31,8 @@
 //                                                  the assistant: a read-only side chat about the project (src/ask.mjs)
 //               nextlevel security scan [--deep] | status [--json] | stop [<id>] | login
 //                                                  the security engineer's scans, in OpenAI's scanner container; the hub
-//                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs)
+//                                                  starts an asked-for scan (_scan) and never one by itself (src/security.mjs),
+//                                                  and while the role is on the Daybreak model watch's look once a day (_daybreak)
 //               nextlevel tester status | check [<plan>] | run <plan> --env <env> | wait <run> | show <run> | stop | persona ...
 //                                                  acceptance plans run against the environments nextlevel.json names; the
 //                                                  hub starts an asked-for run (_accept), one at a time (src/tester.mjs)
@@ -79,7 +80,7 @@ import { dailyReport } from './daily-report.mjs';
 import { reopenDashboard, startDashboard } from './dashboard.mjs';
 import { doctorOptions, runDoctor } from './doctor.mjs';
 import { cmdFix, fixStore, followFixes } from './fix.mjs';
-import { accountDir, accountProblem, engine, engineTitle, gitByHub, profileEnv, sessionArgs, windowArgs, workerCaveat, workerIsolation } from './engines/index.mjs';
+import { accountDir, accountProblem, engine, engineTitle, gitByHub, profileEnv, sessionArgs, standardPin, windowArgs, workerCaveat, workerIsolation } from './engines/index.mjs';
 import { ROLE_AGENTS, WORKER_AGENT_FILE, roleAgentFile } from './engines/agy.mjs';
 import { lockLines, lockWords, runLockTest } from './locktest.mjs';
 import { accessFacts } from './checks/argon.mjs';
@@ -90,7 +91,7 @@ import { CONFIG_FILE, ENGINES, SECOND, SECOND_TAKES, describeProfile, effortFor,
 import { INSTALL_COMMAND, binDir } from './lib/install.mjs';
 import { channelOf, runningVersion, versionFor } from './lib/versions.mjs';
 import { FORMAT, formatProblem, writeFormat } from './lib/format.mjs';
-import { openWindow as openWindowAt, resolveBin, runQuiet, runQuietAsync, spawnBin, spawnDirect, windowTitle } from './lib/proc.mjs';
+import { engineVersion, openWindow as openWindowAt, resolveBin, runQuiet, runQuietAsync, spawnBin, spawnDirect, windowTitle } from './lib/proc.mjs';
 import { cachedFacts, checksView, factsComplete, repoFacts } from './lib/ghrepo.mjs';
 import { listProcesses, listWaitMs, processName, processStartSync, processTree, stopProcesses } from './lib/proctree.mjs';
 import { missingFiles, programFiles } from './lib/toolfiles.mjs';
@@ -110,9 +111,11 @@ import { holdFor as updateHoldFor, queuedByUpdate, updateRunView } from './updat
 import { AVAILABLE_EVERY_MS, CHECKED, describeTool, hasVersions, ownerSaysNoUpdates, readAvailable, rememberProject, thisVersion, toolGit, updateBlocker, updatesOff } from './lib/update.mjs';
 import { cmdReport, fileShownReport, redactReport, reportSecrets } from './report.mjs';
 import { cmdTeam } from './team.mjs';
-import { approvedPolicy, changePolicy, cmdScanProcess, cmdSecurity, draftSource, pendingRequests, readPolicy, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage } from './security.mjs';
+import { approvedPolicy, changePolicy, cmdDaybreakProcess, cmdScanProcess, cmdSecurity, daybreakSeen, draftSource, pendingRequests, readPolicy, readWatchFile, recoverScans, requestDraft, requestScan, requestStop, scanTrusted, securityPage, watchOf } from './security.mjs';
+import { DIGEST as SCANNER_DIGEST } from './lib/securityimage.mjs';
+import { droppedModel, untold, watchDue, watchWords, withTold } from './lib/daybreakwatch.mjs';
 import { DRAFT_WARNING, POLICY_MAX, POLICY_WHY, mayDraft, policyText, policyWhat } from './lib/securitypolicy.mjs';
-import { listScans, readScan, runningScan } from './lib/securityscan.mjs';
+import { leaseHolder, listScans, readScan, runningScan } from './lib/securityscan.mjs';
 import { capProblem, cmdAcceptProcess, cmdTester, evidenceFile, hubRequest, listRuns, ownerRun, pendingRuns, pruneRuns, readRun, recordStart, recoverRuns, runView, runningRun, testerView, writeRun } from './tester.mjs';
 import { VERSION_EVERY_MS, VERSION_WAIT_MS, changesWords, deployEnvs, deployedBySome, failedStep, fixDraft, planChanges, resultKey, specAcceptance, versionNames } from './lib/acceptloop.mjs';
 import { planPathProblem, readPlan } from './lib/acceptance.mjs';
@@ -131,7 +134,7 @@ import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from 
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
 import { asksToMerge, hasConflictMarkers, mergeText } from './lib/slotgit.mjs';
 import { lockNote, readEnv, retryOnLock, retryOnLockAsync } from './lib/gitlock.mjs';
-import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, shownDiff } from './lib/guard.mjs';
+import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, recordOwner, shownDiff } from './lib/guard.mjs';
 import { describeGitChange, diffGitState, folderName, readGitState, same as sameFolder, stateKey } from './lib/gitguard.mjs';
 import { describeSecretFile, findSecrets, isEnvFile, redactSecrets, secretValues } from './lib/secrets.mjs';
 import { describeChanges, isProtected, pathKey, protectedList, protectedOwned } from './lib/protect.mjs';
@@ -3242,11 +3245,16 @@ function orchestratorSession(profile, { mode, prompt, timeoutMin = CYCLE_MIN }) 
   }
   const env = { ...withProfile(childEnv(), profile), NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_SESSION: mode === 'headless' ? 'autopilot' : 'interactive' };
   delete env.NEXTLEVEL_CYCLE_LOG;
-  if (mode === 'headless') return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, timeoutMin, args: CFG.args(profile.engine) }), env };
+  // (its engine's version: Codex's Daybreak pin, security engineer 1b-1)
+  const version = pinVersion(profile, env);
+  if (mode === 'headless') return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, timeoutMin, args: CFG.args(profile.engine), version }), env };
   // (on top, what keeps the commands it runs from opening windows of their own: Codex's --no-daemon, FR-011)
   const extra = windowArgs(profile, (cmd, a) => runQuiet(cmd, a, { cwd: ROOT, env }));
-  return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, args: CFG.args(profile.engine), extra }), env };
+  return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, args: CFG.args(profile.engine), extra, version }), env };
 }
+// The version of a profile's engine, where its session's arguments depend on it (Codex's Daybreak pin from 0.163,
+// security engineer 1b-1): '' for the others
+const pinVersion = (profile, env) => (profile.engine === 'codex' ? engineVersion('codex', { cwd: ROOT, env }) : '');
 // nextlevel's agent files in the main checkout (.agents/ is protected): written only where no link is on the way, kept out
 // of commits by .git/info/exclude (never the project's .gitignore), and recorded as the hub's own write for the guard
 function writeRoleFiles(files) {
@@ -6205,6 +6213,57 @@ function securityTick() {
     done();
   });
 }
+// ---------- the Daybreak model watch (1b-1, lib/daybreakwatch.mjs; `_daybreak` in src/security.mjs) ----------
+// While the security engineer is on, once a day and when the scanner's image changes, a child of the hub asks the
+// scanner which models the role's sign-in covers with Daybreak Blue. Never beside a scan (asked for or running), another
+// holder of the PC's lease or an update's hold; not a job, and no round. Its news reaches the phone once per PC, and a
+// project whose chosen model is no longer covered is told once too; nextlevel never switches a model by itself.
+const watch = { child: null };
+function daybreakWatchTick() {
+  const w = watchOf(CFG.config);
+  if (!w) return;
+  tellWatch(w);
+  if (watch.child || updateHold || scanBusy() || pendingRequests(ROOT).length) return;
+  if (!watchDue(readJsonFile(w.file, {}), { now: clockNow(), digest: SCANNER_DIGEST })) return;
+  if (leaseHolder(os.homedir())) return; // (a scan, a sign-in or a check elsewhere uses the sign-in: the next look)
+  const child = spawn(process.execPath, [BIN, '_daybreak'], { cwd: ROOT, env: { ...process.env, NEXTLEVEL_ROOT: ROOT }, stdio: 'ignore', windowsHide: true, detached: !IS_WIN });
+  watch.child = child;
+  const done = () => {
+    if (watch.child !== child) return;
+    watch.child = null;
+    const r = readWatchFile(w.file);
+    log(r.ok ? `Daybreak watch: Blue covers ${r.covered.join(', ') || 'no model'}${r.news.length ? ` (new: ${r.news.map((n) => n.model).join(', ')})` : ''}` : `Daybreak watch: couldn't ask (${r.why || 'no answer'}), try ${r.fails}`);
+    tellWatch(w);
+  };
+  child.once('exit', done);
+  child.once('error', (err) => {
+    log(`Daybreak watch didn't start: ${err.message}`);
+    done();
+  });
+}
+// The phone: each piece of news once per PC, under the record's lock (of two hubs, one tells)
+function tellWatch(w) {
+  let list = [];
+  try {
+    const rec = readJsonFile(w.file, null);
+    if (!rec || !untold(rec, { account: w.account, dropped: droppedModel(rec, w.role) }).length) return;
+    updateJsonFile(
+      w.file,
+      (r) => {
+        list = untold(r, { account: w.account, dropped: droppedModel(r, w.role), project: NAME });
+        return withTold(r, list.map((x) => x.key));
+      },
+      {},
+    );
+  } catch (err) {
+    log(`Daybreak watch: couldn't read its record: ${err.message}`);
+    return;
+  }
+  for (const x of list) {
+    queueNotify(`${NAME}: security engineer`, x.text);
+    log(`Daybreak watch: told the phone (${x.key.split(':')[0]} ${x.key.split(':').slice(2).join(':')})`);
+  }
+}
 // ---------- the security engineer's policy (lib/securitypolicy.mjs): a text the owner approves on a card ----------
 // The text is kept in the guard's blobs and held by its hash (the safe text alone: where it came from is the record's,
 // P1); the card shows that blob, never a file the team can write. Nothing reaches the phone: the card is under Needs you.
@@ -6234,23 +6293,91 @@ function closePolicy(x, why) {
     log(`security policy ${x.id}: couldn't close it: ${err.message}`);
   }
 }
-// The base branch's root SECURITY.md, when a scan is asked for: a regular file (mode 100644) of at most 64 KB (P6)
+// The base branch's root SECURITY.md: { buf } for a regular file (mode 100644) of at most 64 KB (P6), { none } when there
+// is none, else { problem }
+function baseSecurityFile() {
+  const ls = git(['ls-tree', '-z', `refs/heads/${CFG.base}`, '--', 'SECURITY.md'], { allowFail: true });
+  if (!ls.ok) return { problem: `couldn't read ${CFG.base}` };
+  if (!ls.out) return { none: true };
+  const m = /^(\d{6}) blob ([0-9a-f]{40,64})\tSECURITY\.md$/.exec(ls.out.replace(/\0$/, ''));
+  if (!m || m[1] !== '100644') return { problem: `SECURITY.md on ${CFG.base} isn't a regular file` };
+  const size = Number(git(['cat-file', '-s', m[2]], { allowFail: true }).out);
+  if (!(size <= POLICY_MAX)) return { problem: `SECURITY.md on ${CFG.base} is over ${POLICY_MAX / 1024} KB` };
+  const buf = gitBlob(m[2]);
+  return buf ? { buf } : { problem: `couldn't read SECURITY.md on ${CFG.base}` };
+}
+// The base branch's root SECURITY.md, when a scan is asked for (P6)
 function proposeSecurityFile() {
   try {
-    const ls = git(['ls-tree', '-z', `refs/heads/${CFG.base}`, '--', 'SECURITY.md'], { allowFail: true });
-    const m = /^(\d{6}) blob ([0-9a-f]{40,64})\tSECURITY\.md$/.exec(ls.out.replace(/\0$/, ''));
-    if (!ls.ok || !ls.out) return;
-    if (!m || m[1] !== '100644') return log(`security policy: SECURITY.md on ${CFG.base} isn't a regular file: no card`);
-    const size = Number(git(['cat-file', '-s', m[2]], { allowFail: true }).out);
-    if (!(size <= POLICY_MAX)) return log(`security policy: SECURITY.md on ${CFG.base} is over ${POLICY_MAX / 1024} KB: no card`);
-    const buf = gitBlob(m[2]);
-    if (!buf) return;
+    const f = baseSecurityFile();
+    if (f.none) return;
+    if (f.problem) return log(`security policy: ${f.problem}: no card`);
     const commit = git(['rev-parse', `refs/heads/${CFG.base}`], { allowFail: true }).out;
-    const item = holdPolicy({ source: 'SECURITY.md', raw: buf.toString('utf8'), commit: /^[0-9a-f]{40}$/.test(commit) ? commit : '' });
+    const item = holdPolicy({ source: 'SECURITY.md', raw: f.buf.toString('utf8'), commit: /^[0-9a-f]{40}$/.test(commit) ? commit : '' });
     if (item) log(`security policy: SECURITY.md on ${CFG.base} waits for the owner (${item.id})`);
   } catch (err) {
     log(`security policy: couldn't read SECURITY.md: ${err.message}`);
   }
+}
+// ---------- the approved policy into the repository (1b-1) ----------
+// The Security page's "Add it to the repository as SECURITY.md": the approved text, read from its blob, written at the
+// project's root and committed on the base branch by the hub's own commit job with that one path, as the owner's change
+// (recordOwner, and git's form of it approved, as the update's commitAsOwner does): the guard holds nothing, and a push
+// carries it with no card of its own. Nothing is pushed. Refused: a policy that was cut, the main checkout on another
+// branch, a SECURITY.md with changes of its own, one that is a link (never written through), a tracked case twin
+// (security.md: on Windows one file), and in an agent's session (securityAct).
+const POLICY_COMMIT = 'SECURITY.md: the security policy the owner approved';
+function policyRepo() {
+  const pol = approvedPolicy(ROOT);
+  if (!pol) return null;
+  const rec = pol.guard ? guard().held.list().find((x) => x.id === pol.guard) : null;
+  let same = false;
+  let exists = false;
+  try {
+    const f = baseSecurityFile();
+    exists = !f.none;
+    same = !!f.buf && policyText(f.buf.toString('utf8'), activitySecrets()).hash === pol.hash;
+  } catch {
+    // unknown: the button shows, and its own checks decide
+  }
+  return { same, exists, cut: (rec?.cut || 0) > 0, missing: pol.text === null, base: CFG.base };
+}
+function commitPolicy(hash) {
+  const no = (message) => ({ ok: false, message: `Not added: ${message}.` });
+  const pol = approvedPolicy(ROOT);
+  if (!pol) return no('no policy is approved');
+  if (typeof hash !== 'string' || !/^[0-9a-f]{12,64}$/.test(hash) || !pol.hash.startsWith(hash)) return no('the approved policy changed since the page showed it: look again');
+  if (pol.text === null) return no("the approved policy's kept text no longer matches what was approved");
+  const repo = policyRepo();
+  if (repo.cut) return no('this policy was cut at 64 KB when it was made; a repository file would carry the cut (it stays the scans\' policy)');
+  if (repo.same) return { ok: true, message: `SECURITY.md on ${CFG.base} is this policy already.` };
+  const head = git(['symbolic-ref', '-q', 'HEAD'], { allowFail: true }).out;
+  if (head !== `refs/heads/${CFG.base}`) return no(`the main checkout is on ${head.replace(/^refs\/heads\//, '') || 'no branch'}, not ${CFG.base}`);
+  const twins = git(['ls-files', '-z', '--', ':(icase)security.md'], { allowFail: true }).out.split('\0').filter(Boolean);
+  if (twins.some((t) => t !== 'SECURITY.md')) return no(`${twins.filter((t) => t !== 'SECURITY.md').join(', ')} is tracked beside it: on Windows they are one file, and the commit would change the other name`);
+  const changed = git(['status', '--porcelain', '--', 'SECURITY.md'], { allowFail: true }).out;
+  if (changed) return no('SECURITY.md has changes of its own in the project: commit or undo them first');
+  const file = path.join(ROOT, 'SECURITY.md');
+  let st = null;
+  try {
+    st = fs.lstatSync(file);
+  } catch {
+    st = null;
+  }
+  if (st && !st.isFile()) return no("SECURITY.md in the project is a link (or not a file): nextlevel doesn't write through it");
+  // (a file of its own beside it, then one rename: a link put there in between is replaced, never followed)
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, pol.text, { flag: 'wx' });
+  fs.renameSync(tmp, file);
+  recordOwner(ROOT, ['SECURITY.md']);
+  const sha = git(['hash-object', '-w', '--path', 'SECURITY.md', '--', file], { allowFail: true }).out;
+  const blob = /^[0-9a-f]{40,64}$/.test(sha) ? gitBlob(sha) : null;
+  if (blob) guard().approveContent('SECURITY.md', contentHash({ buf: blob }));
+  log(`security policy: the owner added it to the repository as SECURITY.md (${pol.hash.slice(0, 12)})`);
+  if (!hubAlive()) return { ok: true, message: 'SECURITY.md is written in the project. The hub isn\'t running: commit it with your next change.' };
+  const id = `commit-${uniq()}`;
+  enqueue({ id, type: 'git', op: 'commit', message: POLICY_COMMIT, paths: ['SECURITY.md'], by: 'security-policy' });
+  return { ok: true, message: `SECURITY.md is written; the hub commits it on ${CFG.base} in a moment (${id}). Nothing is pushed: it goes out with your next push.`, job: id };
 }
 // After a scan that ended done: a draft from its threat model, when one may be made (P8)
 function proposeDraft(id) {
@@ -6306,14 +6433,19 @@ function securitySummary() {
   const trusted = t ? { id: t.id, counts: t.counts || '', high: /\b\d+ (critical|high)\b/.test(t.counts || ''), at: t.endedAt || t.startedAt || '', daybreak: t.daybreak || '', partial: !!t.partial } : null;
   const st = readPolicy(ROOT);
   const policy = st.approved;
+  const w = watchOf(CFG.config);
+  const daybreak = w ? watchWords(readWatchFile(w.file), w.role, { now: clockNow() }) : null;
   return {
     on: !!p,
+    daybreak,
+    model: p?.model || '',
+    effort: p?.effort || '',
     deepMinutes: CFG.config.security?.deepScanMinutes || 0,
     last,
     trusted,
     pending,
     policy: policy ? { from: policy.from, at: policy.at, hash: policy.hash.slice(0, 12) } : null,
-    version: JSON.stringify([last?.id, last?.state, trusted?.id, pending.map((x) => x.id), policy?.hash, st.draftAgain, st.rejectedDraftAt]),
+    version: JSON.stringify([last?.id, last?.state, trusted?.id, pending.map((x) => x.id), policy?.hash, st.draftAgain, st.rejectedDraftAt, daybreak?.at, daybreak?.ok, daybreak?.news, daybreak?.dropped]),
   };
 }
 // The Security page's data and its buttons (the owner's, through the dashboard's key; refused in an agent's session as
@@ -6326,7 +6458,10 @@ function securityAct(b) {
   if (action === 'scan' || action === 'deep') return requestScan(ctx, { deep: action === 'deep' });
   if (action === 'stop') return requestStop(ctx, typeof b.id === 'string' ? b.id : '');
   if (action === 'draft') return requestDraft(ctx);
-  throw new Error('action must be scan, deep, stop or draft');
+  // (Seen, on a piece of the Daybreak watch's news: the model stays as it is)
+  if (action === 'daybreak-seen') return daybreakSeen(CFG.config, String(b.model || ''));
+  if (action === 'commit-policy') return commitPolicy(b.hash);
+  throw new Error('action must be scan, deep, stop, draft, daybreak-seen or commit-policy');
 }
 
 // The hub stops: a scan it runs is asked to stop (its container stopped, its partial output kept), and waited for a
@@ -6851,6 +6986,7 @@ async function cmdRun(argv) {
       await pollJobs();
       await flushOutbox();
       securityTick();
+      daybreakWatchTick();
       testerTick();
       if (tick % 12 === 0) {
         gitGuard(); // git's own hooks and settings: a change gets its card now, not at the next git work
@@ -6867,7 +7003,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -7042,7 +7178,7 @@ async function cmdRunTask(id) {
   // (agy's version says whether its agent lists its tools, FR-022: after 1.3.2 an agent without the list gets none that write)
   // (the hub's, as it tried it before the task: job.resolved.version; else asked here)
   const kept = typeof job.resolved?.version === 'string' && job.resolved.version ? job.resolved.version : '';
-  const version = kept || (profile.engine === 'agy' && bin ? runQuiet(eng.command, ['--version'], { cwd: slot, env: { ...process.env, ...(eng.headlessEnv || {}) } }).out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' : '');
+  const version = kept || (profile.engine === 'agy' && bin ? runQuiet(eng.command, ['--version'], { cwd: slot, env: { ...process.env, ...(eng.headlessEnv || {}) } }).out.split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' : profile.engine === 'codex' && bin ? pinVersion(profile, process.env) : '');
   if (version) out.line(`${eng.title} ${version}`);
   let spec;
   try {
@@ -7061,6 +7197,9 @@ async function cmdRunTask(id) {
     return finish({ exitCode: 1, error });
   }
   if (iso.args.length) out.line(`Without your own add-ons (workers.addons in nextlevel.json can keep some): ${iso.args.join(' ')}`);
+  // (security engineer 1b-1: what keeps OpenAI's Daybreak off it, as on every Codex run but the scans)
+  const pin = standardPin(profile, { version, args: engineArgs });
+  if (pin.length) out.line(`OpenAI's Daybreak off for this run (${pin.join(' ')}), whatever Codex's config.toml says: only the security engineer's scans use it`);
   if (!bin) {
     out.line(`${eng.title} (${eng.command}) was not found. Run START.cmd -> 1 (Doctor).`);
     return finish({ exitCode: 127, error: `${eng.command} not found` });
@@ -7285,7 +7424,7 @@ async function cmdGuideProcess(argv = []) {
   if (IS_WIN) process.title = `${NAME} setup guide (${eng.title})`;
   const env = withProfile(childEnv(), profile);
   const extra = windowArgs(profile, (cmd, a) => runQuiet(cmd, a, { cwd: ROOT, env })); // (FR-011, as the orchestrator's)
-  const args = sessionArgs(profile, { mode: 'interactive', role: 'guide', prompt: PROMPTS.guide, args: CFG.args(profile.engine), extra });
+  const args = sessionArgs(profile, { mode: 'interactive', role: 'guide', prompt: PROMPTS.guide, args: CFG.args(profile.engine), extra, version: pinVersion(profile, env) });
   writeJson(GUIDEFILE, { pid: process.pid, startedAt: now(), engine: profile.engine, profile: profile.name || '' });
   try {
     await interactiveSession('guide', profile, args, env);
@@ -8256,7 +8395,19 @@ function dashboardApi() {
     job: dashboardJob,
     activity: dashboardActivity,
     // the Security page and Home's buttons (src/security.mjs): its data, and the owner's scan, deep scan, stop, new draft
-    security: { view: () => { refreshConfig(); return securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) }); }, act: (b) => { refreshConfig(); return securityAct(b); } },
+    security: {
+      view: () => {
+        refreshConfig();
+        const page = securityPage({ root: ROOT, stateDir: DIR, config: CFG.config }, { pending: policyHeld().map((x) => ({ id: x.id, card: x.card || '', source: x.source })) });
+        const w = watchOf(CFG.config);
+        // (1b-1: the approved policy against the base branch's SECURITY.md, and the Daybreak watch's answer)
+        return { ...page, policy: { ...page.policy, repo: policyRepo() }, daybreak: w ? watchWords(readWatchFile(w.file), w.role, { now: clockNow() }) : null };
+      },
+      act: (b) => {
+        refreshConfig();
+        return securityAct(b);
+      },
+    },
     usage: usageView, // Home's Usage card for a range, by a field, this project or all (the owner's: the page's key)
     // the tester (tester part 3): Home's Run acceptance and the Team page's card, a run's table and its evidence files,
     // and the owner's run (the dashboard's process is the owner's)
@@ -8433,6 +8584,7 @@ const COMMAND_TABLE = {
   _trial: (rest) => cmdTrialProcess(rest[0]),
   security: (rest) => cmdSecurity(rest, { root: ROOT, stateDir: DIR, config: CFG.config, hubAlive, envKeys: DOTENV_KEYS }).then((code) => (process.exitCode = code)),
   _scan: (rest) => cmdScanProcess(rest[0], scanContext()).then((code) => (process.exitCode = code)),
+  _daybreak: () => (process.exitCode = cmdDaybreakProcess(scanContext())),
   tester: (rest) => cmdTester(rest, { root: ROOT, stateDir: DIR, config: CFG.config, base: CFG.base, hubAlive, git: (args) => git(args, { allowFail: true }).out }).then((code) => (process.exitCode = code)),
   _accept: (rest) => {
     // (setup() loaded the project's .env into this process: the run reads it only to redact with, so what it starts gets

@@ -229,6 +229,14 @@ export function runCached(cmd, args, { cacheMs = RUN_CACHE_MS, fresh = false, ..
   return r;
 }
 
+// An engine's version, the first line `<cmd> --version` prints, kept as runCached keeps an answer (6 hours; a new
+// install asks again): '' when it can't be read. What a session's arguments depend on (security engineer 1b-1: Codex's
+// Daybreak pin from 0.163).
+export function engineVersion(cmd, { cwd, env } = {}) {
+  const r = runCached(cmd, ['--version'], { cacheMs: 6 * 3600_000, cwd, env });
+  return r.ok ? String(r.out || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '' : '';
+}
+
 // A window's title as `cmd /c start "<title>"` may get it: letters, digits, spaces and . , ( ) - only. It holds the
 // project's name from nextlevel.json, which a cloned repository sets: a quote there would end the title, and cmd
 // would run the rest (a rafter finding, FR-010); % would expand a variable.

@@ -2106,3 +2106,31 @@ One entry each: date, decision, why, alternatives.
   the same committed plan must give the same hash either way, or every card reads "changed".
 - 2026-10-30 — **Turning the tester on stays a change to `nextlevel.json` approved on the dashboard** in part 3: the
   Team card says how. A writer for it on the Team page is part 4's, with the sign-ins form.
+- 2026-10-30 — **The security engineer's 1b is two pull requests.** 1b-1 holds the Daybreak model watch, Daybreak
+  pinned off for every other Codex run, and the approved policy into the repository. None of them needs new evidence:
+  Step 0 found the model list's access programs are the one proof of Daybreak, and that a model it doesn't cover fails
+  at once. 1b-2, the Claude Code version, waits for a Step 0c, because what keeps Claude Code's reads inside a scan's
+  checkout on Windows is the same open question that sent the Codex scans into a container. Alternative: all of 1b at
+  once, which would have built on a guess.
+- 2026-10-30 — **The standard pin goes by Codex's version, not by its config.** Every Codex run but the scans gets
+  `-c daybreak=false` last among its overrides on 0.163 or newer, whatever `config.toml` says. Daybreak can be turned on
+  in ways nextlevel can't read: a profile in the owner's arguments, a `-c` there, Codex's managed config, or a
+  `/daybreak` saved later. A run that picks a profile gets `-c profiles.<name>.daybreak=false` too, since a profile's
+  fields win over the root's. Alternatives:
+  - pin only when `config.toml` turns it on (the plan's first version), which misses those ways;
+  - always pin, whatever the version, which passes a key older Codex doesn't know, with no evidence of how it takes it.
+- 2026-10-30 — **The Daybreak watch is the sign-in's, and runs under the lease.** Which models Daybreak covers belongs
+  to the ChatGPT sign-in, one volume per account across projects. So its record lives in `~/.nextlevel/security/`, and
+  its news reaches the phone once per PC. `codex debug models` mounts the sign-in volume and may refresh the sign-in, so
+  it takes the PC's lease, and so now do the doctor's checks that mount it (1a ran them without). Alternative: a record
+  per project, which would send the same news once per project.
+- 2026-10-30 — **The watch's news reaches the phone.** 1a-2 kept everything of the security engineer off the phone.
+  The watch's two kinds of news are the exception, once each per PC, through `notify()`: a model newly covered, and a
+  chosen model no longer covered (its next scan won't start). Findings still don't reach the phone until part 3. A
+  failed try (Docker stopped) is said on the Security page only, and after three in a row the hourly retry becomes a
+  daily one.
+- 2026-10-30 — **The policy goes into the repository as a commit the owner asked for, and nothing is pushed.** The
+  hub's own commit job takes only SECURITY.md, marked the owner's as the update marks the role docs it commits, so
+  neither the guard nor the push guard holds it. It goes out with the next push. A cut policy, another branch, a file
+  with changes of its own, a link and a case twin are refused. Alternative: push it at once, which would be a push the
+  owner didn't see on a card.

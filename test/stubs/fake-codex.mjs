@@ -24,7 +24,7 @@ if (home && !fs.existsSync(home)) {
   process.exit(1);
 }
 if (args[0] === '--version') {
-  console.log('codex-cli 0.152.0 (stub)');
+  console.log(`codex-cli ${process.env.STUB_CODEX_VERSION || '0.152.0'} (stub)`);
   process.exit(0);
 }
 // Its help lists --no-daemon (0.157 on), unless STUB_CODEX_NO_DAEMON_FLAG=0 plays an older Codex, which refuses it
@@ -81,6 +81,47 @@ function sessionFile(source, total) {
     event(total), // the same total again, as after a compaction
   ];
   fs.writeFileSync(path.join(dir, `rollout-${stamp}-${id}.jsonl`), `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`);
+}
+// OpenAI's Daybreak (security engineer 1b-1), as Codex 0.164 takes it: on when config.toml's top level says
+// `daybreak = true` (or the [profiles.<name>] table a top-level `profile`, or --profile/-p, picks), the last
+// `-c daybreak=` or `-c profiles.<name>.daybreak=` for it winning (a profile's own field over the root's). On, a model in
+// STUB_CODEX_NO_DAYBREAK (default gpt-6-astra) fails at once, with Codex's words. Only from STUB_CODEX_VERSION 0.163 on.
+function daybreakOn() {
+  const [maj, min] = String(process.env.STUB_CODEX_VERSION || '0.152.0').split('.').map(Number);
+  if (maj === 0 && min < 163) return false;
+  const config = path.join(home || path.join(os.homedir(), '.codex'), 'config.toml');
+  const text = fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : '';
+  let table = '';
+  let root = false;
+  let topProfile = '';
+  const inProfile = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const head = line.match(/^\[([^\]]*)\]/);
+    if (head) table = head[1].trim();
+    else if (/^daybreak\s*=\s*(true|false)/.test(line)) {
+      const v = /true/.test(line);
+      if (!table) root = v;
+      else if (table.startsWith('profiles.')) inProfile[table.slice(9)] = v;
+    } else if (!table && /^profile\s*=/.test(line)) topProfile = (line.match(/"([^"]*)"/) || [])[1] || '';
+  }
+  let picked = topProfile;
+  for (let i = 0; i < args.length; i++) if ((args[i] === '--profile' || args[i] === '-p') && args[i + 1]) picked = args[i + 1];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== '-c') continue;
+    const m = String(args[i + 1] || '').match(/^(?:profiles\.([\w-]+)\.)?daybreak=(true|false)$/);
+    if (!m) continue;
+    if (m[1]) inProfile[m[1]] = m[2] === 'true';
+    else root = m[2] === 'true';
+  }
+  return picked && picked in inProfile ? inProfile[picked] : root;
+}
+if (daybreakOn()) {
+  const model = args.includes('-m') ? args[args.indexOf('-m') + 1] : '';
+  if ((process.env.STUB_CODEX_NO_DAYBREAK ?? 'gpt-6-astra').split(',').includes(model)) {
+    console.error(`Error: Daybreak is unavailable for model ${model}; turn it off or choose a compatible model`);
+    process.exit(1);
+  }
 }
 if (args[0] !== 'exec') {
   console.log(`[fake codex] interactive: ${args.at(-1)}`);

@@ -23,7 +23,8 @@ export function threatModelOf(files = {}) {
 // A text as a policy: { text, hash, cut } (text '' when nothing is left of it). The text is the safe body alone (P1):
 // where it came from is the held record's, so the same text is the same policy whatever commit or scan it came with.
 export function policyText(raw, secrets) {
-  const body = safeText(String(raw ?? ''), secrets, POLICY_MAX * 2);
+  // (its line ends at the end folded into one, so a policy written to SECURITY.md and read back is the same policy)
+  const body = safeText(String(raw ?? ''), secrets, POLICY_MAX * 2).replace(/[\r\n]+$/, '');
   if (!body.trim()) return { text: '', hash: '', cut: 0 };
   const room = POLICY_MAX - 80;
   const cut = Math.max(0, body.length - room);
