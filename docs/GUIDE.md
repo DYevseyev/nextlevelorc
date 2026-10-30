@@ -234,7 +234,19 @@ None counts until you approve its exact text on a card under Needs you: the secu
 trusted scan, and the project's own `SECURITY.md` (at the top of the base branch) gets a card too. Read a draft before
 you approve it: the scanner's model wrote it from the code, and an approved policy steers every scan. Approve changes
 no file in the project; Reject keeps the policy as it is, and that text never comes back. The Security page shows the
-policy, and **Ask for a new draft** has the next trusted scan draft again.
+policy, and **Ask for a new draft** has the next trusted scan draft again. **Add it to the repository as SECURITY.md**
+commits the approved text on the base branch as your change. It goes out with your next push, and on a public
+repository GitHub shows it to everyone, so read it as a stranger would first.
+
+**The Daybreak watch.** While the role is on, nextlevel asks the scanner once a day which models Daybreak Blue covers
+on your sign-in. A newly covered model shows on Home's Security card with **Use it for scans** and **Seen**, and your
+phone hears it once. If the model you chose stops being covered, Home and your phone say so before its next scan
+fails. Nothing switches by itself.
+
+**Your other Codex roles keep OpenAI's usual safeguards.** Every Codex run nextlevel starts (the orchestrator, workers,
+the setup guide, the advisor) gets Daybreak off on its command line, even if your Codex `config.toml` turns it on for
+everything. Only the security engineer's scans use Daybreak. The doctor's `codex.daybreak` row says when your
+`config.toml` turns it on.
 
 Nothing starts a scan by itself, and a scan isn't a task: autopilot doesn't see it. Anything on your PC that can run
 `docker` can read the scanner's sign-in (`docs/KNOWN_ISSUES.md`).

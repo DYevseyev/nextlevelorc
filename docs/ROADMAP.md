@@ -26,8 +26,10 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
 ## The security engineer
 Scans of the project's code in OpenAI's Codex Security scanner (`docs/design/security-engineer.md`). Part 1a-1, the
 role, its checks and `nextlevel security scan|status|stop|login`, is done; part 1a-2, on the dashboard (Home's Security
-card and buttons, the Security page, the policy's cards: a text only your Approve makes count), is built.
-- **1b:** a Claude Code version, a watch for the models Daybreak covers, SECURITY.md committed to the repository.
+card and buttons, the Security page, the policy's cards: a text only your Approve makes count), is done; part 1b-1 (the
+Daybreak model watch, Daybreak pinned off for every other Codex run, the approved policy into the repository as
+SECURITY.md) is built.
+- **1b-2:** a Claude Code version, after evidence of what keeps its reads in a scan's checkout on Windows.
 - **2:** findings in autopilot rounds, a merge gate and the fix loop, dismissing a finding.
 - **3:** supply chain, automatic scans, phone alerts.
 

@@ -115,5 +115,6 @@ export function watchWords(rec, role, { now }) {
   const dropped = droppedModel(r, role);
   const last = r.at ? `Daybreak Blue covers ${r.covered.length ? r.covered.join(', ') : 'no model'} on this sign-in (checked ${ago(r.at)})` : 'No answer yet';
   const failed = r.ok ? '' : `; the last try (${ago(r.tried)}) couldn't ask: ${r.why}${r.fails >= BACKOFF_AFTER ? `. After ${r.fails} tries in a row it asks once a day` : '. It asks again in an hour'}`;
-  return { text: `${last}${failed}.`, covered: r.covered, news: r.news.map((n) => n.model), dropped, at: r.at, ok: r.ok, fails: r.fails };
+  // (a model the role runs on already is no news to it)
+  return { text: `${last}${failed}.`, covered: r.covered, news: r.news.map((n) => n.model).filter((m) => m !== role?.model), dropped, at: r.at, ok: r.ok, fails: r.fails };
 }

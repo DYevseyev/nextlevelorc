@@ -461,6 +461,11 @@ Whether the security engineer's model takes OpenAI's Daybreak Blue, from the sca
 with Daybreak on and refused; **info** with Daybreak off (standard safeguards may block parts of a scan). The scan
 record says Daybreak was asked for: nothing in the scanner's output confirms it.
 
+`security.login`, `security.probe` and `security.daybreak` mount the sign-in volume (or the state volume it sits in),
+so they run under the PC's security lease, as a scan, a sign-in and the Daybreak watch do (part 1b-1). While another
+one holds it, they say who as **info**, run no container, and ask again next time. `nextlevel team set security` (the
+Team page's change) then saves nothing and says to try again when it ends.
+
 ### tool.agy
 The Antigravity CLI is installed and 1.2.4 or newer; fix: `agy update`, then a new window. **error**
 when a role uses agy, **warn** when only a fallback does, else **info**. From FR-001 #4.
