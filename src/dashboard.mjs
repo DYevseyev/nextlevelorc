@@ -452,7 +452,8 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
     if (b.window !== undefined) return teamWindow(b.window);
     if (b.codexSandbox !== undefined) return teamSandbox(b.codexSandbox);
     if (b.githubChecks !== undefined) return teamChecks(b.githubChecks);
-    if (b.tester !== undefined) return teamTester(b.tester);
+    if (b.tester !== undefined) return teamToggle('tester', b.tester);
+    if (b.advisorReviews !== undefined || b.advisorReviewsPerDay !== undefined) return teamReviews(b);
     const role = String(b.role || '');
     if (!TEAM_ROWS.some((r) => r.key === role)) return [400, { ok: false, message: 'which role?' }];
     const word = (v, re) => v === undefined || v === null || v === '' || (typeof v === 'string' && re.test(v));
@@ -506,13 +507,34 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
     }
   }
 
+  // The owner's review switch and daily cap share one validated configuration write.
+  async function teamReviews(b) {
+    if (b.advisorReviews !== undefined && typeof b.advisorReviews !== 'boolean')
+      return [400, { ok: false, message: 'advisorReviews is true (on) or false (off)' }];
+    if (b.advisorReviewsPerDay !== undefined && (!Number.isSafeInteger(b.advisorReviewsPerDay) || b.advisorReviewsPerDay < 0))
+      return [400, { ok: false, message: 'The daily review limit must be a nonnegative whole number (0 starts no reviews).' }];
+    if (teamBusy) return [409, { ok: false, message: 'Another change is being checked: wait for it.' }];
+    const args = ['team', 'reviews'];
+    if (b.advisorReviews !== undefined) args.push(b.advisorReviews ? 'on' : 'off');
+    if (b.advisorReviewsPerDay !== undefined) args.push('--per-day', String(b.advisorReviewsPerDay));
+    teamBusy = true;
+    try {
+      const r = await runTool([...args, '--json'], 60_000, { json: true });
+      if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'no answer'}` }];
+      return [r.json.ok ? 200 : 409, r.json];
+    } finally {
+      teamBusy = false;
+      pushBuild();
+    }
+  }
+
   // The tester on or off (tester.enabled): nextlevel team tester on|off, the owner's change (tester part 4)
-  async function teamTester(on) {
-    if (typeof on !== 'boolean') return [400, { ok: false, message: 'tester is true (on) or false (off)' }];
+  async function teamToggle(name, on) {
+    if (typeof on !== 'boolean') return [400, { ok: false, message: `${name} is true (on) or false (off)` }];
     if (teamBusy) return [409, { ok: false, message: 'Another change is being checked: wait for it.' }];
     teamBusy = true;
     try {
-      const r = await runTool(['team', 'tester', on ? 'on' : 'off', '--json'], 60_000, { json: true });
+      const r = await runTool(['team', name, on ? 'on' : 'off', '--json'], 60_000, { json: true });
       if (!r.json) return [500, { ok: false, message: `No answer: ${firstLines(r.out) || 'no answer'}` }];
       return [r.json.ok ? 200 : 409, r.json];
     } finally {

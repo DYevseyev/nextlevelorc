@@ -720,6 +720,52 @@ function testerCard() {
 // with its personas (set or not) and the form that sets one, the schedules, the browser. What is typed into the form goes
 // in the request's body only: the page keeps none of it, and the inputs are emptied whatever the answer.
 const tform = { open: '', busy: false, toggling: false };
+let reviewsSaving = false;
+async function saveAdvisorReviewSettings(body) {
+  reviewsSaving = true; renderTeam(true);
+  try {
+    const r = await api('/api/team', body);
+    toast(r.message || (r.ok ? 'Saved.' : 'Not saved.'), r.ok ? 'good' : 'error');
+  } finally {
+    reviewsSaving = false; renderTeam(true);
+  }
+}
+function advisorReviewsCard(b, team = false) {
+  const d = b?.advisorReviews;
+  if (!d || (!team && !d.enabled && !d.latest && !d.problem)) return null;
+  const card = h('div.card', {}, h('h2', {}, 'Advisor reviews'),
+    h('p', {}, d.enabled ? `On: ${d.used || 0} of ${d.perDay} reviews used today (UTC).` : 'Off.'),
+    h('p.muted.small', {}, 'Read-only reviews at milestone midpoint and completion, after repeated failures, or a day without a merge. Results are for you. Only your click sends anything to the team.'));
+  if (d.problem) card.append(h('p.warn', {}, d.problem));
+  const waiting = { 'update-hold': 'Waiting for the update hold to end.', 'git-hold': 'Waiting for the git hold to end.',
+    'assistant-busy': 'Waiting for the current advisor session.', 'assistant-not-ready': 'Waiting for the assistant to be ready; check Setup and its lock test.',
+    'daily-limit': 'The daily review limit is reached; due events wait until the next UTC day.',
+    'invalid-ledger': 'Review history cannot be used; automatic reviews wait.', 'invalid-snapshot': 'Task or merge records cannot be used; automatic reviews wait.' };
+  if (d.perDay === 0) card.append(h('p.muted.small', {}, 'No new reviews start while the daily limit is 0. Change the limit on Team to allow reviews.'));
+  else if (d.enabled && waiting[d.waiting]) card.append(h('p.muted.small', {}, waiting[d.waiting]));
+  if (d.latest) {
+    card.append(h('p', {}, d.latest.title, ` — ${d.latest.status}`, d.latest.at ? ` · ${time(d.latest.at)}` : ''));
+    if (d.latest.error) card.append(h('p.warn', {}, d.latest.error));
+    if (d.latest.threadId) card.append(h('button.btn', { type: 'button', onclick: () => askToggle(true, d.latest.threadId) }, 'Read review in Advisor'));
+  }
+  if (team) {
+    card.append(h('button.btn', { type: 'button', disabled: reviewsSaving,
+      onclick: () => saveAdvisorReviewSettings({ advisorReviews: !d.enabled }) },
+    reviewsSaving ? 'Saving.' : d.enabled ? 'Turn reviews off' : 'Turn reviews on'));
+    const limit = h('input', { type: 'number', min: '0', step: '1', value: String(d.perDay ?? 2), disabled: reviewsSaving });
+    card.append(h('label', {}, 'Daily review limit (UTC) ', limit),
+      h('p.muted.small', {}, '0 starts no new reviews. Changing the limit keeps reviews on or off as they are and does not reset today\'s count.'),
+      h('button.btn', { type: 'button', disabled: reviewsSaving, onclick: () => {
+        if (!/^\d+$/.test(limit.value) || !Number.isSafeInteger(Number(limit.value))) {
+          toast('Enter a nonnegative whole number; 0 starts no reviews.', 'error');
+          return;
+        }
+        return saveAdvisorReviewSettings({ advisorReviewsPerDay: Number(limit.value) });
+      } }, 'Save daily limit'));
+  }
+  return card;
+}
+
 function testerTeamCard() {
   loadTester();
   const d = tst.data;
@@ -1141,7 +1187,7 @@ function renderHome() {
   }
   progress.append(h('p.muted.small', {}, `Last activity ${b.lastActivity}. `, h('button.linkish', { type: 'button', onclick: () => goTo('project') }, 'The roadmap')));
 
-  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, testerCard(), switchesCard(b)), h('div.col', {}, blockersCard(b), securityCard(b), progress, usageCard(b)))].filter(Boolean));
+  root.replaceChildren(...[status, nextCard, updateCard(b), h('div.grid', {}, h('div.col', {}, needsCard, nowCard, testerCard(), switchesCard(b)), h('div.col', {}, blockersCard(b), advisorReviewsCard(b), securityCard(b), progress, usageCard(b)))].filter(Boolean));
 }
 
 // The update in progress, paused or just done (src/updater.mjs): its steps, what it waits for, and the owner's buttons
@@ -2049,7 +2095,7 @@ function renderTeam(force = false) {
   // (a redraw would empty the persona form under the owner's typing: it waits until the form is closed)
   if (!force && tform.open && root.querySelector('form.persona-form')) return;
   lastTeam = text;
-  root.replaceChildren(h('div.roles', {}, b.team.map((row) => teamCard(row, b)), testerTeamCard(), windowCard(b), codexWorkersCard(b), githubChecksCard(b)),
+  root.replaceChildren(h('div.roles', {}, b.team.map((row) => teamCard(row, b)), advisorReviewsCard(b, true), testerTeamCard(), windowCard(b), codexWorkersCard(b), githubChecksCard(b)),
     h('p.muted.small', {}, 'Saved in nextlevel.json: commit it with your next change. From PowerShell: nextlevel team, and nextlevel team set <role> --engine codex|claude|agy --model <name> --effort <level>.'));
 }
 
@@ -2695,14 +2741,15 @@ async function askOpenThread(id) {
   askRemember();
   renderAsk();
 }
-function askToggle(open = !ask.open) {
+function askToggle(open = !ask.open, threadId = '') {
   ask.open = open;
   $('#ask').hidden = !open;
   $('#ask-open').setAttribute('aria-expanded', String(open));
   document.body.classList.toggle('ask-on', open);
   askRemember();
   if (open) {
-    if (ask.view === 'thread' && ask.thread) askOpenThread(ask.thread.id);
+    if (threadId) askOpenThread(threadId);
+    else if (ask.view === 'thread' && ask.thread) askOpenThread(ask.thread.id);
     else askThreads();
   }
 }
@@ -2860,11 +2907,13 @@ function askDraftBox(m, i, d, j) {
 }
 function askMessage(m, i) {
   const owner = m.role === 'owner';
-  const MODE = { quick: 'Quick', advise: 'Advise', explain: 'Explain' };
+  const system = m.role === 'system';
+  const MODE = { quick: 'Quick', advise: 'Advise', explain: 'Explain', review: 'Automatic review' };
   const meta = owner ? '' : [MODE[m.mode] || '', m.engine && (build?.teamChoices?.engines.find((e) => e.name === m.engine)?.title || m.engine), m.model || m.reportedModel, m.tokens?.tokens ? `${Number(m.tokens.tokens).toLocaleString()} tokens` : '', m.briefing?.tokens ? `~${Number(m.briefing.tokens).toLocaleString()} of them project context` : '', Number.isFinite(m.copySeconds) ? `in a copy made in ${m.copySeconds} s` : '', m.at ? time(m.at) : ''].filter(Boolean).join(' · ');
   const box = h(`div.ask-msg.${owner ? 'owner' : 'assistant'}${m.error ? '.error' : ''}`, {},
-    h('div.ask-who', {}, owner ? 'You' : m.mode && m.mode !== 'quick' ? 'Advisor' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
+    h('div.ask-who', {}, owner ? 'You' : system ? 'Hub review event' : m.mode && m.mode !== 'quick' ? 'Advisor' : 'Assistant', meta ? h('span.muted', {}, ` · ${meta}`) : null),
     h('div.ask-text', {}, m.text));
+  if (system) return box;
   if (!owner && m.sources?.length) box.append(h('div.ask-sources', {}, h('span.muted', {}, 'Used: '), m.sources.join(', ')));
   // The advisor's drafts: each whole, editable, sent only by its own button
   if (!owner && !m.error && m.drafts?.length) {

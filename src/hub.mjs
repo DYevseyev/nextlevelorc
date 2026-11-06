@@ -122,7 +122,8 @@ import { planPathProblem, readPlan } from './lib/acceptance.mjs';
 import { safeText } from './lib/evidence.mjs';
 import { reachOf, request as testerRequest } from './lib/testernet.mjs';
 import { testerOn } from './lib/testerconfig.mjs';
-import { briefingSize, cardFor, cmdAsk } from './ask.mjs';
+import { briefingSize, cardFor, cmdAsk, assistantProfile, runAdvisorReview } from './ask.mjs';
+import { reviewStore, reviewTitle } from './lib/reviews.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
@@ -7041,6 +7042,7 @@ async function cmdRun(argv) {
       testerTick();
       if (tick % 12 === 0) {
         gitGuard(); // git's own hooks and settings: a change gets its card now, not at the next git work
+        advisorReviewTick();
         closedWindowsTick(); // before a round: it would take orchestrator.json's place
         await autopilotTick();
         reviewNudgeTick();
@@ -7054,7 +7056,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !advisorReview.child && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -7064,6 +7066,10 @@ async function cmdRun(argv) {
   while (busy.size) await Promise.allSettled([...busy.values()]);
   await stopScanForHub();
   await stopAcceptForHub();
+  if (advisorReview.child) {
+    killTree(advisorReview.child.pid);
+    await advisorReview.done;
+  }
   await Promise.allSettled([...cleaning.values()]); // (a listing in progress ends: held slots say where they are)
   if (fixing) await fixing;
   await flushOutbox();
@@ -8102,6 +8108,7 @@ function dashboardState() {
     lastActivity: ago(st.idleHours),
     usage: usageToday(jobs),
     security: securitySummary(), // Home's Security card (the security engineer, 1a-2)
+    advisorReviews: advisorReviewSummary(),
     switches: switchesView(),
     alerts: taskAlerts(jobs),
     dispatchPaused: getSettings().dispatchPaused || null, // files a worker needs are gone (FR-013)
@@ -8634,6 +8641,17 @@ const COMMAND_TABLE = {
     refuseInSandbox('The assistant (nextlevel ask)');
     return cmdAsk(rest, askContext()).then((code) => (process.exitCode = code));
   },
+  '_advisor-review': async (rest) => {
+    const session = agentSession();
+    if (session) throw new Error(ownerOnly('Automatic advisor reviews', 'Only the hub starts a reserved review.', session));
+    refuseInSandbox('Automatic advisor reviews');
+    const store = reviewStore(ROOT, os.homedir());
+    const gates = advisorReviewGates();
+    const run = store.claim(rest[0], CFG.config.advisor.reviews.enabled && !gates.updateHold && !gates.gitHold && gates.assistantReady);
+    if (!run) return;
+    try { store.finish(run.id, await runAdvisorReview({ ...askContext(), plan: () => advisorPlan(run.candidate.milestoneId, run.candidate.taskId) }, run.candidate)); }
+    catch { store.finish(run.id, { error: 'The review could not finish. Check the Advisor thread; this event will not retry automatically.' }); }
+  },
   _run: (rest) => cmdRunTask(rest[0]),
   _orch: (rest) => cmdOrchestratorProcess(rest),
   _guide: (rest) => cmdGuideProcess(rest),
@@ -8717,6 +8735,55 @@ function askContext() {
 }
 
 // ---------- what the advisor reads (docs/design/advisor.md section 3) ----------
+const advisorReview = { child: null, done: null };
+function advisorReviewGates() {
+  try {
+    const ctx = askContext();
+    const profile = assistantProfile(CFG.config, { mode: 'advise', env: ctx.env(), home: ctx.home });
+    return { updateHold: !!updateHoldFor(ROOT), gitHold: !!heldGit() || guard().gitBusy(), assistantBusy: false,
+      assistantReady: !!resolveBin(engine(profile.engine).command) && (profile.engine !== 'agy' || !lockProblem('assistant', profile)) };
+  } catch { return { updateHold: true, gitHold: true, assistantBusy: false, assistantReady: false }; }
+}
+function advisorReviewTick() {
+  if (advisorReview.child || !CFG.config.advisor.reviews.enabled) return;
+  const store = reviewStore(ROOT, os.homedir());
+  const { run } = store.reserve({ roadmap: projectView().roadmap, jobs: allJobs(), now: clockNow(),
+    reviews: CFG.config.advisor.reviews, gates: advisorReviewGates() });
+  if (!run) return;
+  try {
+    const child = spawn(process.execPath, [BIN, '_advisor-review', run.id], {
+      cwd: ROOT, env: { ...toolEnv(), NEXTLEVEL_ROOT: ROOT }, stdio: 'ignore', windowsHide: true, detached: !IS_WIN,
+    });
+    advisorReview.child = child;
+    advisorReview.done = new Promise(resolve => {
+      let ended = false;
+      const done = () => {
+        if (ended) return;
+        ended = true;
+        try { store.finish(run.id, { error: 'The review process ended before saving its result. This event will not retry automatically.' }); }
+        catch { log('advisor: could not save the review result; its reservation prevents a duplicate'); }
+        advisorReview.child = null; resolve();
+      };
+      child.once('error', done); child.once('exit', done);
+    });
+  } catch {
+    store.finish(run.id, { error: 'The review process could not start. This event will not retry automatically.' });
+  }
+}
+function advisorReviewSummary() {
+  const config = CFG.config.advisor.reviews;
+  try {
+    const store = reviewStore(ROOT, os.homedir());
+    const s = store.read();
+    const latest = [...s.runs].reverse().find(r => r.status !== 'deferred');
+    const interrupted = latest && ['reserved', 'running'].includes(latest.status) && !store.leaseAlive(s.lease);
+    const day = new Date(clockNow()).toISOString().slice(0, 10);
+    return { ...config, waiting: s.waiting || '', used: s.ledger.reservations.filter(r => new Date(r.startedAt).toISOString().slice(0, 10) === day).length,
+      latest: latest ? { title: reviewTitle(latest.candidate), status: interrupted ? 'interrupted' : latest.status, threadId: latest.threadId,
+        error: interrupted ? 'The review process ended before saving a result. This event will not retry automatically.' : latest.error || '', at: new Date(latest.at).toISOString() } : null };
+  } catch { return { ...config, problem: 'Advisor review state cannot be read. Automatic reviews wait.' }; }
+}
+
 // The end of a file, cut by bytes, so one very long line can't take what is read of it
 function tailBytes(file, n) {
   let fd;
@@ -8735,8 +8802,8 @@ function tailBytes(file, n) {
   }
 }
 // The current milestone (the Project page's) and its plan file
-function advisorPlan() {
-  const m = projectView().roadmap.find((x) => x.current);
+function advisorPlan(milestoneId = '', taskId = '') {
+  const m = projectView().roadmap.find((x) => milestoneId ? x.key === milestoneId : taskId ? x.tasks.some(t => t.id === taskId) : x.current);
   if (!m) return '';
   const tasks = m.tasks.map((t) => `- ${t.id}: ${t.state}${t.attempts > 1 ? ` (attempt ${t.attempts})` : ''}`).join('\n');
   const text = m.plan?.file ? readText(path.join(ROOT, m.plan.file)) : '(no plan found for it)';

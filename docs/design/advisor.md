@@ -160,7 +160,7 @@ file: changing that file changes the lock test's key (`roleKey`).
   running as the owner still could write the file, as it could the guard's records, until FR-017 part 2B). What
   doesn't: convincing wrong advice. The panel says "The advisor reads what the team wrote: check before you send."
 
-## 8. PR 2: reviews it starts on its own (outline)
+## 8. PR 2: reviews it starts on its own
 
 Read-only reviews at a milestone's midpoint (half its tasks merged) and end, and when progress stalls (no merge in a
 day while tasks are open, or a task's third failed attempt). The hub decides when, by code; each is one Advise run
@@ -170,6 +170,31 @@ owner (a Home card and an Advisor thread), never to the orchestrator, and never 
 (`advisor.reviews.perDay`, default 2) and an off switch on the Team page bound its tokens; its runs count with reason
 `review`. Reviews wait under the update's hold and while the guard has stopped git work, as rounds do, and on
 Antigravity need the assistant's lock test. It replaces the separate direction reviewer that was planned.
+
+Reviews are off by default (`advisor.reviews.enabled: false`). The owner enables or disables them on Team, or with
+`nextlevel team reviews on|off` in their terminal in the project. The daily limit uses UTC calendar days; `perDay: 0`
+starts none. Team's daily-limit field saves the cap without changing the on/off switch. In the owner's PowerShell
+window in the project, `nextlevel team reviews --per-day 3` does the same; `on --per-day 3` sets both together.
+The value is a nonnegative whole number. Changing it does not reset credits already used that UTC day or mark a
+waiting event handled. A review already running finishes when the switch is turned off or the cap is lowered.
+The hub must be running.
+
+The scheduler uses verified merge records and completed attempt histories, not a milestone's claimed status or the
+next attempt number. Closed tasks are excluded from milestone counts; an empty milestone produces no review. End
+supersedes midpoint when both first become due, so a one-task milestone gets one review. Completed historical
+milestones are skipped on first enablement. A planned task with no creation timestamp starts its stall clock when
+the enabled scheduler first sees it. A later merge starts a new stalled-progress episode.
+
+Reservations and the shared manual-question/review lease live beside the advisor's memory, outside the project,
+in `reviews.json`. Admission is serialized and saved before a child starts. A failed or interrupted launch consumes
+its daily credit and event: it does not retry in a loop. A hold or off switch found before the child starts its
+engine defers without spending a credit. Completion, third failure, stalled progress and midpoint are considered in
+that order. Neither a cap nor a hold marks an event handled: it remains eligible on the next look.
+
+The child uses the same read-only adapters, redaction and Antigravity copy/tripwire as a manual Advise question, with
+usage reason `review`. Its prompt is a hub event, labelled as such in the thread, never attributed to the owner. Its
+answer is stored as plain advice: no draft is sent and no memory entry is saved. Home links to the thread; the owner
+may ask a follow-up or explicitly draft a note. Reviews never become jobs, outbox messages or round triggers.
 
 ## 9. Order
 
