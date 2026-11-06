@@ -247,3 +247,61 @@ test('Home and Team review card renders hostile strings as text and sends only a
   assert.equal(calls[1][1].advisorReviews, false);
   assert.equal(ctx.card({ advisorReviews: { enabled: false } }), null);
 });
+
+// Review F1: the advisor's state is the owner's optional feature; a broken reviews.json never stops autopilot.
+test('a corrupt review state never stops an autopilot round; Home says the problem and hub.log says it once', async () => {
+  const p = makeProject(); let ui;
+  try {
+    p.setConfig(c => ({ ...c, advisor: { reviews: { enabled: true, perDay: 2 } } }));
+    fs.mkdirSync(p.state(), { recursive: true });
+    fs.writeFileSync(p.state('settings.json'), JSON.stringify({ autopilot: true }));
+    const store = reviewStore(p.repo, p.env.HOME);
+    fs.mkdirSync(path.dirname(store.file), { recursive: true });
+    fs.writeFileSync(store.file, '{broken');
+    assert.match(p.hub(['note', 'add', 'Plan the next milestone']).out, /Added N1/);
+    const clock = testClock(p, NOW);
+    const result = p.runUntilIdle([], { extraEnv: { ...clock.env, STUB_ORCH_PLAY: 'status' } });
+    assert.equal(result.code, 0, result.out);
+    const log = fs.readFileSync(p.state('logs', 'hub.log'), 'utf8');
+    assert.match(log, /autopilot: a round starts because/, log);
+    assert.equal((log.match(/advisor: automatic reviews wait: Advisor review state \(reviews.json\) is unreadable/g) || []).length, 1, log);
+    assert.doesNotMatch(log, /hub error:.*[Aa]dvisor/, log);
+    assert.equal(fs.readFileSync(store.file, 'utf8'), '{broken', 'the ledger is never reset');
+    ui = await startUi(p);
+    const state = await client(ui).get('/api/state');
+    assert.match(state.json.advisorReviews.problem, /cannot be read/);
+  } finally { await stopUi(ui); p.cleanup(); }
+});
+
+// Review F2: a lease is its holder's by pid and the time it was taken (Windows reuses pids).
+test('review state: a lease whose pid another program has now is not alive; an unknown start time keeps it', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nl-reviews-'));
+  try {
+    let start = null;
+    const store = reviewStore(tmp, tmp, { startOf: () => start });
+    const lease = store.acquireManual();
+    const held = store.read().lease;
+    assert.equal(held.pid, process.pid);
+    assert.ok(Number.isFinite(held.at));
+    assert.equal(store.leaseAlive(held), true, 'unknown start time: not gone');
+    assert.throws(() => store.acquireManual(), /already answering/);
+    // The same pid, but a program that started after the lease was taken (a fresh store: no remembered look)
+    start = held.at + 60_000;
+    const later = reviewStore(tmp, tmp, { startOf: () => start });
+    assert.equal(later.leaseAlive({ ...held, at: held.at - 1 }), false);
+    const s = later.read(); s.lease.at = held.at - 1; fs.writeFileSync(later.file, JSON.stringify(s));
+    assert.notEqual(later.acquireManual(), lease, 'the stale lease is taken over');
+    // A lease written before `at` was kept is judged by its pid alone; a non-number `at` is invalid state
+    const old = later.read(); delete old.lease.at; fs.writeFileSync(later.file, JSON.stringify(old));
+    assert.equal(later.leaseAlive(later.read().lease), true);
+    old.lease.at = 'yesterday'; fs.writeFileSync(later.file, JSON.stringify(old));
+    assert.throws(() => later.read(), /invalid/);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+// Review F3, F4: the switch is a boolean, and a malformed advisor object is a clean error, never a crash.
+test('advisor settings of the wrong shape are clean configuration errors', () => {
+  for (const advisor of [{ reviews: { enabled: 'false' } }, { reviews: { enabled: 1 } }, null, 5, { reviews: null }, { reviews: 'on' }]) {
+    assert.throws(() => loadConfig('.', { raw: { advisor } }), err => !(err instanceof TypeError) && /"advisor(\.reviews(\.enabled)?)?" must be/.test(err.message), JSON.stringify(advisor));
+  }
+});

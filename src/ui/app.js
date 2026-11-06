@@ -721,10 +721,12 @@ function testerCard() {
 // in the request's body only: the page keeps none of it, and the inputs are emptied whatever the answer.
 const tform = { open: '', busy: false, toggling: false };
 let reviewsSaving = false;
+let reviewLimitDraft = null; // (what the owner typed in the daily limit and hasn't saved: a redraw keeps it)
 async function saveAdvisorReviewSettings(body) {
   reviewsSaving = true; renderTeam(true);
   try {
     const r = await api('/api/team', body);
+    if (r.ok && 'advisorReviewsPerDay' in body) reviewLimitDraft = null;
     toast(r.message || (r.ok ? 'Saved.' : 'Not saved.'), r.ok ? 'good' : 'error');
   } finally {
     reviewsSaving = false; renderTeam(true);
@@ -742,7 +744,8 @@ function advisorReviewsCard(b, team = false) {
     'daily-limit': 'The daily review limit is reached; due events wait until the next UTC day.',
     'invalid-ledger': 'Review history cannot be used; automatic reviews wait.', 'invalid-snapshot': 'Task or merge records cannot be used; automatic reviews wait.' };
   if (d.perDay === 0) card.append(h('p.muted.small', {}, 'No new reviews start while the daily limit is 0. Change the limit on Team to allow reviews.'));
-  else if (d.enabled && waiting[d.waiting]) card.append(h('p.muted.small', {}, waiting[d.waiting]));
+  // (with a limit of 0 another reason to wait is said too: raising the limit alone wouldn't start a review)
+  if (d.enabled && waiting[d.waiting] && !(d.perDay === 0 && d.waiting === 'daily-limit')) card.append(h('p.muted.small', {}, waiting[d.waiting]));
   if (d.latest) {
     card.append(h('p', {}, d.latest.title, ` — ${d.latest.status}`, d.latest.at ? ` · ${time(d.latest.at)}` : ''));
     if (d.latest.error) card.append(h('p.warn', {}, d.latest.error));
@@ -752,7 +755,8 @@ function advisorReviewsCard(b, team = false) {
     card.append(h('button.btn', { type: 'button', disabled: reviewsSaving,
       onclick: () => saveAdvisorReviewSettings({ advisorReviews: !d.enabled }) },
     reviewsSaving ? 'Saving.' : d.enabled ? 'Turn reviews off' : 'Turn reviews on'));
-    const limit = h('input', { type: 'number', min: '0', step: '1', value: String(d.perDay ?? 2), disabled: reviewsSaving });
+    const limit = h('input', { type: 'number', min: '0', step: '1', value: reviewLimitDraft ?? String(d.perDay ?? 2), disabled: reviewsSaving,
+      oninput: (e) => { reviewLimitDraft = e.target.value; } });
     card.append(h('label', {}, 'Daily review limit (UTC) ', limit),
       h('p.muted.small', {}, '0 starts no new reviews. Changing the limit keeps reviews on or off as they are and does not reset today\'s count.'),
       h('button.btn', { type: 'button', disabled: reviewsSaving, onclick: () => {

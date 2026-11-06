@@ -189,7 +189,11 @@ Reservations and the shared manual-question/review lease live beside the advisor
 in `reviews.json`. Admission is serialized and saved before a child starts. A failed or interrupted launch consumes
 its daily credit and event: it does not retry in a loop. A hold or off switch found before the child starts its
 engine defers without spending a credit. Completion, third failure, stalled progress and midpoint are considered in
-that order. Neither a cap nor a hold marks an event handled: it remains eligible on the next look.
+that order. Neither a cap nor a hold marks an event handled: it remains eligible on the next look. The lease names
+its holder by pid and the time it was taken: a pid another program has now (it started after the lease) is not the
+holder, so a question whose window was closed never blocks the next one. Whatever goes wrong with `reviews.json`
+(unreadable, invalid, contended) only makes reviews wait: the hub's other work that minute (a round, closed windows,
+nudges) goes on, Home's advisor card says the problem, and hub.log says it once.
 
 The child uses the same read-only adapters, redaction and Antigravity copy/tripwire as a manual Advise question, with
 usage reason `review`. Its prompt is a hub event, labelled as such in the thread, never attributed to the owner. Its

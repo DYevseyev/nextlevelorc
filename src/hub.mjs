@@ -8742,10 +8742,22 @@ function advisorReviewGates() {
     const profile = assistantProfile(CFG.config, { mode: 'advise', env: ctx.env(), home: ctx.home });
     return { updateHold: !!updateHoldFor(ROOT), gitHold: !!heldGit() || guard().gitBusy(), assistantBusy: false,
       assistantReady: !!resolveBin(engine(profile.engine).command) && (profile.engine !== 'agy' || !lockProblem('assistant', profile)) };
-  } catch { return { updateHold: true, gitHold: true, assistantBusy: false, assistantReady: false }; }
+  } catch { return { updateHold: false, gitHold: false, assistantBusy: false, assistantReady: false }; } // (Home: "not ready", not a hold that isn't there)
 }
+// An optional, owner-side feature: whatever goes wrong in it (its state unreadable, invalid or contended) never stops
+// the rest of the hub's minute (a round, closed windows, nudges). Home's advisor card says the problem; hub.log once.
+let advisorTickError = '';
 function advisorReviewTick() {
-  if (advisorReview.child || !CFG.config.advisor.reviews.enabled) return;
+  try {
+    advisorReviewStart();
+    advisorTickError = '';
+  } catch (err) {
+    if (err.message !== advisorTickError) log(`advisor: automatic reviews wait: ${err.message}`);
+    advisorTickError = err.message;
+  }
+}
+function advisorReviewStart() {
+  if (advisorReview.child || CFG.config.advisor.reviews.enabled !== true) return;
   const store = reviewStore(ROOT, os.homedir());
   const { run } = store.reserve({ roadmap: projectView().roadmap, jobs: allJobs(), now: clockNow(),
     reviews: CFG.config.advisor.reviews, gates: advisorReviewGates() });

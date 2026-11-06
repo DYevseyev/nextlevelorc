@@ -3,12 +3,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { advisorDir } from './advisor.mjs';
-import { withFileLock, writeJsonFile } from './filelock.mjs';
+import { holderGone, withFileLock, writeJsonFile } from './filelock.mjs';
+import { processStartSync } from './proctree.mjs';
 import { emptyReviewLedger, planReview } from './reviewpolicy.mjs';
 
 const fresh = () => ({ version: 1, initialized: false, opened: {}, ledger: emptyReviewLedger(), lease: null, runs: [] });
 const idOf = () => randomBytes(16).toString('hex');
-const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; } };
+// A lease's holder, told by its pid and the time the lease was taken (Windows reuses pids quickly: a pid another program
+// has now, one that started after the lease, is not the holder). A start time is asked for once a minute per lease: on
+// Windows that is a PowerShell. A lease from before `at` was kept is judged by its pid alone.
+const START_LOOK_MS = 60_000;
+const looked = new Map();
+function leaseHolderAlive(lease, startOf) {
+  const at = Number.isFinite(lease.at) ? lease.at : null;
+  if (holderGone({ pid: lease.pid, at }, { look: false })) return false;
+  if (at === null) return true;
+  const key = `${lease.pid}:${at}`, seen = looked.get(key);
+  if (seen && Date.now() - seen.t < START_LOOK_MS) return seen.alive;
+  const alive = !holderGone({ pid: lease.pid, at }, { look: true, startOf });
+  looked.clear(); looked.set(key, { t: Date.now(), alive });
+  return alive;
+}
+const leaseOf = (id, kind) => ({ id, kind, pid: process.pid, at: Date.now() });
 const stamp = value => { const n = Date.parse(value); return Number.isFinite(n) && n >= 0 ? n : null; };
 const failure = a => !a.notCounted && ['failed', 'timeout', 'blocked', 'no-changes'].includes(a.state);
 
@@ -35,21 +51,23 @@ export function reviewSnapshot(roadmap, jobs, opened, now) {
   return { tasks: [...tasks.values()], milestones, lastMergeAt };
 }
 
-export function reviewStore(root, home) {
+export function reviewStore(root, home, { startOf = processStartSync } = {}) {
+  const alive = lease => leaseHolderAlive(lease, startOf);
   const file = path.join(advisorDir(root, home), 'reviews.json');
   const read = () => {
     let s;
     try { s = JSON.parse(fs.readFileSync(file, 'utf8')); }
-    catch (e) { if (e.code === 'ENOENT') return fresh(); throw new Error('Advisor review state is unreadable; no automatic review starts.'); }
+    catch (e) { if (e.code === 'ENOENT') return fresh(); throw new Error('Advisor review state (reviews.json) is unreadable.'); }
     if (s?.version !== 1 || !Array.isArray(s.runs) || !s.opened || !s.ledger || typeof s.initialized !== 'boolean'
-      || (s.lease && (!Number.isInteger(s.lease.pid) || s.lease.pid <= 0 || typeof s.lease.id !== 'string')))
-      throw new Error('Advisor review state is invalid; no automatic review starts.');
+      || (s.lease && (!Number.isInteger(s.lease.pid) || s.lease.pid <= 0 || typeof s.lease.id !== 'string'
+        || (s.lease.at !== undefined && !Number.isFinite(s.lease.at)))))
+      throw new Error('Advisor review state (reviews.json) is invalid.');
     return s;
   };
   // Unlike ordinary best-effort state writes, admission must never proceed without owning its lock.
   const change = fn => withFileLock(file, stillMine => {
     const s = read();
-    if (s.lease && !alive(s.lease.pid)) {
+    if (s.lease && !alive(s.lease)) {
       const run = s.runs.find(r => r.id === s.lease.id);
       if (run && ['reserved', 'running'].includes(run.status)) {
         run.status = 'failed'; run.error = 'The advisor process ended before saving a result. This event will not retry automatically.';
@@ -57,17 +75,17 @@ export function reviewStore(root, home) {
       s.lease = null;
     }
     const result = fn(s);
-    if (!writeJsonFile(file, s, { onlyIf: stillMine })) throw new Error('Advisor state lock changed; no session starts.');
+    if (!writeJsonFile(file, s, { onlyIf: stillMine })) throw new Error('Advisor review state changed under its lock; try again in a minute.');
     return result;
-  }, { onLock: r => { if (r.forced) throw new Error('Advisor state is busy; no session starts.'); } });
+  }, { onLock: r => { if (r.forced) throw new Error('Advisor review state is busy; try again in a minute.'); } });
   const release = id => change(s => { if (s.lease?.id === id) s.lease = null; });
   return {
     file, read,
-    leaseAlive: lease => !!lease && alive(lease.pid),
+    leaseAlive: lease => !!lease && alive(lease),
     acquireManual() {
       return change(s => {
         if (s.lease) throw new Error('The advisor is already answering or reviewing. Wait for that session to finish.');
-        const id = idOf(); s.lease = { id, kind: 'manual', pid: process.pid }; return id;
+        const id = idOf(); s.lease = leaseOf(id, 'manual'); return id;
       });
     },
     release,
@@ -90,7 +108,7 @@ export function reviewStore(root, home) {
         if (!p.candidate) return { reason: p.reason, run: null };
         const run = { id: idOf(), candidate: p.candidate, status: 'reserved', at: now, threadId: '' };
         s.ledger = p.nextLedger; s.runs.push(run);
-        s.lease = { id: run.id, kind: 'review', pid: process.pid };
+        s.lease = leaseOf(run.id, 'review');
         return { reason: 'due', run };
       });
     },
@@ -103,7 +121,7 @@ export function reviewStore(root, home) {
           s.ledger.reservations = s.ledger.reservations.filter(x => x.key !== r.candidate.key);
           r.status = 'deferred'; s.lease = null; return null;
         }
-        r.status = 'running'; s.lease.pid = process.pid; return r;
+        r.status = 'running'; s.lease = leaseOf(id, s.lease.kind); return r;
       });
     },
     finish(id, result) {
