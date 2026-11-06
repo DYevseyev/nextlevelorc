@@ -23,8 +23,8 @@ Two layers. The first is for every install; the second is the wall, opt-in, on W
 
 1. **Traced requests (every install, same Windows user).** The hub acts only on what it can trace to the owner, the
    orchestrator or itself:
-   - **The command refuses a worker by its ancestry,** not its variables: every `nextlevel` command that asks the hub
-     for something walks its own parent processes in one process snapshot (`src/lib/proctree.mjs`), and refuses when
+   - **The command refuses a worker by its ancestry,** not its variables: every `nextlevel` command but the few that
+     only look (3.1) walks its own parent processes in one process snapshot (`src/lib/proctree.mjs`), and refuses when
      one of them is a running worker's process (pid with its start time, from the hub's own record). Clearing the
      variables, the full path to the command and `--project` change nothing. A worker's PATH has no `nextlevel` either.
    - **Every request file is signed.** What the command, the dashboard and the hub write for the hub to act on
@@ -37,7 +37,9 @@ Two layers. The first is for every install; the second is the wall, opt-in, on W
      Confirm on the Notes page (or runs `nextlevel note confirm <id>` in their own window, refused under an agent). The
      files stay unprotected, so the cards' own writes and the orchestrator's commits of them go on as today.
 
-   This stops a worker that tries by mistake, through an ordinary command, or because something it read told it to.
+   This stops a worker that tries by mistake, through an ordinary command, or because something it read told it to,
+   through nextlevel's own commands and files; an instruction written for nextlevel (detach, read the key, edit
+   nextlevel's code) passes layer 1 and is seen after the fact where 3.4 looks.
    It doesn't stop one that reads nextlevel's key from the owner's profile and computes a signature: that worker has
    set out to get around nextlevel, which is out of scope here and is what layer 2 closes.
 2. **The agents' account (the wall, Windows, opt-in).** Workers run as a standard local user of their own
@@ -85,7 +87,7 @@ into Windows.
 | A line in `docs/OWNER_NOTES.md`, a tick in `docs/HANDOFF.md` (a merge, or written into the main checkout) | an owner's note | an unconfirmed card: the owner's Confirm on the dashboard makes it theirs | same |
 | The worker's own code run by the task's verify (scripts, tests), in the hub's tree | runs as the owner | refused by ancestry: verify processes are in the record | runs as the account, through the host |
 | A lock test's verdict, a trial's answer (`lock-tests/`, `check-cache.json`) | taken | the hub signs its own verdicts; an unsigned one is no verdict | same |
-| `closed.json`, `cycle.json`, `settings.json` | taken | signed by their writers; a bad one is the last good copy, flagged | same |
+| `closed.json`, `settings.json` | taken | signed by their writers; a bad one is the last good copy, flagged | same |
 | The guard's records (`~/.nextlevel/guard/<project>/`: an approval) | taken | signed by the dashboard, which writes approvals | the account can't read or write `~/.nextlevel` |
 | The dashboard as the owner (`ui-open.json`, its key in the browser's profile) | possible (part 2A's residuals) | `ui-open.json` signed | the account can't read the owner's profile or `.nextlevel/` |
 | `.env`, the owner's gh, engines' sign-ins | readable | unchanged (out of layer 1) | not readable |
@@ -142,44 +144,56 @@ into Windows.
   descend from. On autopilot that is most rounds' `dispatch`, `commit` and `merge`: S10 measures it, and the number
   goes into KNOWN_ISSUES. The tests stub the listing (the test switch above).
 - **When the snapshot fails** (no answer within `LIST_WAIT_MS`) while the record names a running worker or verify:
-  the command refuses, saying why, unless it carries the session token the hub gives the orchestrator's window and
-  its rounds in their environment (a random value per session, never on disk; reading another process's
-  environment is out of scope). With no worker running, it runs. The spike measures whether Codex's sandbox lets
-  the listing run (S2); if it does, the token is only a backstop.
+  the command refuses, saying why, unless it carries a live session token of the orchestrator. The hub gives the
+  orchestrator's window and each round a random token in their environment (`NEXTLEVEL_SESSION_TOKEN`, never on
+  disk) and records its SHA-256, with the session's end, in the signed record beside the workers'. The command hashes
+  the token it carries and compares; the hash leaves the record when the session ends. With no worker running, it
+  runs. The spike measures whether Codex's sandbox lets the listing run (S2); if it does, the token is only a backstop.
 - **PATH:** `workerEnv` drops `~/.nextlevel/bin` and the version's own bin folder from a worker's PATH (safe updates
   put the version's command first on PATH for what it starts).
 
 ### 3.2 The files: signed
 
-- **The key.** 32 random bytes per project, `~/.nextlevel/keys/<project key>.key`, written by `init`, the hub's first
-  start or the update that brings this (the owner's processes), never inside the project, never in an environment
-  variable a worker gets, never logged.
+- **The keys.** 32 random bytes per project, `~/.nextlevel/keys/<project key>.key`, for the project's state and its
+  guard records; and 32 for the PC, `~/.nextlevel/keys/pc.key`, for what every project shares (`channels.json`,
+  `versions.json`, `update/`, `state.json`, `cache/`, the advisor's memory). Written by `init`, the installer, the
+  hub's first start or the update that brings this (the owner's processes), never inside a project, never in an
+  environment variable a worker gets, never logged.
 - **The signature.** A field `sig: { v: 1, by, at, seq, mac }`. `mac` is HMAC-SHA256 over `v`, `by`, `at`, `seq`, the
-  file's name relative to its root (`.nextlevel/` or `~/.nextlevel/guard/<project>/`, said with its root:
-  `state:queue/x.json`, `guard:held.json`) and the object without `sig` in a canonical form (keys sorted at every
+  file's name relative to its root (`.nextlevel/`, `~/.nextlevel/guard/<project>/` or `~/.nextlevel/`, said with its
+  root: `state:queue/x.json`, `guard:held.json`, `home:channels.json`) and the object without `sig` in a canonical form (keys sorted at every
   depth, `JSON.stringify` of each value), with a key derived per purpose from the project's key (HKDF: `state`,
-  `guard`, `requests`). Compared with `crypto.timingSafeEqual`. `by` (`owner`, `orchestrator`, `dashboard`, `hub`) is
+  `guard`, `requests`; the PC's key for `home`). Compared with `crypto.timingSafeEqual`. `by` (`owner`, `orchestrator`, `dashboard`, `hub`) is
   for logs and Home only; the key is the proof.
-- **No going back.** `seq` rises with every write of that file. The hub remembers the highest `seq` it took per file
-  (in memory, and in `~/.nextlevel/guard/<project>/seen.json`, itself signed): a lower one is a put-back copy, set
-  aside as untraced (section 5).
-- **One-shot requests expire.** A queue job, an outbox message, `wakeup.json`, `round-now.json`, `ui-open.json`, a
-  stop request and a security or tester request carry their id in the signed object, are acted on once (the ids in
-  `acted.json`, 30 days, under the same `seq` rule) and only within 10 minutes of `at` by the hub's clock.
+- **No going back, for what persists.** A store that persists (the cards, settings, closed, rounds, process records,
+  job records, verdicts, the guard's records, the PC's files) carries a `seq` that rises with every write, under the
+  file's lock. The hub remembers the highest `seq` it took per file (in memory, and in
+  `~/.nextlevel/guard/<project>/seen.json`, itself signed): a lower one is a put-back copy, set aside as untraced
+  (section 5).
+- **Requests are acted on once.** A request (a queue job, an outbox message, `wakeup.json`, `round-now.json`,
+  `ui-open.json`, a stop request, a security or tester request) carries its own id in the signed object and no
+  `seq`. It is acted on once: its id goes into `acted.json` (a store, under the rule above), kept 30 days, and a
+  request whose `at` is older than that is set aside. The triggers that act at once (`wakeup.json`, `round-now.json`,
+  `ui-open.json`, the stop requests) are also set aside when the hub first sees them more than 10 minutes after `at`.
+  Queue jobs, outbox messages and scan and tester requests wait as long as they must.
 - **The key's life.** Written once, by `init`, the hub's first start or the update that brings this. Once
   `format.json` says the project's state is signed, a missing or changed key is never written again by itself: the
   hub stops acting on requests and Home says so, with the owner's fix (`nextlevel doctor --fix state.key` in their
-  own window, which signs the current state again as the owner's).
+  own window, which lists every file it signs and signs the current state again as the owner's, so a planted file
+  isn't taken over unseen).
 - **What isn't signed:** logs and pure caches (`usage.json`, `switches.json`, `logs/`, `chats/`): never acted on.
-- **Who signs:** `lib/sign.mjs` (new) is used by every writer the hub acts on: the hub's `writeJson` for its own state,
-  `cards.mjs`'s store writes, the command's queue and outbox writes, `wakeup`, the dashboard's writes (approvals,
-  `round-now.json`, `ui-open.json`, settings).
+- **Who signs:** `lib/sign.mjs` (new), used by every writer of a signed file: the hub's `writeJson`; `_run` (a job's
+  `run.json` and `status.json`; it is the hub's child, outside the worker's tree); `cards.mjs`'s store writes; the
+  commands' queue, outbox, wakeup, security and tester requests; the dashboard (approvals, `round-now.json`,
+  `ui-open.json`, stop requests, settings); `channel`, the installer and the updater (the PC's files, `hold.json`,
+  the update plans); `team` and the doctor's fixes (their guard records).
 - **Older files.** The update that brings this runs after running work ended (`holdFor`) and signs the stores (cards,
   settings, closed, rounds, the guard's records, process records), as the owner's. It doesn't sign pending requests
   (queue, outbox, wakeup, round-now, stop and scan requests): they are listed on Home as "made before this update",
   and the owner runs again what they want. An older version ignores `sig` (its shape checks allow the field: each
-  reader's checked in 2B-1), so going back needs no rewrite and `format.json` isn't raised for this. Going forward
-  again signs again, the same way, since files the older version wrote are unsigned.
+  reader is checked in 2B-1b), so going back needs no rewrite and `format.json` isn't raised for this. Going forward
+  again runs the same migration: it clears `seen.json` and `acted.json`'s numbers for the project, then signs the
+  stores again, since files the older version wrote are unsigned.
 - **The file protocol stays:** same folders, same names, one more field. A hub that doesn't know `sig` ignores it.
 
 ### 3.3 The owner's own commands and the orchestrator's
@@ -188,6 +202,9 @@ into Windows.
 - **The orchestrator on Codex**, inside its sandbox: the command reads the key from `~/.nextlevel/keys` (Codex's
   Windows sandbox reads outside the project; it already runs the tool from `~/.nextlevel`) and writes into the project,
   which it may. The spike checks both (S2).
+  The orchestrator's sessions also carry their session token (3.1), which counts only when the process listing fails.
+  If S2 shows that Codex's sandbox can't read `~/.nextlevel/keys`, the orchestrator's requests carry that token in
+  place of a signature, and the hub checks it against the record before acting. Nothing else changes.
 - **The orchestrator on Claude Code or agy**, as the owner: as the owner's window.
 - **The dashboard and the hub** sign in process.
 
@@ -195,7 +212,8 @@ into Windows.
 
 nextlevel's own code and the owner's global settings run as the owner and can't carry a signature. After each attempt
 and at the hub's start, the hub compares: `git status --porcelain` in the running version's folder and in the tool's
-clone; the clone's `origin` URL with `state.json`'s; `bin/launch.mjs` with the version's copy; the global git settings
+clone (run with `-c core.fsmonitor=false -c core.hooksPath=<an empty folder>`, so the look never runs what it looks
+for); the clone's `origin` URL with `state.json`'s; `bin/launch.mjs` with the version's copy; the global git settings
 in gitguard's list. A change stops dispatch, with a Home card naming it, the attempts that ran since the last look
 flagged (section 5), and one phone message. This is detection after the fact, not a bar: a worker can change nextlevel
 itself in layer 1 (section 7).
@@ -248,14 +266,21 @@ task stops starting after the local policy's 42 days. The user rights are set wi
 
 ### 4.4 Slots: clones, not worktrees
 
-The owner runs one git command against a slot: `git fetch <slot> task/<id>:task/<id>` into the main repository
-(upload-pack doesn't run the slot's hooks, filters or fsmonitor; Git 2.45.1 or newer, which the doctor checks, for the
-local-clone fixes). Everything else that today runs git in the slot (the merge of the base, FR-008's commits for
+A worktree's commits land in the main repository's `.git` (objects and refs): the account would need write access to
+the owner's `.git`, and could move `main`. So in layer 2 a slot is a repository of the account's own, in
+`C:\ProgramData\nextlevel-agents\<project>\slots\<n>`, made from a bundle, with the main repository's objects read
+through `alternates` (read access to `.git/objects` only).
+
+The owner runs one git command against a slot: `git -c safe.directory=<slot> fetch <slot> task/<id>:task/<id>` into
+the main repository, with that one setting for that one fetch (upload-pack runs no hooks, filters or fsmonitor; Git
+2.45.1 or newer, which the doctor checks, for the local-clone fixes). The owner never runs any other git command in a
+slot, with or without `safe.directory`, and never pushes into one (receive-pack would run the slot's hooks). Everything else that today runs git in the slot (the merge of the base, FR-008's commits for
 workers that can't write git, `status`, `diff`, `log`, the reflog reads of slotwatch) runs as the account through the
-host, or on the fetched `task/<id>` in the main repository. The owner's git never runs with `-c safe.directory` on a
-slot. The hub reads a slot's files (`RESULT.md`, `PROGRESS.md`, the worker's log) without following links or junctions
+host, or on the fetched `task/<id>` in the main repository. The hub reads a slot's files (`RESULT.md`, `PROGRESS.md`, the worker's log) without following links or junctions
 (a reparse point is refused and flagged), and writes none there through one (`slotfiles.mjs`, as today). The base
-branch reaches the slot by the host's fetch from the main repository. A `git gc` in the main repository that prunes
+branch reaches the slot as a bundle: the hub writes `git bundle create` of the base into the host's inbox, and the host
+fetches from that file. The account never reads the main repository's `config`, refs or hooks. It reads only
+`.git\objects` (granted on that folder alone), for the slot's `alternates`. A `git gc` in the main repository that prunes
 objects only a `--shared` slot references would break it: if the spike shows that, slots are cut loose (`git repack -a
 -d`, then `alternates` removed).
 
@@ -279,8 +304,8 @@ What reads the slot as a worktree today (`gitguard`'s slot hooks, `slotwatch`, `
 
 ### 4.6 What breaks, and what's done about it
 
-- **git's `safe.directory`:** the owner's git refuses a slot the account owns, and stays refused: the owner only
-  fetches from a slot (4.4).
+- **git's `safe.directory`:** the owner's git refuses a slot the account owns. The owner only fetches from a slot,
+  with `-c safe.directory=<slot>` for that fetch alone (4.4), never `*` and never in the owner's global settings.
 - **Docker:** the account isn't in `docker-users` (owner-equivalent). A task with `Needs: docker` is refused at
   dispatch on a walled worker (`workerLacks`, as part B of Codex workers does), with that said; the owner can run such a
   task on a worker outside the wall by profile.
@@ -295,7 +320,7 @@ What reads the slot as a worktree today (`gitguard`'s slot hooks, `slotwatch`, `
 As the runner's: `walls.mjs` probes each of the owner's places as the account before the host starts a worker, for
 reading and for writing: reading `.env` of every known project, `~/.nextlevel`, the key, the guard's records, the
 owner's gh, the engines' sign-in folders, the main checkout's `.nextlevel/`; writing the host's inbox, its tool copy
-and the main checkout. One readable place stops the walled workers, with a Home
+and the main checkout. One place the account can read, or write where it shouldn't, stops the walled workers, with a Home
 card naming it and the fix. In CI, on GitHub's own runners only, a test creates a user and runs the probe as it.
 
 ## 5. A request nextlevel can't trace
@@ -358,7 +383,7 @@ each removal listed for the owner.
 | S3 | Engines installed and running as the account | `agy --version`, `codex --version`, `claude --version` from the owner's install and from a machine-wide one | |
 | S4 | Sign-ins as the account | each engine's device-code login, the owner's plans; one prompt answered by each | |
 | S5 | agy in a console with no window, batch logon | the stub-free probe of FR-022's trial, run by the host | |
-| S6 | A slot clone and the hub's fetch | `clone --shared` from nextlevel-try, a commit as the account, the owner's fetch with `safe.directory`; `npm ci` in the slot | |
+| S6 | A slot clone and the hub's fetch | `clone` from a bundle with `alternates` to nextlevel-try's `.git\objects` (the account granted that folder only), a commit as the account, the owner's `git -c safe.directory=<slot> fetch`; whether that fetch needs the setting at all; `npm ci` in the slot | |
 | S7 | The walls | as the account: read `~/.nextlevel`, `.env`, `%APPDATA%\GitHub CLI`, `~/.codex`, `~/.claude`, `~/.gemini`, the main checkout's `.nextlevel/` | |
 | S8 | Antivirus | Bitdefender's log after S1 to S11 | |
 | S9 | A worker's commands descend from `_run` | per engine (agy, Claude Code, Codex in its sandbox and out of it): the worker runs `nextlevel status --json` and a probe prints its parent chain; and `cmd /c start` breaks it, as expected | |
@@ -392,5 +417,7 @@ caller's environment, denies by default and records `_run` from the hub's own ha
 out of scope; R4 the table's twenty more rows and section 3.4; R5 `seq`, expiry, `timingSafeEqual`, roots and the
 key's life; R6 typed notes confirmed instead of protected; R7 flagging by the hub's own clock; R8 the owner only fetches
 from a slot, ACLs on `C:\ProgramData`, the walls probe writes too, the password, headless logins; R9 what the migration
-signs and going back; R10 spike steps S9 to S11. Optional points taken: the split of 2B-1, the cost, per-purpose keys,
+signs and going back; R10 spike steps S9 to S11. The delta check's D1 to D7: the one fetch with `safe.directory` and the base as a bundle,
+the session token's hash in the record, the PC's key, `seq` only for stores and requests acted on once, going forward
+again, every signer named, the walls stop on a write. Optional points taken: the split of 2B-1, the cost, per-purpose keys,
 Claude Code workers, cross-project reach, the card's cap, `--shared` and `gc`.
