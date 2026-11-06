@@ -76,6 +76,7 @@ export const COMMANDS = {
       ['nextlevel team window hidden|minimized|visible', "how a worker's process shows on Windows"],
       ['nextlevel team sandbox [on|off]', "Codex workers in Codex's sandbox (on), or without it like your other workers (off)"],
       ['nextlevel team tester [on|off]', 'the tester: whether it is on, and turning it on or off'],
+      ['nextlevel team reviews [on|off] [--per-day <n>]', 'automatic advisor reviews and their daily limit (owner only; off by default)'],
       ['nextlevel team runner status|on [--repo owner/name]', "the project's GitHub checks on this PC: offered and recommended, and setting it up"],
     ],
     options: {
@@ -89,8 +90,9 @@ export const COMMANDS = {
       check: B("set: check the change, don't save it"),
       anyway: B('set: save it although a check warns'),
       repo: S('<owner/name>', "runner: a GitHub repository other than the project's origin"),
+      'per-day': S('<n>', 'reviews: maximum per UTC day; 0 starts none; leaves the on/off switch unchanged'),
     },
-    subs: { '': { options: ['json'], args: [0, 0] }, set: { options: ['engine', 'model', 'effort', 'profile', 'takes', 'daybreak', 'check', 'anyway', 'json'], args: [1, 1] }, models: { options: ['json'], args: [1, 1] }, window: { options: ['json'], args: [1, 1] }, sandbox: { options: ['json'], args: [0, 1] }, tester: { options: ['json'], args: [0, 1] }, runner: { options: ['repo', 'json'], args: [1, 1] } },
+    subs: { '': { options: ['json'], args: [0, 0] }, set: { options: ['engine', 'model', 'effort', 'profile', 'takes', 'daybreak', 'check', 'anyway', 'json'], args: [1, 1] }, models: { options: ['json'], args: [1, 1] }, window: { options: ['json'], args: [1, 1] }, sandbox: { options: ['json'], args: [0, 1] }, tester: { options: ['json'], args: [0, 1] }, reviews: { options: ['per-day', 'json'], args: [0, 1] }, runner: { options: ['repo', 'json'], args: [1, 1] } },
   },
   ask: {
     group: 'owner',
@@ -443,6 +445,7 @@ export const COMMANDS = {
   _guide: { group: 'internal', lines: [['nextlevel _guide [<engine>|<profile>]', 'the setup guide, in the window nextlevel guide opened']], args: [0, 1] },
   _trial: { group: 'internal', lines: [['nextlevel _trial <what>', "the model check's trial before tasks start on Antigravity (the hub starts it, FR-022)"]], args: [1, 1] },
   _accept: { group: 'internal', lines: [['nextlevel _accept <what>', 'one acceptance run (the hub starts it)']], args: [1, 1] },
+  '_advisor-review': { group: 'internal', lines: [['nextlevel _advisor-review <id>', 'one reserved read-only advisor review (the hub starts it)']], args: [1, 1] },
   _scan: { group: 'internal', lines: [['nextlevel _scan <what>', "one security scan, in OpenAI's scanner container (the hub starts it)"]], args: [1, 1] },
   _daybreak: { group: 'internal', lines: [['nextlevel _daybreak', "the Daybreak model watch's one look at the scanner's models (the hub starts it)"]], args: [0, 0] },
   _locktest: { group: 'internal', lines: [['nextlevel _locktest <what>', "the lock test of a role on Antigravity (the hub starts it)"]], args: [1, 1] },

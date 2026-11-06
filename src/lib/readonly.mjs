@@ -8,7 +8,7 @@ export const readOnly = (env = process.env) => env.NEXTLEVEL_READ_ONLY === '1';
 const LOOK = {
   status: () => true,
   result: () => true, // it doesn't mark the job reviewed there (hub.mjs cmdResult)
-  team: (rest) => !['set', 'window'].includes(rest[0]),
+  team: (rest) => !['set', 'window'].includes(rest[0]) && (rest[0] !== 'reviews' || rest.slice(1).every(a => a === '--json')),
   doctor: (rest) => rest.includes('--json') && !rest.some((a) => a.startsWith('--fix')),
   help: () => true,
   version: () => true,

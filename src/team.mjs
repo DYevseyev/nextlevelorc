@@ -89,9 +89,41 @@ export async function cmdTeam(argv, { root, stateDir, hubAlive = () => false, lo
   if (sub === 'sandbox') return setSandbox(rest[0], a, { root, loaded, print });
   if (sub === 'runner') return runner(rest[0], a, { root, print });
   if (sub === 'tester') return setTester(rest[0], a, { root, loaded, print });
+  if (sub === 'reviews') return setReviews(rest[0], a, { root, loaded, print });
   if (sub === 'set') return set(rest[0], a, { root, stateDir, hubAlive, loaded, print });
   print({ ok: false, message: `unknown: team ${sub}` }, 'usage: nextlevel team [--json] | team models <engine> | team set <role> --engine E [--model M] [--effort X]');
   return 1;
+}
+
+// The owner's switch and daily cap never approve a concurrent agent's edit of nextlevel.json.
+function setReviews(choice, a, { root, loaded, print }) {
+  const fail = message => (print({ ok: false, saved: false, message }, message), 1);
+  if (loaded.error) return fail(loaded.error);
+  const reviews = loaded.config.advisor.reviews;
+  const limit = a['per-day'];
+  if (!choice && limit === undefined) return print({ ok: true, reviews }, `Automatic advisor reviews: ${reviews.enabled ? 'on' : 'off'}, up to ${reviews.perDay} per UTC day.`), 0;
+  if (choice && !['on', 'off'].includes(choice)) return fail('team reviews is on or off');
+  if (limit !== undefined && (!/^\d+$/.test(limit) || !Number.isSafeInteger(Number(limit))))
+    return fail('--per-day must be a nonnegative whole number (0 starts no reviews).');
+  const session = agentSession();
+  if (session) return fail(ownerOnly('nextlevel team reviews', 'The owner changes this on Team or in their own terminal.', session));
+  const file = path.join(root, CONFIG_FILE);
+  let raw, crlf;
+  try { ({ raw, crlf } = readRaw(file)); } catch { return fail(`${CONFIG_FILE} cannot be read: fix it first.`); }
+  const changes = { ...(choice ? { enabled: choice === 'on' } : {}), ...(limit !== undefined ? { perDay: Number(limit) } : {}) };
+  const next = { ...raw, advisor: { ...raw.advisor, reviews: { ...raw.advisor?.reviews, ...changes } } };
+  const checked = loadConfig(root, { raw: next }).config.advisor.reviews;
+  const problem = ownerWriteProblem(root, [CONFIG_FILE]);
+  if (problem) return fail(problem);
+  let text = formatConfig(next);
+  if (crlf) text = text.replace(/\n/g, '\r\n');
+  fs.writeFileSync(file, text);
+  recordOwner(root, [CONFIG_FILE]);
+  const message = `Automatic advisor reviews are ${checked.enabled ? 'on' : 'off'}. Daily limit: ${checked.perDay} per UTC day. `
+    + (checked.perDay === 0 ? 'No new reviews start while the daily limit is 0. ' : '')
+    + 'The running hub uses this for new reviews. A review already running finishes; reviews already used today still count.';
+  print({ ok: true, saved: true, reviews: checked, message }, message);
+  return 0;
 }
 
 // The models an engine's CLI lists, asked with the account a profile names (no profile: its own login).

@@ -20,8 +20,9 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
 - **Gemini 4 Argon in more roles**: the orchestrator and the advisor can run on Antigravity behind the lock test; a
   review-only security role is next, or stays off Antigravity.
 - **The advisor's own reviews** (`docs/design/advisor.md`, part 2): at a milestone's midpoint and end and when progress
-  stalls, a read-only review reported to you, never to the orchestrator, within a daily cap. The advisor itself (Advise
-  and Quick, its memory, drafts only your click sends, Explain on cards) is done.
+  stalls, a read-only review reported to you, never to the orchestrator, within a daily cap, is built. Reviews start
+  off; Team turns them on and edits their daily limit without resetting usage. The advisor itself (Advise and Quick,
+  its memory, drafts only your click sends, Explain on cards) is done.
 
 ## The security engineer
 Scans of the project's code in OpenAI's Codex Security scanner (`docs/design/security-engineer.md`). Part 1a-1, the

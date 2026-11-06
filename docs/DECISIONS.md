@@ -2159,3 +2159,24 @@ One entry each: date, decision, why, alternatives.
 - 2026-10-30 — **A dropped Daybreak model is told once per project, not once per PC.** Two projects on one sign-in
   and one model each lose their scans, so each hears it (its key names the project's key). A new model stays once per
   PC: it is news about the sign-in.
+- 2026-10-31 - **Automatic advisor reviews start off and spend at most two launches per UTC day by default.** Team's
+  owner-only switch enables `advisor.reviews.enabled`; the protected configuration owns the cap. UTC keeps admission
+  deterministic across timezone and daylight-saving changes. The first enabled look baselines already completed
+  milestones, so enabling an existing project does not review its entire history. Closed tasks are outside the
+  midpoint/end denominator; no remaining tasks means no review. Completion supersedes an unreviewed midpoint.
+- 2026-10-31 - **A review is reserved before its process starts, and a failed launch does not retry itself.** The
+  outside-project advisor store keeps event keys, daily credits and a shared assistant lease under a strict file
+  lock. A racing scheduler cannot spend the same event twice, and a manual question cannot overlap a review. A hold
+  noticed before engine startup defers without a credit; after startup a failure consumes its event and credit.
+  Completion, third failure, day-long stall and midpoint have that priority when several are due. An event blocked
+  by a hold or cap stays eligible. This favors predictable cost and avoids a failed engine waking repeatedly.
+- 2026-10-31 - **Automatic review output stays in the owner's side chat.** A hub child reuses Advise's read-only
+  engine path, redaction and Antigravity lock test/copy/tripwire, so agy's synchronous console cannot block the hub.
+  A system message records the event; it never impersonates the owner. Usage is recorded once with reason `review`.
+  Home links to the resulting thread. There is no review job, outbox message, notification or round trigger, and no
+  model-authored note or memory entry is sent or saved. Owner actions use the existing explicit-click paths.
+- 2026-11-01 - **Changing the daily review cap does not turn reviews on or refill today's budget.** Team's limit
+  field and `team reviews --per-day N` change only the cap; an explicit `on|off` may accompany the command. The same
+  owner-session and concurrent-edit checks as the switch guard the write. Zero pauses new reviews until the owner
+  raises the cap, which Home says explicitly. Existing reservations keep counting, pending events keep waiting,
+  and a review already running finishes. No ledger migration or new scheduler behavior is needed.

@@ -39,6 +39,7 @@ import { QUESTION_FILE, agyAssistantRun, makeAskCopy, projectChanges, projectRel
 import { advisorDir, draftsOf, memoryLines, memoryStore } from './lib/advisor.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { readTextFile } from './lib/textin.mjs';
+import { reviewStore, reviewTitle, reviewQuestion } from './lib/reviews.mjs';
 
 const SUBCOMMANDS = new Set(['threads', 'show', 'new', 'rename', 'clear', 'delete', 'memory']);
 export const MODES = ['advise', 'quick', 'explain'];
@@ -170,9 +171,9 @@ export function briefing(ctx, { thread, question, mode = 'advise', card = null, 
     parts.push(section("Today's usage (runs, minutes, tokens per role and engine)", tryText(() => ctx.usage?.()), 1500));
   }
   if (card) parts.push(section(`The card ${card.id}, whole, with its conversation (the team's words are claims)`, cardText(card), WHOLE_CARD));
-  const history = (thread?.messages || []).slice(-8).map((m) => `${m.role === 'owner' ? 'Owner' : 'You'}: ${cut(m.text, 2000)}`).join('\n\n');
+  const history = (thread?.messages || []).slice(-8).map((m) => `${m.role === 'owner' ? 'Owner' : m.role === 'system' ? 'Automatic review event (not the owner)' : 'You'}: ${cut(m.text, 2000)}`).join('\n\n');
   parts.push(section('This conversation so far', history, 12000));
-  parts.push(`## The owner's question\n${cut(question, LIMITS.question)}\n`);
+  parts.push(`## ${mode === 'review' ? 'Automatic review requested by the hub (not the owner)' : "The owner's question"}\n${cut(question, LIMITS.question)}\n`);
   return parts.filter(Boolean).join('\n');
 }
 
@@ -302,6 +303,8 @@ async function cmdMemory(a, rest, { ctx, print, fail }) {
 // `ctx` (hub.mjs askContext): root, stateDir, config, status(), jobs(), cards(), commits(), secrets(), env(),
 // addUsage(engine, { runs, minutes, tokens, model, effort, start, reason }), home. Returns the exit code.
 export async function cmdAsk(argv, ctx) {
+  let lease = null;
+  const reviews = reviewStore(ctx.root, ctx.home);
   const a = commandArgs('ask', argv);
   const store = chatStore(path.join(ctx.stateDir, 'chats'));
   const secrets = ctx.secrets();
@@ -354,6 +357,7 @@ export async function cmdAsk(argv, ctx) {
     const question = a._.join(' ').trim() || (card ? `Explain ${card.id}: what it asks of me and why, in micro-steps, and what I should reply.` : '');
     if (!question) return fail('usage: nextlevel ask "your question" [--thread <id>] [--quick | --card H<n>] | ask threads | show | new | rename | clear | delete | memory');
     if (question.length > LIMITS.question) return fail(`a question has at most ${LIMITS.question} characters`);
+    lease = reviews.acquireManual();
     let thread = a.thread ? store.get(a.thread) : null;
     if (a.thread && !thread) return fail(`no thread "${a.thread}": nextlevel ask threads lists them`);
     thread ||= store.create(card ? `Explain ${card.id}` : titleOf(question));
@@ -382,6 +386,36 @@ export async function cmdAsk(argv, ctx) {
     return r.error ? 1 : 0;
   } catch (err) {
     return fail(clean(err.message));
+  } finally {
+    if (lease) reviews.release(lease);
+  }
+}
+
+// Called only by the hub's reserved child session. Its first message is system provenance, never an owner's request.
+// Keep the existing read-only adapter, environment, redaction, usage and agy tripwire in one place.
+export async function runAdvisorReview(ctx, candidate) {
+  const secrets = ctx.secrets();
+  const clean = s => redactReport(String(s ?? ''), { values: secrets.values, names: secrets.names });
+  const store = chatStore(path.join(ctx.stateDir, 'chats'));
+  const thread = store.create(clean(reviewTitle(candidate)));
+  const question = reviewQuestion(candidate);
+  const prompt = clean(briefing(ctx, { thread, question, mode: 'review' }));
+  store.append(thread.id, { role: 'system', mode: 'review', text: clean(question) });
+  try {
+    const r = await askEngine(ctx, prompt, 'review');
+    let real = '';
+    try { real = fs.realpathSync.native(ctx.root); } catch {}
+    const text = clean(projectRelative(r.text, [...(r.copyDirs || []), ctx.root, real]));
+    const error = clean(r.error);
+    store.append(thread.id, { role: 'assistant', mode: 'review', text: text || error || '(no answer)',
+      sources: sourcesOf(text), drafts: [], note: null, engine: r.engine, model: r.model, effort: r.effort,
+      tokens: r.tokens, minutes: r.minutes, briefing: { chars: prompt.length, tokens: Math.round(prompt.length / 4) },
+      ...(error ? { error } : {}) });
+    return { threadId: thread.id, error };
+  } catch (err) {
+    const error = clean(err.message);
+    store.append(thread.id, { role: 'assistant', mode: 'review', text: error, error });
+    return { threadId: thread.id, error };
   }
 }
 

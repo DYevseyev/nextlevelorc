@@ -84,6 +84,8 @@ export function defaults(name = 'project') {
     // The tester (docs/design/tester.md, lib/testerconfig.mjs): null, or its environments, personas and sign-in recipe.
     // It runs no model; off unless "enabled" is true.
     tester: null,
+    // Automatic, read-only reviews for the owner. Enabling is an owner's choice; each UTC day has a launch limit.
+    advisor: { reviews: { enabled: false, perDay: 2 } },
     // Files the agents' and the owner's tools load outside any sandbox: a change to one waits for the owner's approval
     // on the dashboard (lib/protect.mjs has the built-in list). "add" and "remove" change that list for this project.
     protected: { add: [], remove: [] },
@@ -231,6 +233,8 @@ function applyEnv(cfg, env) {
 
 function validate(cfg, root, problems) {
   const err = (m) => problems.errors.push(m);
+  if (!Number.isSafeInteger(cfg.advisor.reviews.perDay) || cfg.advisor.reviews.perDay < 0)
+    err('"advisor.reviews.perDay" must be a nonnegative integer (0 starts no reviews)');
   if (!Number.isInteger(cfg.version) || cfg.version < 1) err('"version" must be 1');
   else if (cfg.version > CONFIG_VERSION) err(`this file is for a newer nextlevel (version ${cfg.version}); update the nextlevel tool`);
   if (!cfg.name.trim()) err('"name" must not be empty');
