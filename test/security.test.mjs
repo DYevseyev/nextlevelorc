@@ -2,6 +2,7 @@
 // moved aside and every link taken out, and the lease that lets one scan run at a time on the PC. Fixtures stay harmless.
 //   npm test
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { processStartSync } from '../src/lib/proctree.mjs';
 import os from 'node:os';
@@ -139,23 +140,26 @@ test("the scan's docker line: read-only checkout and instructions, the scanner's
   assert.deepEqual(vols, { state: 'nextlevel-sec-state-0123456789abcdef', login: `nextlevel-sec-login-${accountKey('work')}`, out: 'nextlevel-sec-out-sec-20261027-061500-ab12' });
   assert.match(accountKey('work'), /^[0-9a-f]{16}$/, 'a hash, never a name');
   assert.notEqual(accountKey('work'), accountKey(''));
-  const args = scanRunArgs({ id: 'sec-1', checkout: '/p.slots/security', kb: '/p.slots/security-kb', vols, seccomp: '/tool/docker/codex-security-seccomp.json', memory: '4g', model: 'gpt-6-sol', effort: 'xhigh', deep: false, daybreak: true, maxMinutes: 90 });
+  const args = scanRunArgs({ id: 'sec-1', scanId: 'sec-20261027-061500-ab12', checkout: '/p.slots/security', kb: '/p.slots/security-kb', vols, seccomp: '/tool/docker/codex-security-seccomp.json', memory: '4g', model: 'gpt-6-sol', effort: 'xhigh', deep: false, daybreak: true, maxMinutes: 90 });
   const line = args.join(' ');
   assert.deepEqual(args.slice(0, 5), ['run', '--rm', '--init', '--name', 'nextlevel-scan-sec-1']);
   for (const want of ['--user 10001:10001', '--cap-drop ALL', '--security-opt no-new-privileges:true', '--security-opt seccomp=/tool/docker/codex-security-seccomp.json', '--pids-limit 2048', '--memory 4g',
     '--add-host host.docker.internal:127.0.0.255', '--add-host gateway.docker.internal:127.0.0.255',
     '--mount type=bind,source=/p.slots/security,target=/input/repository,readonly', '--mount type=bind,source=/p.slots/security-kb,target=/input/kb,readonly',
-    `--mount type=volume,source=${vols.out},target=/output/scan`, `--mount type=volume,source=${vols.state},target=/output/.codex-security-state`, `--mount type=volume,source=${vols.login},target=/output/.codex-security-state/codex-home`]) assert.ok(line.includes(want), want);
+    `--mount type=volume,source=${vols.out},target=/output/scan-sec-20261027-061500-ab12`, `--mount type=volume,source=${vols.state},target=/output/.codex-security-state`, `--mount type=volume,source=${vols.login},target=/output/.codex-security-state/codex-home`]) assert.ok(line.includes(want), want);
   const after = args.slice(args.indexOf(imageRef()) + 1);
-  assert.deepEqual(after, ['scan', '/input/repository', '--output-dir', '/output/scan', '--headless', '--auth', 'chatgpt', '--mode', 'standard', '--model', 'gpt-6-sol', '--effort', 'xhigh', '--cyber-access-program', 'daybreak_blue', '--codex', 'daybreak=true', '--codex', 'approval_policy="never"', '--codex', 'web_search="disabled"', '--scan-prompt-file', '/input/kb/role.md', '--max-time', '90']);
+  assert.deepEqual(after, ['scan', '/input/repository', '--output-dir', '/output/scan-sec-20261027-061500-ab12', '--headless', '--auth', 'chatgpt', '--mode', 'standard', '--model', 'gpt-6-sol', '--effort', 'xhigh', '--cyber-access-program', 'daybreak_blue', '--codex', 'daybreak=true', '--codex', 'approval_policy="never"', '--codex', 'web_search="disabled"', '--scan-prompt-file', '/input/kb/role.md', '--max-time', '90']);
   // Nothing else of the PC: no env file, no variable copied from the host, no socket, no port, no other mount
   assert.ok(!args.some((a) => ['--env-file', '-e', '--env', '-p', '--publish', '-v', '--volume', '--privileged', '--network'].includes(a)), line);
   assert.ok(!line.includes('docker.sock'));
   assert.equal(args.filter((a) => a === '--mount').length, 5);
   // Daybreak off: no access program at all; deep: the deep mode; an approved policy: the knowledge base
-  const plain = scanRunArgs({ id: 'sec-1', checkout: '/c', kb: '/k', policy: true, vols, seccomp: '/s', memory: '2g', model: 'm', deep: true, daybreak: false, maxMinutes: 240 });
+  const plain = scanRunArgs({ id: 'sec-1', scanId: 'sec-20261027-061500-ab12', checkout: '/c', kb: '/k', policy: true, vols, seccomp: '/s', memory: '2g', model: 'm', deep: true, daybreak: false, maxMinutes: 240 });
   assert.ok(!plain.includes('--cyber-access-program') && !plain.includes('daybreak=true'));
   assert.ok(plain.join(' ').includes('--mode deep') && plain.join(' ').includes('--knowledge-base /input/kb/policy.md'));
+  // The output's path is the scan's own (the scanner refuses a second scan into a path an earlier one saved to), and only
+  // ever a scan id: nothing else reaches the mount's spelling
+  for (const bad of [undefined, '', 'sec-1', 'sec-20261027-061500-ab12,target=/x', '../x']) assert.throws(() => scanRunArgs({ id: 'sec-1', scanId: bad, checkout: '/c', vols, seccomp: '/s', memory: '2g', maxMinutes: 5 }), /not a scan id/);
   assert.deepEqual([memoryLimit(64 * 1024 ** 3), memoryLimit(6 * 1024 ** 3), memoryLimit(2 * 1024 ** 3)], ['8g', '3g', '2g']);
 });
 
@@ -312,6 +316,43 @@ test('a scan end to end: asked by the owner, run by the hub in the scanner, its 
     const after = p.hub(['security', 'status']).out;
     assert.match(after, new RegExp(`${id}  done.*its findings file changed after the scan: not trusted`));
     assert.doesNotMatch(after, /Findings of/);
+  } finally {
+    p.cleanup();
+  }
+});
+
+test('a second scan on the same state volume saves too: each scan writes to an output path of its own', () => {
+  const p = secProject();
+  try {
+    const first = scanOnce(p);
+    assert.equal(first.scan.state, 'done', first.scan.why);
+    const second = scanOnce(p);
+    assert.equal(second.scan.state, 'done', second.scan.why);
+    assert.equal(second.scan.trusted, true);
+    assert.equal(second.scan.counts, '1 medium, 1 low');
+    // Each scan (and its dry run, exactly its command) has its own path, on the project's one state volume
+    const scans = seenRuns(p).filter((r) => !r.entrypoint && r.args.includes('scan'));
+    const outOf = (r) => r.args[r.args.indexOf('--output-dir') + 1];
+    for (const { id } of [first, second]) {
+      const mine = scans.filter((r) => r.name === `nextlevel-scan-${id}` || r.name === `nextlevel-scan-${id}-dry`);
+      assert.equal(mine.length, 2, id);
+      assert.deepEqual(mine.map(outOf), [`/output/scan-${id}`, `/output/scan-${id}`]);
+      assert.ok(mine.every((r) => r.args.includes(`type=volume,source=nextlevel-sec-out-${id}${r.args.includes('--dry-run') ? '-dry' : ''},target=/output/scan-${id}`)));
+    }
+    const stateVols = new Set(scans.map((r) => r.args.find((a) => a.endsWith('target=/output/.codex-security-state'))));
+    assert.equal(stateVols.size, 1, [...stateVols].join(' '));
+    const stateVol = [...stateVols][0].match(/source=([^,]+)/)[1];
+    const db = JSON.parse(fs.readFileSync(path.join(p.env.HOME, '.fake-docker', 'volumes', stateVol, 'data', 'scans.json'), 'utf8'));
+    assert.deepEqual(Object.keys(db).sort(), [`/output/scan-${first.id}`, `/output/scan-${second.id}`].sort());
+    // The stand-in refuses what the real scanner refused: the first scan's command again, into a fresh empty volume at
+    // the path the first scan saved to
+    const again = scans.find((r) => r.name === `nextlevel-scan-${first.id}` && !r.args.includes('--dry-run'));
+    const outVol = path.join(p.env.HOME, '.fake-docker', 'volumes', `nextlevel-sec-out-${first.id}`);
+    fs.mkdirSync(path.join(outVol, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(outVol, 'meta.json'), JSON.stringify({ labels: {}, owner: '10001:10001', mode: '700' }));
+    const r = spawnSync(process.execPath, [path.join(import.meta.dirname, 'stubs', 'fake-docker.mjs'), 'run', ...again.args], { env: { ...process.env, ...p.env }, encoding: 'utf8' });
+    assert.equal(r.status, 2, r.stdout + r.stderr);
+    assert.match(r.stderr, /The scan artifact directory belongs to an existing scan/);
   } finally {
     p.cleanup();
   }

@@ -2191,3 +2191,11 @@ One entry each: date, decision, why, alternatives.
   to the hub (more moving parts, and the worker can still reach the files), or waiting for the agents' Windows user
   (2B-2, which needs the spike first). The typed notes and the look after each attempt became their own pull request
   (2B-1a2) to keep this one reviewable.
+- 2026-11-11 - **Each security scan writes its output to a path of its own (`/output/scan-<scan id>`).** The scanner's
+  state, the project's state volume, records every saved scan by its output folder's path and refuses to save a later
+  scan into a path an earlier one has ("The scan artifact directory belongs to an existing scan"), whatever the folder
+  holds now. With one fixed path only a project's first scan could save: every later one ran and
+  ended "couldnt". Alternative: `--archive-existing`, which renames the earlier scan's folder to a sibling and needs
+  its artifacts there; here that folder was a volume removed after its copy-out, and the new one is a fresh mount, so
+  the scanner refuses that too. Another alternative, a state volume per scan, would lose the scanner's record of earlier
+  scans. The dry run uses the scan's path in a volume of its own, so it stays exactly the scan's command.

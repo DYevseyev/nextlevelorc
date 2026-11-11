@@ -474,7 +474,7 @@ export async function cmdScanProcess(what, ctx) {
     const kbHashes = { role: sha256(role), policy: pol ? pol.hash : '' };
     writeScan(stateDir, id, { role: kbHashes.role.slice(0, 12), policy: pol ? pol.hash.slice(0, 12) : '' });
     const minutes = deep ? config.security.deepScanMinutes : config.security.scanMinutes;
-    const spec = { id, checkout: slot, kb, policy: !!pol, vols, seccomp, memory: memoryLimit(os.totalmem()), model: p.model, effort: p.effort, deep, daybreak: p.daybreak, maxMinutes: minutes };
+    const spec = { id, scanId: id, checkout: slot, kb, policy: !!pol, vols, seccomp, memory: memoryLimit(os.totalmem()), model: p.model, effort: p.effort, deep, daybreak: p.daybreak, maxMinutes: minutes };
     // Web search off and approvals never, accepted by this scanner (V4): its dry run, no model
     // (into an output volume of its own, so the scan's starts empty)
     const dryVols = { ...vols, out: `${vols.out}-dry` };
