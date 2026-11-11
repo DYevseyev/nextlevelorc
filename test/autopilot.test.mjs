@@ -749,6 +749,10 @@ test('rounds whose engine never starts: what started them waits, the hour counts
     assert.deepEqual(card.action, { label: 'Turn on autopilot', post: '/api/autopilot', body: { on: true } });
     // Fixed (the hook gone), turned on: the note's round runs, its engine starts, and the count starts again
     await stopHub(p, bg);
+    // (the fix takes the owner a minute: a ledger line's end is the test clock less how long ago, in real time, the
+    // round's process ended, so with the clock standing still the three rounds' ends would differ only by how soon the
+    // hub saw each one end, and the order the ledger reads them in would be a race)
+    clock.add(1);
     bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
     assert.equal((await api.post('/api/autopilot', { on: true })).status, 200);
     await until(p, 'the note\'s round to run', () => ended(p) === 3);
