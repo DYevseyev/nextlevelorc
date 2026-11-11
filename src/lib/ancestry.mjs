@@ -200,6 +200,44 @@ function windowsDir(env) {
   const v = String(env.SystemRoot || env.SYSTEMROOT || '');
   return /^[A-Za-z]:\\Windows$/i.test(v) ? v : 'C:\\Windows';
 }
+// The environment Windows' PowerShell lists the processes in: what Windows gives every program, made here from the OS
+// (Windows' folder, the OS's home for this account, its name), never from the caller's environment, so no variable a
+// worker set (PSModulePath, a .NET profiler's COR_*) reaches it. With only SystemRoot, windir and SystemDrive,
+// PowerShell 5.1 gave no answer in 20 s on GitHub's Windows runner (the first Windows run of 2B-1a).
+export function windowsEnv(winDir, { home = osHome(), user = os.userInfo().username, host = os.hostname() } = {}) {
+  const drive = winDir.slice(0, 2);
+  const sys = path.win32.join(winDir, 'System32');
+  const local = path.win32.join(home, 'AppData', 'Local');
+  const temp = path.win32.join(local, 'Temp');
+  return {
+    SystemRoot: winDir,
+    windir: winDir,
+    SystemDrive: drive,
+    ComSpec: path.win32.join(sys, 'cmd.exe'),
+    PATH: [sys, winDir, path.win32.join(sys, 'Wbem'), path.win32.join(sys, 'WindowsPowerShell', 'v1.0')].join(';'),
+    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    PSModulePath: path.win32.join(sys, 'WindowsPowerShell', 'v1.0', 'Modules'),
+    USERPROFILE: home,
+    HOMEDRIVE: home.slice(0, 2),
+    HOMEPATH: home.slice(2),
+    APPDATA: path.win32.join(home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: local,
+    TEMP: temp,
+    TMP: temp,
+    ProgramData: `${drive}\\ProgramData`,
+    ProgramFiles: `${drive}\\Program Files`,
+    'ProgramFiles(x86)': `${drive}\\Program Files (x86)`,
+    ProgramW6432: `${drive}\\Program Files`,
+    CommonProgramFiles: `${drive}\\Program Files\\Common Files`,
+    'CommonProgramFiles(x86)': `${drive}\\Program Files (x86)\\Common Files`,
+    CommonProgramW6432: `${drive}\\Program Files\\Common Files`,
+    PUBLIC: `${drive}\\Users\\Public`,
+    ALLUSERSPROFILE: `${drive}\\ProgramData`,
+    USERNAME: user,
+    COMPUTERNAME: host,
+    OS: 'Windows_NT',
+  };
+}
 // The chain of this process's parents: { chain } | { late: true } | { error }
 export async function ownChain({ pid = process.pid, platform = process.platform, env = process.env, installed, listing = listProcesses } = {}) {
   const wait = installed ? LIST_WAIT_MS : listWaitMs(env);
@@ -210,7 +248,7 @@ export async function ownChain({ pid = process.pid, platform = process.platform,
   }
   const win = platform === 'win32';
   const winDir = windowsDir(env);
-  const own = win ? { SystemRoot: winDir, windir: winDir, SystemDrive: winDir.slice(0, 2) } : { PATH: '/usr/bin:/bin', LC_ALL: 'C', LANG: 'C' };
+  const own = win ? windowsEnv(winDir) : { PATH: '/usr/bin:/bin', LC_ALL: 'C', LANG: 'C' };
   if (win && !fs.existsSync(path.win32.join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))) return { error: "Windows' PowerShell wasn't found at its own path" };
   const r = await listing({ timeoutMs: wait, platform, env: own });
   if (r.late || r.error) return r;

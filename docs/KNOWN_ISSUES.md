@@ -1094,6 +1094,12 @@ still gets past it:
   `Get-CimInstance Win32_Process`): about 0.7 s on the owner's PC (the spike's S10: median 0.70 s, 0.64 to 1.4 s, idle)
   and more on a busy GitHub runner. It is paid only by a command that acts while something is recorded; on Linux the
   chain is read from `/proc` with no program started.
+- **PowerShell's environment.** The listing's PowerShell gets an environment made from the OS (`windowsEnv`: Windows'
+  folder, the account's home from `os.userInfo()`, its profile folders, `PSModulePath` pinned to Windows' own modules),
+  none of the caller's values, so a worker's `PSModulePath` or `.NET` profiler variables (`COR_*`) reach nothing. With
+  only `SystemRoot`, `windir` and `SystemDrive`, Windows PowerShell 5.1 gave no answer in 20 s on GitHub's Windows
+  runner, every time, while the hub's own listing in the same run answered in seconds: every command that acted while a
+  worker ran was refused.
 - **No listing.** When the listing doesn't answer in 20 s while something is recorded, the command refuses unless it
   carries a live session token of the orchestrator (its window and each round get one, `NEXTLEVEL_SESSION_TOKEN`).
 - **A process outside the tree.** A worker that starts a process whose parent chain doesn't reach its `_run` (one that

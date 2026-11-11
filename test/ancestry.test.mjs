@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { addAgent, addSession, agentsHome, allRecords, ancestryRefusal, chainIn, installedTool, looksOnly, readRecord, removeAgents, underAgent } from '../src/lib/ancestry.mjs';
+import { addAgent, addSession, agentsHome, allRecords, ancestryRefusal, chainIn, installedTool, looksOnly, ownChain, readRecord, removeAgents, underAgent, windowsEnv } from '../src/lib/ancestry.mjs';
 import { withoutTool } from '../src/lib/workerspec.mjs';
 import { makeProject, makeSandbox } from './helpers.mjs';
 
@@ -64,6 +64,30 @@ test("the record's home: the OS's for an installed version, never HOME; os.homed
     process.env.USERPROFILE = home;
   }
   assert.deepEqual(withoutTool([path.join(os.homedir(), '.nextlevel', 'bin'), '/usr/bin'].join(path.delimiter), [path.join(os.homedir(), '.nextlevel', 'bin')]), '/usr/bin');
+});
+
+test("Windows' listing runs in an environment made from the OS, never the caller's: what PowerShell needs to answer, its own modules only", async () => {
+  const env = windowsEnv('C:\\Windows', { home: 'C:\\Users\\owner', user: 'owner', host: 'PC1' });
+  assert.equal(env.PSModulePath, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules');
+  assert.equal(env.LOCALAPPDATA, 'C:\\Users\\owner\\AppData\\Local');
+  assert.equal(env.TEMP, 'C:\\Users\\owner\\AppData\\Local\\Temp');
+  assert.equal(env.USERPROFILE, 'C:\\Users\\owner');
+  for (const name of ['SystemRoot', 'windir', 'ComSpec', 'PATH', 'APPDATA', 'ProgramFiles', 'ProgramData', 'COMPUTERNAME', 'USERNAME']) assert.ok(env[name], name);
+  // What a worker sets reaches nothing: the listing gets exactly windowsEnv's, whatever the caller's environment says
+  let seen = null;
+  const listing = async ({ env: e }) => ((seen = e), { list: [{ pid: 7, ppid: 1, start: 0 }] });
+  const planted = { SystemRoot: 'D:\\evil', PSModulePath: 'D:\\evil', COR_ENABLE_PROFILING: '1', COR_PROFILER_PATH: 'D:\\evil\\p.dll', TEMP: 'D:\\evil' };
+  const r = await ownChain({ pid: 7, platform: 'win32', env: planted, installed: true, listing });
+  if (process.platform !== 'win32') {
+    // No Windows here: the listing never starts without Windows' own PowerShell at its fixed path
+    assert.equal(seen, null);
+    assert.match(r.error, /PowerShell wasn't found at its own path/);
+    return;
+  }
+  assert.deepEqual(r, { chain: [] });
+  assert.deepEqual(seen, windowsEnv('C:\\Windows'));
+  assert.ok(!Object.values(seen).some((v) => String(v).includes('evil')));
+  assert.equal(seen.COR_ENABLE_PROFILING, undefined);
 });
 
 test('a command under a recorded process is refused and logged, for any project; one that only looks runs; a failed listing needs a session token', async () => {
