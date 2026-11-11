@@ -8,11 +8,21 @@
 // container has for the PC point nowhere (--add-host): that renames the host and is no wall (KNOWN_ISSUES).
 import { createHash } from 'node:crypto';
 import { CODEX_JS, SCAN_USER, imageRef } from './securityimage.mjs';
+import { SCAN_ID } from './securityscan.mjs';
 
 // Where each volume is in the container
 export const STATE_AT = '/output/.codex-security-state';
 export const LOGIN_AT = `${STATE_AT}/codex-home`;
 export const OUT_AT = '/output/scan';
+// Where a scan writes its output: a path of its own per scan. The scanner's state (the project's state volume) records
+// each scan's output folder by its path and refuses a second scan into a path an earlier one saved to ("The scan
+// artifact directory belongs to an existing scan"), so one fixed path let only a project's first scan save.
+// --archive-existing is no way out: it renames the old folder beside the new one, and here each scan's folder is a
+// fresh, empty volume of its own. The copy-out's container mounts the volume at OUT_AT (it runs no scanner).
+export const scanOutAt = (scanId) => {
+  if (!SCAN_ID.test(scanId || '')) throw new Error(`not a scan id: ${scanId}`);
+  return `${OUT_AT}-${scanId}`;
+};
 export const REPO_AT = '/input/repository';
 export const KB_AT = '/input/kb';
 export const POLICY_FILE = 'policy.md';
@@ -93,10 +103,10 @@ export function statProblem(out, vols) {
 }
 
 // The scan's arguments after the image (the exact spelling Step 0b ran, with web search off: delta 2 V4)
-export function scanCommand({ model, effort, deep = false, daybreak = false, maxMinutes, policy = false, role = false, dryRun = false }) {
+export function scanCommand({ scanId, model, effort, deep = false, daybreak = false, maxMinutes, policy = false, role = false, dryRun = false }) {
   return [
     'scan', REPO_AT,
-    '--output-dir', OUT_AT,
+    '--output-dir', scanOutAt(scanId),
     '--headless', // (the scanner's own flag, inside its Linux container: no Windows console host, FR-013)
     '--auth', 'chatgpt',
     '--mode', deep ? 'deep' : 'standard',
@@ -114,7 +124,8 @@ export function scanCommand({ model, effort, deep = false, daybreak = false, max
 
 // `docker run` for the scan itself: its name (so Stop and the time limit stop it), the checkout and the policy read-only,
 // the three volumes, limits, and nothing else. kb: the hub's folder with the role doc (role.md) and, once the owner
-// approved one, the policy (policy.md); policy: whether it holds one.
+// approved one, the policy (policy.md); policy: whether it holds one. scanId: the scan's id, which names its output's
+// path (its dry run has the same, in a volume of its own: exactly the scan's command).
 export function scanRunArgs({ id, checkout, kb = '', policy = false, vols, seccomp, memory, ...command }) {
   return [
     'run', '--rm', '--init', '--name', containerName(id),
@@ -123,7 +134,7 @@ export function scanRunArgs({ id, checkout, kb = '', policy = false, vols, secco
     ...NO_HOST_NAMES,
     ...bindMount(checkout, REPO_AT),
     ...(kb ? bindMount(kb, KB_AT) : []),
-    ...volumeMount(vols.out, OUT_AT),
+    ...volumeMount(vols.out, scanOutAt(command.scanId)),
     ...volumeMount(vols.state, STATE_AT),
     ...volumeMount(vols.login, LOGIN_AT),
     imageRef(),
