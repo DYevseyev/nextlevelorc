@@ -73,7 +73,7 @@ import readline from 'node:readline/promises';
 import tty from 'node:tty';
 import { makeContext } from './checks/context.mjs';
 import { TRIALS, TRIAL_NO_ANSWER_MS, agyTrial, agyTrialSpec, githubRepo, keptTrial, trialStands } from './checks/engines.mjs';
-import { jsonStore, userState } from './lib/home.mjs';
+import { homeDir, jsonStore, userState } from './lib/home.mjs';
 import { parseVersion, versionText } from './checks/lib.mjs';
 import { byId, runChecks } from './checks/index.mjs';
 import { dailyReport } from './daily-report.mjs';
@@ -127,7 +127,8 @@ import { reviewStore, reviewTitle } from './lib/reviews.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
-import { addAgent, addSession, agentsHome, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
+import { addAgent, addSession, agentsHome, installedTool, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
+import { LOOK, changeWords, diffLook, readLookRecord, takeLook, writeLookRecord } from './lib/toollook.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
 import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
@@ -136,7 +137,7 @@ import { codexWorkersView, engineChoices, jobModel, teamView, windowView } from 
 import { attemptTally, taskAlerts as findAlerts, taskSentence, taskTitle } from './lib/overview.mjs';
 import { asksToMerge, hasConflictMarkers, mergeText } from './lib/slotgit.mjs';
 import { lockNote, readEnv, retryOnLock, retryOnLockAsync } from './lib/gitlock.mjs';
-import { ABSENT, contentHash, diffTexts, guardStore, inProject, linkOnTheWay, projectKey as guardProjectKey, recordOwner, shownDiff } from './lib/guard.mjs';
+import { ABSENT, contentHash, diffTexts, guardDir, guardStore, inProject, linkOnTheWay, projectKey as guardProjectKey, recordOwner, shownDiff } from './lib/guard.mjs';
 import { describeGitChange, diffGitState, folderName, readGitState, same as sameFolder, stateKey } from './lib/gitguard.mjs';
 import { describeSecretFile, findSecrets, isEnvFile, redactSecrets, secretValues } from './lib/secrets.mjs';
 import { describeChanges, isProtected, pathKey, protectedList, protectedOwned } from './lib/protect.mjs';
@@ -877,6 +878,7 @@ function summary(s) {
   if (mergeText(s.merge)) bits.push(mergeText(s.merge));
   if (s.detail) bits.push(s.detail);
   // (FR-017 part 2B: nextlevel commands its worker or verify ran, refused by their ancestry)
+  if (s.toolChange) bits.push(`nextlevel's own code or your git settings changed while it ran (${String(s.toolChange).slice(0, 200)})`);
   if (Array.isArray(s.refused) && s.refused.length) bits.push(`${s.refused.length} nextlevel command(s) from its worker refused (${[...new Set(s.refused.map((r) => r.command))].join(', ')})`);
   if (s.state === 'queued' && s.waiting) bits.push(`waiting: ${s.waiting}`);
   if (s.error) bits.push(s.stoppedOutside ? s.error.replace(/^stopped from outside: /, '') : s.error);
@@ -1378,6 +1380,7 @@ function statusData(jobs = allJobs(), st = runState()) {
     askTripwire: getSettings().askTripwire || null, // the project changed while the assistant on Antigravity answered
     blockAlert: blockAlertView(), // a round on Antigravity that ran commands clearing the push block (lib/blockwatch.mjs)
     slotEscape: slotEscapeView(), // a worker that did something outside its slot (lib/slotwatch.mjs)
+    toolChange: toolChangeView(), // nextlevel's own code or the owner's git settings changed (the look after each attempt)
     workers: workersView(), // which workers there are, on which engine and model, and what each takes
   };
 }
@@ -2436,6 +2439,7 @@ async function finishTask(id, reason = '', extra = {}) {
   const detail = gitProblem || resultProblem || resultNote || reviewNote || (endError && !missing ? `${title} ended with an error: ${end.reason || end.status} (exit ${end.code ?? 'unknown'})` : '');
   const ownFields = { ownCommits: ownCount, ownDiffStat: own && !own.lost ? own.diffStat : '', ownLost: own?.lost ? own.tip : null };
   workerOutside(id, s, wt, job.attempt || 1); // (what it did outside its slot: before the attempt reads as ended)
+  lookAgain(`after attempt ${job.attempt || 1} of ${id}`, [id, ...runningTasks(id)]); // (nextlevel's own code and the owner's git settings: 3.4)
   // (its verify has ended: the attempt leaves the record; the commands its worker or verify ran that were refused flag it)
   forgetAgents((a) => a.kind === 'worker' && a.task === id);
   const refused = refusalsFor(ROOT, id, s.startedAt, { home: AGENTS_HOME });
@@ -2585,6 +2589,77 @@ const slotEscapeView = () => {
 function slotEscapeSeen(say = (m) => console.log(m)) {
   setSetting('slotEscape', null);
   say('Marked as seen.');
+}
+
+// ---------- the look after each attempt (FR-017 part 2B, 2B-1a3: lib/toollook.mjs) ----------
+// After each attempt and at the hub's start, nextlevel's own files, its clone's origin, ~/.nextlevel/bin and the owner's
+// global git settings are compared with the last look. A change stops dispatch (tasks wait in the queue; checks, pushes
+// and git jobs go on) until the owner's Seen on the dashboard, with a Home card naming it, the attempts that ran since
+// the last look flagged, and one phone message. After the fact, never a bar: a worker can change them in layer 1. The
+// record is in the guard's folder (outside every project); the hub writes it, and the dashboard's Seen.
+const lookFile = () => path.join(guardDir(ROOT, AGENTS_HOME), LOOK);
+// The tool's clone, when nextlevel runs from a version folder beside it: versions.json's store, else ~/.nextlevel/tool
+function toolClone() {
+  if (!installedTool(TOOL_ROOT, { home: path.dirname(homeDir()) })) return '';
+  let dir = path.join(homeDir(), 'tool');
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(homeDir(), 'versions.json'), 'utf8'));
+    if (typeof v?.store === 'string' && v.store) dir = v.store;
+  } catch {
+    // no versions.json: the default folder
+  }
+  return fs.existsSync(dir) && !sameFolder(folderName(dir), folderName(TOOL_ROOT)) ? dir : '';
+}
+// git that runs nothing of what it looks at: no fsmonitor, an empty hooks folder, no optional locks
+function lookGit(args, cwd) {
+  const none = path.join(path.dirname(lookFile()), 'no-hooks');
+  fs.mkdirSync(none, { recursive: true });
+  const r = spawnSync('git', ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${none}`, '--no-optional-locks', ...args], { cwd, env: readEnv(), encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  return { ok: r.status === 0, out: r.stdout || '' };
+}
+const lookNow = () => takeLook({ git: lookGit, version: TOOL_ROOT, clone: toolClone(), bin: path.join(homeDir(), 'bin'), home: os.homedir() });
+const runningTasks = (but) => allJobs().filter((j) => j.type === 'task' && j.id !== but && ['running', 'verifying'].includes(j.state)).map((j) => j.id);
+function lookAgain(when, tasks = []) {
+  let rec;
+  let now;
+  try {
+    rec = readLookRecord(lookFile());
+    now = lookNow();
+  } catch (err) {
+    log(`couldn't look at nextlevel's own files and your git settings ${when}: ${err.message}`);
+    return;
+  }
+  const changes = rec.base ? diffLook(rec.base, now) : [];
+  // (the new look is the next one's base, so a change is said once; an unseen change keeps waiting, with what came since)
+  let change = rec.change;
+  if (changes.length) {
+    const parts = new Map((change?.changes || []).map((c) => [c.part, c]));
+    for (const c of changes) parts.set(c.part, { ...c, items: [...new Set([...(parts.get(c.part)?.items || []), ...c.items])].slice(0, 12) });
+    change = { at: change?.at || now.at, when: change?.when || when, tasks: [...new Set([...(change?.tasks || []), ...tasks])].slice(0, 20), changes: [...parts.values()] };
+  }
+  try {
+    writeLookRecord(lookFile(), { base: now, change });
+  } catch (err) {
+    log(`couldn't keep the look at nextlevel's own files: ${err.message}`);
+  }
+  if (!changes.length) return;
+  const words = changeWords(changes);
+  for (const t of tasks) setStatus(t, { toolChange: words.join('; ').slice(0, 1000) });
+  const who = tasks.length ? ` (attempts that ran since the last look: ${tasks.join(', ')})` : '';
+  log(`${when}, nextlevel's own code or your git settings changed and nextlevel didn't change them: ${words.join(' | ')}${who}. Dispatch waits for your Seen on the dashboard`);
+  if (!rec.change) queueNotify(`${NAME}: nextlevel's own files changed`, `Found ${when}: ${words.join('; ').slice(0, 600)}${who}. Nothing was undone. No task starts until you press Seen on the dashboard (Home).`, 'high', 'warning');
+}
+// Whether tasks wait for the owner's Seen, and what their status says meanwhile
+const LOOK_WAIT = "nextlevel's own files or your git settings changed: no task starts until you press Seen on Home";
+const toolLookWaits = () => !!readLookRecord(lookFile()).change;
+const toolChangeView = () => {
+  const c = readLookRecord(lookFile()).change;
+  return c ? { at: c.at, when: c.when, tasks: c.tasks, changes: changeWords(c.changes) } : null;
+};
+function toolChangeSeen(say = (m) => console.log(m)) {
+  // (what is there now is the base the next look compares with)
+  writeLookRecord(lookFile(), { base: lookNow(), change: null });
+  say('Marked as seen: tasks start again.');
 }
 
 async function stoppedFromOutside(s, run) {
@@ -5085,6 +5160,8 @@ async function pollJobs() {
   const running = new Set([...busy.keys()].map((k) => jobStatus(k)?.type).filter((t) => t && t !== 'task').map(lane));
   // (while dispatch is paused for missing files, tasks wait; checks, pushes and git jobs go on)
   let paused = queued.some((j) => j.type === 'task') && dispatchWaits();
+  // (while nextlevel's own files or the owner's git settings changed unseen, tasks wait for the owner's Seen: 3.4)
+  const looked = queued.some((j) => j.type === 'task') && toolLookWaits();
   // The one-click update's hold (src/updater.mjs holdFor): no task starts, and once its wait has ended no job at all, but
   // its own; what runs goes on. A job it holds says why, and the words go once the hold does.
   const hold = updateHold;
@@ -5096,6 +5173,11 @@ async function pollJobs() {
         continue;
       }
       if (jobStatus(job.id)?.waitingFor === 'update') setStatus(job.id, { waiting: null, waitingFor: null });
+      if (job.type === 'task' && looked) {
+        if (jobStatus(job.id)?.waitingFor !== 'look') setStatus(job.id, { waiting: LOOK_WAIT, waitingFor: 'look' });
+        continue;
+      }
+      if (job.type === 'task' && jobStatus(job.id)?.waitingFor === 'look') setStatus(job.id, { waiting: null, waitingFor: null });
       if (job.type === 'task' && (paused || !freeSlot())) continue; // (it waits for a slot, or for the files a worker needs)
       if (stopped()) {
         // tasks and verify commands wait to start (a verify command runs with the owner's access, FR-017: its status says
@@ -7104,6 +7186,7 @@ async function cmdRun(argv) {
   } catch (err) {
     log(`couldn't record the hub's token for the ancestry check: ${err.message}`);
   }
+  lookAgain('while the hub was stopped'); // (what changed in nextlevel's own code or the owner's git settings since the last look)
   log(`hub started · ${CFG.slots} worker slot(s) in ${SLOTS_ROOT}${ports} · autopilot ${getSettings().autopilot ? 'ON' : 'off'} · Ctrl+C to stop`);
   // A slot held for a stopped worker's processes is looked at once more (a restart of the PC ends them)
   for (const n of Object.keys(heldSlots())) cleanSlot(Number(n));
@@ -7148,7 +7231,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !advisorReview.child && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && j.waitingFor === 'needs')) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !advisorReview.child && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && ['needs', 'look'].includes(j.waitingFor))) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {
@@ -8212,6 +8295,7 @@ function dashboardState() {
     askTripwire: getSettings().askTripwire || null,
     blockAlert: blockAlertView(),
     slotEscape: slotEscapeView(),
+    toolChange: toolChangeView(),
     active,
     queued: jobs.filter((j) => j.state === 'queued').map(pick),
     review: finished.filter((j) => !j.acked).map(pick),
@@ -8592,6 +8676,7 @@ function dashboardApi() {
     checkLockAgain, // Check again on the card of the orchestrator held by its lock test: the hub runs it again
     blockAlertSeen, // Seen, on the card of a round on Antigravity that ran commands clearing the push block
     slotEscapeSeen, // Seen, on the card of a worker that did something outside its slot
+    toolChangeSeen, // Seen, on the card that says nextlevel's own code or the owner's git settings changed
     askEstimate, // the Advisor panel's estimate of what a question sends
     advisorMemory, // the Advisor panel's Memory: list, and the owner's add, edit and remove
     askTripwireSeen: (say = (m) => console.log(m)) => {

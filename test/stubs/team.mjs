@@ -118,6 +118,17 @@ export async function workerTask({ engine, prompt, model = 'default', effort = '
         `saved login: ${attempt('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n' })}\n` +
         `Terminal prompts: ${process.env.GIT_TERMINAL_PROMPT}\n`,
     );
+  } else if (id.includes('toolgit')) {
+    // FR-017 part 2B, 2B-1a3: a worker that changes what runs as the owner and carries no signature: a global git alias
+    // and a file beside the nextlevel command. Harmless (an alias that echoes, a text file); the hub's look after the
+    // attempt must see both.
+    execFileSync('git', ['config', '--global', 'alias.nltest', '!echo guard-test'], { stdio: 'pipe' });
+    const bin = path.join(process.env.NEXTLEVEL_HOME || path.join(os.homedir(), '.nextlevel'), 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'guard-test.txt'), 'guard-test\n');
+    write(`${id}.mjs`, 'export const x = 1;\n');
+    commit('feat: toolgit');
+    report(`Status: DONE\nSummary: changed a global git setting and a file beside the nextlevel command\nCommit: feat: toolgit\n${who}`);
   } else if (id.includes('askhub')) {
     // FR-017 part 2B: a worker that asks the hub for things anyway, every way the design names (3.1); each must be refused
     // by its ancestry, whatever its environment says. "status" only looks, and runs.

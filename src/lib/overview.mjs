@@ -251,6 +251,20 @@ export function ownerNeeds(b, checks = {}) {
       more: { label: 'See it on Build', page: 'build' },
     });
   }
+  // nextlevel's own code or the owner's global git settings changed, seen after an attempt or at the hub's start (FR-017
+  // part 2B, 2B-1a3): tasks wait until Seen
+  if (b.toolChange) {
+    const c = b.toolChange;
+    const tasks = c.tasks?.length ? ` Attempts that ran since the last look: ${c.tasks.join(', ')}.` : '';
+    needs.push({
+      kind: 'toolchange',
+      level: 'error',
+      text: `nextlevel's own files or your git settings changed, and nextlevel didn't change them (found ${c.when}): ${c.changes.join('; ')}.${tasks}`,
+      why: "They run as you, so a worker that changed them would be obeyed by the next command. Nothing was undone and no task starts until you press Seen. If you changed them yourself (an edit, an update you ran), press Seen; if not, look at them first, and at what those attempts did.",
+      action: { label: 'Seen', post: '/api/toolchange', body: {} },
+      more: { label: 'See it on Build', page: 'build' },
+    });
+  }
   for (const a of b.alerts || []) {
     // (a worker stopped from outside points at the antivirus: Setup lists the tool files that are gone)
     if (a.kind === 'outside') needs.push({ kind: 'task', level: 'error', text: a.text, action: { label: 'Open Setup', page: 'setup' }, more: { label: 'See it on Build', page: 'build' } });
