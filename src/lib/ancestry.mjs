@@ -18,6 +18,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { COMMANDS, parseCommand } from './commands.mjs';
 import { readJsonFile, updateJsonFile } from './filelock.mjs';
 import { guardDir } from './guard.mjs';
 import { LIST_WAIT_MS, listProcesses, listWaitMs } from './proctree.mjs';
@@ -29,19 +30,36 @@ export const REFUSED = 'refused.jsonl';
 export const START_SLACK_MS = 2_000;
 const KINDS = new Set(['worker', 'verify', 'check', 'git-job']);
 
-// Whether this nextlevel runs from an installed version's folder (~/.nextlevel/versions/<name>, or a trial home's): then
-// none of the test switches count. A checkout (the tests, a developer) is anything else.
-export const installedTool = (toolRoot) => path.basename(path.dirname(path.resolve(toolRoot))) === 'versions';
-
-// The home the record lives in: the OS's own answer for an installed tool, os.homedir() for a checkout (the tests give
-// each hub a home of its own). The hub and the command ask the same question.
-export function agentsHome({ toolRoot, installed = installedTool(toolRoot) } = {}) {
-  if (!installed) return os.homedir();
+// Whether this nextlevel runs from an installed version's folder (~/.nextlevel/versions/<name>, or a trial home's) or
+// from the tool's clone (the store: ~/.nextlevel/tool, or where the OS home's versions.json says the installer put it;
+// its checkout runs as it is under NEXTLEVEL_LAUNCHED=1): then none of the test switches count. A checkout (the tests,
+// a developer) is anything else.
+const osHome = () => {
   try {
     return os.userInfo().homedir || os.homedir();
   } catch {
     return os.homedir();
   }
+};
+const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+export function installedTool(toolRoot, { home = osHome() } = {}) {
+  const root = path.resolve(toolRoot);
+  if (path.basename(path.dirname(root)) === 'versions') return true;
+  const nl = path.join(home, '.nextlevel');
+  const stores = [path.join(nl, 'tool')];
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(nl, 'versions.json'), 'utf8'));
+    if (typeof v?.store === 'string' && v.store) stores.push(v.store);
+  } catch {
+    // no versions yet: only the default folder
+  }
+  return stores.some((d) => samePath(path.resolve(d).replace(/[\\/]+$/, ''), root));
+}
+
+// The home the record lives in: the OS's own answer for an installed tool, os.homedir() for a checkout (the tests give
+// each hub a home of its own). The hub and the command ask the same question.
+export function agentsHome({ toolRoot, installed = installedTool(toolRoot) } = {}) {
+  return installed ? osHome() : os.homedir();
 }
 
 const recordFile = (root, home) => path.join(guardDir(root, home), RECORD);
@@ -120,7 +138,9 @@ const LOOK = {
   help: () => true,
 };
 export function looksOnly(cmd, rest = []) {
-  if (rest.includes('--help') || rest.includes('-h')) return true;
+  // Help is what the parser reads as help: a "--help" after "--" is an argument (`verify v -- npm test --help` queues a
+  // check), never help
+  if (cmd !== undefined && Object.hasOwn(COMMANDS, cmd) && parseCommand(cmd, rest).help) return true;
   const name = ['--help', '-h'].includes(cmd) ? 'help' : ['--version', '-v'].includes(cmd) ? 'version' : cmd;
   return !!LOOK[name]?.(rest);
 }

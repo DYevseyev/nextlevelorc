@@ -1100,6 +1100,10 @@ still gets past it:
   detaches and outlives it, a scheduled task, `cmd /c start` on Windows) and runs `nextlevel` from it passes. So does a
   worker that writes the hub's files directly (`.nextlevel/queue/`, `wakeup.json`, the cards): signing them is 2B-1b,
   and keeping workers out of the files is the agents' Windows user (2B-2).
+- **nextlevel's code from a checkout of its own.** The test switches (`HOME`/`USERPROFILE` for the record's home,
+  `NEXTLEVEL_PROCESS_LIST_MS`) count only when nextlevel runs from a checkout that is neither a version folder nor the
+  tool's clone. A worker that clones nextlevel's public repository (or copies its code) and runs it from there with
+  another home passes: that is the worker running code of its own that writes the hub's files, as above (2B-1b, 2B-2).
 - **A worker in a window of its own** (`workers.window`) or one an earlier hub run started is recorded from the pid in
   its `run.json` at the hub's next look: a worker that rewrites that file first isn't recorded.
 - **The hub's own git in a slot** (its commit for a worker whose sandbox can't write git) isn't recorded: a hook it runs

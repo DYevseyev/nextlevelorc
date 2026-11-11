@@ -16,7 +16,8 @@ const BIN = path.join(import.meta.dirname, '..', 'bin', 'nextlevel.mjs');
 
 test('which commands only look: they run under a worker; everything else, underscore commands too, acts', () => {
   for (const [cmd, rest] of [['status', []], ['result', ['X']], ['wait', ['--any']], ['usage', []], ['note', ['list']], ['handoff', ['show', 'H1']], ['doctor', ['--json']], ['version', []], ['help', []], ['dispatch', ['--help']], ['close', ['-h']]]) assert.ok(looksOnly(cmd, rest), `${cmd} ${rest.join(' ')}`);
-  for (const [cmd, rest] of [[undefined, []], ['dispatch', ['X']], ['usage', ['--all-projects']], ['note', ['add']], ['handoff', ['answer', 'H1']], ['doctor', ['--fix', 'x']], ['doctor', ['--fix=x']], ['_run', ['X']], ['_update', ['u']], ['team', []], ['update', []], ['channel', ['release']], ['ui', []], ['init', []], ['notify', ['--now']]]) assert.ok(!looksOnly(cmd, rest), `${cmd} ${rest.join(' ')}`);
+  for (const [cmd, rest] of [[undefined, []], ['dispatch', ['X']], ['usage', ['--all-projects']], ['note', ['add']], ['handoff', ['answer', 'H1']], ['doctor', ['--fix', 'x']], ['doctor', ['--fix=x']], ['_run', ['X']], ['_update', ['u']], ['team', []], ['update', []], ['channel', ['release']], ['ui', []], ['init', []], ['notify', ['--now']], ['verify', ['v', '--', 'npm', 'test', '--help']], ['notify', ['--', 'hi', '--help']], ['commit', ['-m', 'x', '--', '-h']], ['dispatch', ['--', '--help']]]) assert.ok(!looksOnly(cmd, rest), `${cmd} ${rest.join(' ')}`);
+  assert.ok(looksOnly('commit', ['-hm', 'x']), 'help is what the parser reads as help (FR-017)');
 });
 
 test("the chain of parents: each parent only if it started no later than its child; a recorded process only if it started by the record's time", () => {
@@ -40,6 +41,18 @@ test("the chain of parents: each parent only if it started no later than its chi
 test("the record's home: the OS's for an installed version, never HOME; os.homedir() for a checkout (the tests)", () => {
   assert.equal(installedTool(path.join('h', '.nextlevel', 'versions', 'v0.3.0')), true);
   assert.equal(installedTool(path.join('src', 'repo')), false);
+  // the tool's clone (the store) counts as installed: run as it is (NEXTLEVEL_LAUNCHED=1), its test switches don't count
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nl-store-'));
+  try {
+    const moved = path.join(fakeHome, 'tools', 'nextlevel');
+    assert.equal(installedTool(path.join(fakeHome, '.nextlevel', 'tool'), { home: fakeHome }), true);
+    assert.equal(installedTool(moved, { home: fakeHome }), false);
+    fs.mkdirSync(path.join(fakeHome, '.nextlevel'), { recursive: true });
+    fs.writeFileSync(path.join(fakeHome, '.nextlevel', 'versions.json'), JSON.stringify({ store: moved }));
+    assert.equal(installedTool(moved, { home: fakeHome }), true, "versions.json's store (NEXTLEVEL_DIR)");
+  } finally {
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  }
   const home = process.env.HOME;
   try {
     process.env.HOME = path.join(os.tmpdir(), 'not-the-home');
@@ -70,8 +83,12 @@ test('a command under a recorded process is refused and logged, for any project;
     assert.match(refused.stderr, /nextlevel dispatch X: refused\. This command runs under task T7's worker: workers don't ask the hub for anything/);
     const log = fs.readFileSync(path.join(allRecords(home)[0].dir, 'refused.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     assert.deepEqual([log[0].task, log[0].kind, log[0].command], ['T7', 'worker', 'dispatch']);
-    // (help never acts, and says what it is)
+    // (help never acts, and says what it is; a "--help" after "--" is an argument, and refused)
     assert.equal(run(['dispatch', '--help']).status, 0);
+    const dashed = run(['--project', proj, 'verify', 'v', '--', 'node', '-e', '0', '--help']);
+    assert.equal(dashed.status, 1);
+    assert.match(dashed.stderr, /nextlevel verify v: refused\. This command runs under task T7's worker/);
+    assert.ok(!fs.existsSync(path.join(proj, '.nextlevel', 'queue')) || !fs.readdirSync(path.join(proj, '.nextlevel', 'queue')).length, 'nothing queued');
     // No listing: refused without a token, run with the orchestrator's
     const late = run(['_update', 'u1'], { NEXTLEVEL_PROCESS_LIST_MS: '0' });
     assert.match(late.stderr, /couldn't list this PC's processes \(no answer in time\) while a worker or a check runs/);
