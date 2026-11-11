@@ -10,6 +10,8 @@ import path from 'node:path';
 import { engine, profileEnv, sessionArgs, workerIsolation } from '../engines/index.mjs';
 import { parseEnvText } from './envfile.mjs';
 import { READ_TOKEN } from './github.mjs';
+import { homeDir } from './home.mjs';
+import { TOOL_ROOT } from './project.mjs';
 
 // ---------- workers can't push (FR-003): what their environment holds ----------
 // A remote helper that doesn't exist, so git fails; ssh that refuses; a GitHub token that doesn't work. The hub uses the
@@ -71,7 +73,22 @@ export function workerEnv(base, { dotenv = [], ghConfig = '' } = {}) {
   for (const k of dotenv) delete env[k];
   delete env[READ_TOKEN]; // (verify commands' GitHub reads, FR-017: never a worker's, wherever it was set)
   delete env.NEXTLEVEL_ROOT;
+  delete env.NEXTLEVEL_HUB_TOKEN; // (FR-017 part 2B: the hub's and the orchestrator's tokens are never a worker's)
+  delete env.NEXTLEVEL_SESSION_TOKEN;
+  // (nextlevel's own command isn't on a worker's PATH: the folder the installer puts it in, which a version puts first
+  // for what it starts, and the tool's bin folder; FR-017 part 2B. A worker that finds it anyway is refused by its
+  // ancestry, lib/ancestry.mjs.)
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  if (key) env[key] = withoutTool(env[key]);
   return { ...env, ...noPushEnv(env), ...(ghConfig ? { GH_CONFIG_DIR: ghConfig } : {}) };
+}
+const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+export function withoutTool(value, dirs = [path.join(homeDir(), 'bin'), path.join(TOOL_ROOT, 'bin')]) {
+  const drop = dirs.map((d) => path.resolve(d));
+  return String(value || '')
+    .split(path.delimiter)
+    .filter((p) => !p || !drop.some((d) => same(path.resolve(p).replace(/[\\/]+$/, ''), d)))
+    .join(path.delimiter);
 }
 
 // How a worker's engine starts: directly, a .cmd shim's program without cmd.exe (lib/proc.mjs spawnDirect, FR-013), and

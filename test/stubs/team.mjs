@@ -118,6 +118,26 @@ export async function workerTask({ engine, prompt, model = 'default', effort = '
         `saved login: ${attempt('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n' })}\n` +
         `Terminal prompts: ${process.env.GIT_TERMINAL_PROMPT}\n`,
     );
+  } else if (id.includes('askhub')) {
+    // FR-017 part 2B: a worker that asks the hub for things anyway, every way the design names (3.1); each must be refused
+    // by its ancestry, whatever its environment says. "status" only looks, and runs.
+    write('askhub.txt', 'asked the hub\n');
+    commit('feat: askhub');
+    const main = path.dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir').toString().trim());
+    const bin = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..', 'bin', 'nextlevel.mjs');
+    const cleared = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^NEXTLEVEL_/i.test(k)));
+    const said = (args, env = process.env) => {
+      const r = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env, cwd: main });
+      const lines = `${r.stderr || ''}${r.stdout || ''}`.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      return `${r.status === 0 ? 'WORKED' : 'refused'} (${lines.find((l) => /refused|runs under/.test(l)) || lines[0] || ''})`;
+    };
+    report(
+      'Status: DONE\n' +
+        `from PATH: ${attempt('nextlevel', ['wakeup', '5', '--reason', 'worker'], { shell: process.platform === 'win32' })}\n` +
+        `full path, variables cleared, --project main: ${said(['--project', main, 'close', 'NOPE-1', '--reason', 'the worker tried'], cleared)}\n` +
+        `no listing (NEXTLEVEL_PROCESS_LIST_MS=0): ${said(['dispatch', 'NOPE-2'], { ...cleared, NEXTLEVEL_PROCESS_LIST_MS: '0' })}\n` +
+        `status: ${said(['status'], cleared)}\n`,
+    );
   } else if (id.includes('merge')) {
     // FR-008: the first attempt changes shared.txt; a retry resolves the conflicts the hub's merge of main left
     // (the files TASK.md lists), unless STUB_LEAVE_CONFLICTS=1

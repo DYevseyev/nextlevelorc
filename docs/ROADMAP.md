@@ -4,8 +4,10 @@ What comes next, roughly in order. nextlevel is a preview: this list changes as 
 field report that blocks someone comes first. `docs/HISTORY.md` has what is done.
 
 ## Safety: from bars to walls
-- **Workers can't reach the hub at all** (FR-017 part 2). Today a worker whose engine runs shell commands can still
-  find the main project's `nextlevel` and its queue; the checks that stop it read variables a worker could clear.
+- **Workers can't reach the hub at all** (FR-017 part 2B, `docs/design/FR-017-part2B.md`). Since 2B-1a a command that
+  acts is refused under a worker by its process ancestry, whatever its variables say. Next: what a worker writes that
+  an owner would (typed notes confirmed on the dashboard, nextlevel's own folders looked at after each attempt), then
+  the hub's files signed (2B-1b).
 - **The agents as another Windows user** (FR-017 part 2B: a separate account, a container or WSL). Every agent runs as
   your own user today, so an engine without its own permission checks can read and write anything you can
   (`docs/KNOWN_ISSUES.md`, "What an agent running as the owner can still do"). This turns what stays open into walls.

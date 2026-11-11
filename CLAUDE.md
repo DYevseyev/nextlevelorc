@@ -186,7 +186,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   without cmd.exe, FR-013), slow answers kept a few minutes, and the tests' trip-wire. `src/lib/proctree.mjs` — what a
   stopped worker left running: one snapshot of all processes (zombies left out), the worker's tree in it by parent ids
   and start times, and `stopProcesses`, which kills a process only by its pid with its start time (the hub's side:
-  workerEnded, heldSlots, cleanSlot). `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
+  workerEnded, heldSlots, cleanSlot). `src/lib/ancestry.mjs` — a command that acts, run under a worker, its verify, a
+  check, a git job or a push, refused by its chain of parent processes (FR-017 part 2B, 2B-1a): the record the hub keeps
+  in the guard's folder (`agents.json`: recordAgent, forgetAgents, agentsTick in `hub.mjs`; runLogged's `agent`), the
+  orchestrator's session token, the look-only list, `refused.jsonl` and the task's `refused`; `test/ancestry.test.mjs`
+  and the stub worker's `askhub` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
   and `CONIN$`); `src/lib/toolfiles.mjs` — the files the tools need, launchers followed to what they run (FR-013);
   `src/lib/slotfiles.mjs` — the hub's files in a worker's slot, never written through a link;
   `src/lib/workerlog.mjs` — a worker's log as plain, redacted text. `src/lib/sandbox.mjs` —

@@ -127,6 +127,7 @@ import { reviewStore, reviewTitle } from './lib/reviews.mjs';
 import { advisorDir, memoryStore } from './lib/advisor.mjs';
 import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
+import { addAgent, addSession, agentsHome, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
 import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
@@ -154,6 +155,9 @@ import { NEEDS, lacks, needsText, needsWords, specNeeds, workersThatCan } from '
 import { KEY_LIMIT, KEY_PROMPT, NO_GH_CONFIG, NO_PUSH, SLOT_PUSH_BLOCK, runKey, workerEnv as sharedWorkerEnv, workerRun } from './lib/workerspec.mjs';
 
 const BIN = path.join(TOOL_ROOT, 'bin', 'nextlevel.mjs');
+// Where the record of what the hub starts for workers and checks lives (FR-017 part 2B, lib/ancestry.mjs): the home
+// the command that checks it reads
+const AGENTS_HOME = agentsHome({ toolRoot: TOOL_ROOT });
 const IS_WIN = process.platform === 'win32';
 
 // Set by setup() once the project is known.
@@ -872,6 +876,8 @@ function summary(s) {
   if (s.commits !== undefined && s.commits !== null) bits.push(commitsText(s));
   if (mergeText(s.merge)) bits.push(mergeText(s.merge));
   if (s.detail) bits.push(s.detail);
+  // (FR-017 part 2B: nextlevel commands its worker or verify ran, refused by their ancestry)
+  if (Array.isArray(s.refused) && s.refused.length) bits.push(`${s.refused.length} nextlevel command(s) from its worker refused (${[...new Set(s.refused.map((r) => r.command))].join(', ')})`);
   if (s.state === 'queued' && s.waiting) bits.push(`waiting: ${s.waiting}`);
   if (s.error) bits.push(s.stoppedOutside ? s.error.replace(/^stopped from outside: /, '') : s.error);
   return bits.join(' · ');
@@ -1900,6 +1906,44 @@ const noConsoleNote = (why) => `The console with no window didn't start on this 
 const NO_CONSOLE_EXIT = 3;
 const endedBeforeStart = (code, signal) => (code === NO_CONSOLE_EXIT ? `its process found no console to give the engine (exit ${code})` : `its process ended before the worker started (exit ${code ?? signal})`);
 
+// The record of what the hub starts for workers and checks (FR-017 part 2B, lib/ancestry.mjs): a command that acts under
+// one of them is refused. Written only by the hub (and an orchestrator's session, its token); a failed write is logged,
+// never fatal: the variables' checks still stand.
+function recordAgent(entry) {
+  try {
+    addAgent(ROOT, entry, { home: AGENTS_HOME });
+  } catch (err) {
+    log(`couldn't record ${entry.kind} ${entry.task || entry.job || ''} (pid ${entry.pid}) for the ancestry check: ${err.message}`);
+  }
+}
+function forgetAgents(pred) {
+  try {
+    removeAgents(ROOT, pred, { home: AGENTS_HOME });
+  } catch (err) {
+    log(`couldn't update the ancestry check's record: ${err.message}`);
+  }
+}
+// Each look: a worker the hub holds no handle for (in a window of its own, or started by an earlier hub run) is recorded
+// from its run.json; an attempt that isn't running or being checked, and a process that has ended, leave the record.
+function agentsTick() {
+  let rec;
+  try {
+    rec = readRecord(ROOT, { home: AGENTS_HOME });
+    pruneSessions(ROOT, { home: AGENTS_HOME });
+  } catch {
+    return;
+  }
+  const live = new Map();
+  for (const s of allJobs()) if (s.type === 'task' && (s.state === 'running' || s.state === 'verifying')) live.set(s.id, s);
+  const stale = rec.agents.filter((a) => (a.kind === 'worker' ? !live.has(a.task) : !alive(a.pid)));
+  if (stale.length) forgetAgents((a) => stale.some((x) => x.pid === a.pid && x.at === a.at));
+  for (const [id, s] of live) {
+    if (s.state !== 'running' || rec.agents.some((a) => a.kind === 'worker' && a.task === id)) continue;
+    const run = readJson(path.join(jobDir(id), 'run.json'));
+    if (Number.isInteger(run?.pid) && !run.endedAt && alive(run.pid)) recordAgent({ pid: run.pid, kind: 'worker', task: id, from: 'run.json' });
+  }
+}
+
 // Starts a worker's process (_run) the way launchMode says, with nothing on the screen unless the owner asked for a
 // window. In every mode the worker writes worker.log itself and its engine prints through pipes; an engine that needs
 // a real console gets the console as its stdin, and never runs without one. No `cmd start` for background work: a new
@@ -1914,7 +1958,8 @@ function launchWorker(n, job, profile, { wt, env }, mode = launchMode(profile), 
   const remembered = mode === 'visible' && CFG.window === 'hidden' && needsConsole(profile.engine) && !note ? consoleBroken() : null;
   setStatus(job.id, { windowMode: mode, launch: { mode, token, at: now(), note: note || (remembered ? noConsoleNote(`${remembered.why}, ${ago((Date.now() - Date.parse(remembered.at)) / 3_600_000)}`) : '') } });
   const args = [BIN, '_run', job.id];
-  const runEnv = { ...env, NEXTLEVEL_LAUNCH: token };
+  // (the hub's token lets its _run start while the process listing fails; _run takes it out of its environment at once)
+  const runEnv = { ...env, NEXTLEVEL_LAUNCH: token, ...(process.env.NEXTLEVEL_HUB_TOKEN ? { NEXTLEVEL_HUB_TOKEN: process.env.NEXTLEVEL_HUB_TOKEN } : {}) };
   let child;
   try {
     if (windowed(mode)) child = openWindow(`${NAME} worker w${n} - ${job.id}`, process.execPath, args, { cwd: wt, env: { ...runEnv, NEXTLEVEL_IN_WINDOW: mode }, minimized: mode === 'minimized' });
@@ -1932,6 +1977,7 @@ function launchWorker(n, job, profile, { wt, env }, mode = launchMode(profile), 
   // Without a window the worker's process is the hub's own child: the hub hears the moment it ends (a window's `cmd
   // start` ends at once, so a worker in a window is looked after like one from an earlier hub run)
   if (child && !windowed(mode)) {
+    if (child.pid) recordAgent({ pid: child.pid, kind: 'worker', task: job.id });
     holding.set(job.id, child);
     child.once('exit', () => {
       if (holding.get(job.id) === child) holding.delete(job.id);
@@ -1973,6 +2019,7 @@ function didntStart(n, job, profile, launch, { mode, token }, why, noConsole = f
 }
 function workerNotStarted(id, why) {
   guardClose(`worker:${id}`); // (it ran nothing: the guard's watch for it ends)
+  forgetAgents((a) => a.kind === 'worker' && a.task === id);
   const s = jobStatus(id);
   setStatus(id, {
     state: 'error',
@@ -1991,11 +2038,17 @@ function workerNotStarted(id, why) {
 // shell sees (a commit message can hold any character).
 // Its output comes through pipes the hub writes to the log: a child given the log's handle instead would get a
 // console window of its own on Windows when the hub has none (FR-010).
-async function runLogged(command, args, { cwd, env = process.env, logFile, timeoutMin, shell = false }) {
+// `agent` ({ kind, task?, job? }): the process is recorded while it runs, so a `nextlevel` command that acts under it is
+// refused (FR-017 part 2B, lib/ancestry.mjs).
+async function runLogged(command, args, { cwd, env = process.env, logFile, timeoutMin, shell = false, agent = null }) {
   fs.appendFileSync(logFile, `\n$ ${[command, ...args].join(' ')}\n`);
   const from = fs.statSync(logFile).size;
   const out = fs.openSync(logFile, 'a');
-  const child = spawn(command, args, { cwd, env, shell, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'] });
+  // (never the hub's or the orchestrator's token: what it runs is recorded, and refused when the listing fails)
+  const { NEXTLEVEL_HUB_TOKEN: _hub, NEXTLEVEL_SESSION_TOKEN: _session, ...ownEnv } = env;
+  const child = spawn(command, args, { cwd, env: agent ? ownEnv : env, shell, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (agent && child.pid) recordAgent({ ...agent, pid: child.pid });
+  if (agent && child.pid) child.once('exit', () => forgetAgents((a) => a.pid === child.pid && a.kind === agent.kind));
   let timedOut = false;
   const t = setTimeout(() => {
     timedOut = true;
@@ -2303,7 +2356,7 @@ async function finishTask(id, reason = '', extra = {}) {
     verify = 'pass';
     const logFile = path.join(d, 'verify.log');
     for (const cmd of job.verify || []) {
-      const r = await runShell(cmd, { cwd: wt, env: slotEnv(s.slot, id), logFile, timeoutMin: CFG.checkTimeoutMin });
+      const r = await runShell(cmd, { cwd: wt, env: slotEnv(s.slot, id), logFile, timeoutMin: CFG.checkTimeoutMin, agent: { kind: 'verify', task: id } });
       if (r.code !== 0) {
         verify = r.timedOut ? 'timeout' : 'fail';
         break;
@@ -2383,10 +2436,14 @@ async function finishTask(id, reason = '', extra = {}) {
   const detail = gitProblem || resultProblem || resultNote || reviewNote || (endError && !missing ? `${title} ended with an error: ${end.reason || end.status} (exit ${end.code ?? 'unknown'})` : '');
   const ownFields = { ownCommits: ownCount, ownDiffStat: own && !own.lost ? own.diffStat : '', ownLost: own?.lost ? own.tip : null };
   workerOutside(id, s, wt, job.attempt || 1); // (what it did outside its slot: before the attempt reads as ended)
+  // (its verify has ended: the attempt leaves the record; the commands its worker or verify ran that were refused flag it)
+  forgetAgents((a) => a.kind === 'worker' && a.task === id);
+  const refused = refusalsFor(ROOT, id, s.startedAt, { home: AGENTS_HOME });
+  if (refused.length) log(`${id}: its worker or verify ran ${refused.length} nextlevel command(s) that were refused (${[...new Set(refused.map((r) => r.command))].join(', ')}): workers don't ask the hub for anything`);
   // its tokens where its engine printed them (FR-008): in the attempt's entry (the usage ledger's per task) and the day's numbers
   const eng = adapterOf(s.engine);
   const tokens = eng ? eng.tokens(attemptLog(id, s)) : null;
-  setStatus(id, { state, verify, claimed, exitCode: run.exitCode ?? null, commits: commits.length, diffStat, minutes, finishedAt: now(), acked: false, merge, hubCommit, reportFile: reportFile || null, engineEnd: end, engineError: failure, missing, mark, tokens: tokens ? tokensOf(tokens) : null, ...ownFields, ...(detail ? { detail } : {}), ...extra });
+  setStatus(id, { state, verify, claimed, exitCode: run.exitCode ?? null, commits: commits.length, diffStat, minutes, finishedAt: now(), acked: false, merge, hubCommit, reportFile: reportFile || null, engineEnd: end, engineError: failure, missing, mark, tokens: tokens ? tokensOf(tokens) : null, ...ownFields, refused: refused.length ? refused : null, ...(detail ? { detail } : {}), ...extra });
   addAttempt(id);
   if (failure) log(`${id}: ${failureLine(title, failure)}`);
   // The day's numbers and the usage ledger: this attempt's minutes and tokens, with who ran it and how it ended
@@ -3236,15 +3293,16 @@ async function cmdLockTryProcess(what) {
 // it is the role's run (lib/rolespec.mjs: the push block, nextlevel's agent written into the project first); it throws
 // when the push block can't be made. Whether it may start (its lock test) is the caller's to ask: lockProblem, lockGate.
 function orchestratorSession(profile, { mode, prompt, timeoutMin = CYCLE_MIN }) {
+  const session = sessionToken(mode);
   if (needsLockTest(profile, 'orchestrator')) {
     const run = roleRun({ profile, role: 'orchestrator', mode, prompt, timeoutMin, engineArgs: CFG.args('agy'), version: agyVersionNow(), env: withProfile(childEnv(), profile), root: ROOT });
     if (run.problem) throw new Error(`Not starting the orchestrator on Antigravity: ${run.problem}`);
     writeRoleFiles(run.files);
-    const env = { ...run.env };
+    const env = { ...run.env, ...session };
     delete env.NEXTLEVEL_CYCLE_LOG;
     return { args: run.args, env };
   }
-  const env = { ...withProfile(childEnv(), profile), NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_SESSION: mode === 'headless' ? 'autopilot' : 'interactive' };
+  const env = { ...withProfile(childEnv(), profile), NEXTLEVEL_AGENT: 'orchestrator', NEXTLEVEL_SESSION: mode === 'headless' ? 'autopilot' : 'interactive', ...session };
   delete env.NEXTLEVEL_CYCLE_LOG;
   // (its engine's version: Codex's Daybreak pin, security engineer 1b-1)
   const version = pinVersion(profile, env);
@@ -3252,6 +3310,24 @@ function orchestratorSession(profile, { mode, prompt, timeoutMin = CYCLE_MIN }) 
   // (on top, what keeps the commands it runs from opening windows of their own: Codex's --no-daemon, FR-011)
   const extra = windowArgs(profile, (cmd, a) => runQuiet(cmd, a, { cwd: ROOT, env }));
   return { args: sessionArgs(profile, { mode, role: 'orchestrator', prompt, args: CFG.args(profile.engine), extra, version }), env };
+}
+// The orchestrator's session token (FR-017 part 2B, lib/ancestry.mjs): when the process listing can't be had while a
+// worker runs, its commands still run with it. In its environment only; the record keeps its hash while this process
+// (the window's _orch or a round's _cycle) runs. -> { NEXTLEVEL_SESSION_TOKEN } or {} when it couldn't be recorded
+function sessionToken(mode) {
+  try {
+    const token = addSession(ROOT, { kind: mode === 'headless' ? 'round' : 'window', home: AGENTS_HOME });
+    process.once('exit', () => {
+      try {
+        removeSession(ROOT, token, { home: AGENTS_HOME });
+      } catch {
+        // the hub's look removes it once this process is gone
+      }
+    });
+    return { NEXTLEVEL_SESSION_TOKEN: token };
+  } catch {
+    return {};
+  }
 }
 // The version of a profile's engine, where its session's arguments depend on it (Codex's Daybreak pin from 0.163,
 // security engineer 1b-1): '' for the others
@@ -3367,8 +3443,8 @@ async function runCheck(job) {
   let r;
   try {
     r = doctor
-      ? await runLogged(process.execPath, [BIN, '--project', ROOT, '--no-update', 'doctor', ...flags], { cwd: ROOT, env: setup.env, logFile, timeoutMin })
-      : await runShell(command, { cwd: ROOT, env: setup.env, logFile, timeoutMin });
+      ? await runLogged(process.execPath, [BIN, '--project', ROOT, '--no-update', 'doctor', ...flags], { cwd: ROOT, env: setup.env, logFile, timeoutMin, agent: { kind: 'check', job: job.id } })
+      : await runShell(command, { cwd: ROOT, env: setup.env, logFile, timeoutMin, agent: { kind: 'check', job: job.id } });
   } finally {
     guardClose(key);
   }
@@ -3615,7 +3691,7 @@ async function pushBranch(job) {
   }
   if (!rec && (isDeploy || prot.held)) return holdPush(job, { target, from, sha, there, range, why: isDeploy ? deploy.why(target) : '', prot }, end);
   fs.appendFileSync(logFile, `${from} at ${short(sha)} to ${target} on ${REMOTE}: ${range.count} commit(s)${range.oldest ? ` since ${day(range.oldest)}` : ''}, ${there ? `${short(there)}..${short(sha)}` : 'a new branch'}; asked by ${entry.by || '?'}${entry.source ? ` (${entry.source})` : ''}${rec ? `; approved by the owner on the dashboard (${rec.id}${rec.card ? `, card ${rec.card}` : ''})` : ''}\n`);
-  const r = await runLogged('git', pushArgs(sha, target), { cwd: ROOT, env, logFile, timeoutMin: 5 });
+  const r = await runLogged('git', pushArgs(sha, target), { cwd: ROOT, env, logFile, timeoutMin: 5, agent: { kind: 'git-job', job: job.id } });
   if (r.code !== 0) {
     if (rec) guard().held.update(rec.id, { status: 'failed', detail: `the push ended with exit code ${r.code}: nothing went out` });
     return refuse(`the push ended with exit code ${r.code}${r.timedOut ? ' (it took too long)' : ''}: ${gitSaid(r.out)}`, { code: r.code });
@@ -4892,7 +4968,7 @@ async function runGitJob(job) {
   const run = async (args, { literal = false } = {}) => {
     log(`${job.id}: git ${args.join(' ')}`);
     const r = await retryOnLockAsync(async () => {
-      const p = await runLogged('git', args, { cwd: ROOT, env: literal ? { ...env, GIT_LITERAL_PATHSPECS: '1' } : env, logFile, timeoutMin: CFG.checkTimeoutMin });
+      const p = await runLogged('git', args, { cwd: ROOT, env: literal ? { ...env, GIT_LITERAL_PATHSPECS: '1' } : env, logFile, timeoutMin: CFG.checkTimeoutMin, agent: { kind: 'git-job', job: job.id } });
       return { ...p, ok: p.code === 0 };
     });
     if (r.tries > 1) log(`${job.id}: git ${args[0]} found index.lock held; ${r.ok ? `it went through after ${(r.waited / 1000).toFixed(1)} s` : `still held after ${(r.waited / 1000).toFixed(1)} s`}`);
@@ -4935,6 +5011,7 @@ function track(id, promise) {
 }
 
 async function pollJobs() {
+  agentsTick();
   // Git's own hooks and settings are looked at before the hub's git work (starting a task, checking one, a commit, a
   // merge, a push): a change the hub didn't make stops all of it until the owner decides (gitGuard). Looked at once,
   // when there is git work to do.
@@ -7012,6 +7089,21 @@ async function cmdRun(argv) {
     log(`WARNING: ${err.message}`);
   }
   const startedAt = now();
+  // The hub's own token (FR-017 part 2B): what it starts runs while the process listing fails and a worker runs; its hash
+  // in the record while this hub runs, the token in its environment only (lib/ancestry.mjs)
+  try {
+    const hubToken = addSession(ROOT, { kind: 'hub', home: AGENTS_HOME });
+    process.env.NEXTLEVEL_HUB_TOKEN = hubToken;
+    process.once('exit', () => {
+      try {
+        removeSession(ROOT, hubToken, { home: AGENTS_HOME });
+      } catch {
+        // the next hub's look removes it
+      }
+    });
+  } catch (err) {
+    log(`couldn't record the hub's token for the ancestry check: ${err.message}`);
+  }
   log(`hub started · ${CFG.slots} worker slot(s) in ${SLOTS_ROOT}${ports} · autopilot ${getSettings().autopilot ? 'ON' : 'off'} · Ctrl+C to stop`);
   // A slot held for a stopped worker's processes is looked at once more (a restart of the PC ends them)
   for (const n of Object.keys(heldSlots())) cleanSlot(Number(n));

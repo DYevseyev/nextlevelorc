@@ -11,6 +11,7 @@ import { makeContext } from './checks/context.mjs';
 import { doctorOptions, runDoctor } from './doctor.mjs';
 import { HUB_COMMANDS, runHub } from './hub.mjs';
 import { readOnly, readOnlyRefusal } from './lib/readonly.mjs';
+import { ancestryRefusal } from './lib/ancestry.mjs';
 import { cmdFix, fixStore, followFixes } from './fix.mjs';
 import { cmdInit } from './init.mjs';
 import { COMMANDS, helpText, parseCommand, usageText } from './lib/commands.mjs';
@@ -136,6 +137,14 @@ export async function main(argv) {
   }
   if (p.error) {
     console.error(`nextlevel ${cmd}: ${p.error}\n\n${usageText(cmd)}`);
+    return 1;
+  }
+  // A command that acts, run under a worker, its task's verify or a check the hub runs as the owner, is refused by its
+  // ancestry, whatever its environment says and whichever project it names (FR-017 part 2B, lib/ancestry.mjs)
+  const underAgent = await ancestryRefusal(cmd, rest, { toolRoot: TOOL_ROOT });
+  delete process.env.NEXTLEVEL_HUB_TOKEN; // (the hub's own, for the command it started: never what that command starts)
+  if (underAgent) {
+    console.error(underAgent);
     return 1;
   }
   if (cmd === 'help') {
