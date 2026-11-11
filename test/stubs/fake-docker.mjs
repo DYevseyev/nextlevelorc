@@ -18,6 +18,8 @@
 //                                (exit2-sealed: a whole, sealed output, then exit 2: the scanner's integrity failure)
 //   STUB_SCAN_TEXT=<text>        put into the first finding's summary (a planted .env value)
 //   STUB_SCAN_THREAT=<text>      the threat model it writes (a policy's draft comes from it)
+// Like the scanner, a scan saved into an --output-dir path is recorded in the state volume (scans.json there), and a
+// later scan into the same path is refused, as the real one refuses it.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -278,9 +280,13 @@ process.exit(1);
 
 // ---------- the scanner's scan ----------
 async function scan(o) {
-  const outDir = dataOf(at(o, '/output/scan'));
+  const outAt = o.rest[o.rest.indexOf('--output-dir') + 1];
+  const outM = o.rest.includes('--output-dir') ? at(o, outAt) : null;
+  if (!outM) die(`codex-security: Error: --output-dir isn't a mounted volume: ${outAt}`, 2);
+  const outDir = dataOf(outM);
+  const stateM = at(o, '/output/.codex-security-state');
   const loginM = at(o, '/output/.codex-security-state/codex-home');
-  for (const m of [at(o, '/output/scan'), at(o, '/output/.codex-security-state'), loginM]) {
+  for (const m of [outM, stateM, loginM]) {
     if (meta(m).owner !== '10001:10001' || meta(m).mode !== '700') die(`codex-security: Error: Scan output directory must not be accessible to other users (chmod 700): ${m.target}`, 2);
   }
   if (!fs.existsSync(path.join(dataOf(loginM), 'auth.json'))) die('codex-security: Error: not signed in', 2);
@@ -364,6 +370,13 @@ async function scan(o) {
   if (kind === 'broken-seal') artifacts[0].sha256 = '1'.repeat(64);
   const manifest = { documentType: 'codex-security.scan-manifest', schemaVersion: '1.0', scan: { id: scanId, producer: { name: 'codex-security', version: '0.7.0' }, status: 'completed', startedAt: '2026-10-27T06:02:58Z', completedAt: done, sealedAt: done, target: { kind: 'directory_snapshot', targetId: 't', displayName: 'repository', snapshotDigest: 'd' }, scope: { includePaths: ['.'], excludePaths: ['.git/**'] }, coverageRef: 'coverage.json', findingsRef: 'findings.json', artifacts } };
   fs.writeFileSync(path.join(outDir, 'scan-manifest.json'), JSON.stringify(manifest));
+  // The scanner's state records each saved scan by its output folder's path, and refuses to save a second scan into a
+  // path an earlier one has (its workbench_scan_start.py at the pinned revision), whatever the folder now holds
+  const dbFile = path.join(dataOf(stateM), 'scans.json');
+  const db = readJson(dbFile, {});
+  if (db[outAt] && !flag('--archive-existing')) die(`codex-security: Error: Could not save the Codex Security scan: The scan artifact directory belongs to an existing scan. Use --archive-existing to preserve that scan and start a new one. Partial output was kept at ${outAt}.`, 2);
+  if (db[outAt]) die('codex-security: Error: Could not save the Codex Security scan: The archived scan directory is required to preserve existing scan artifacts.', 2);
+  fs.writeFileSync(dbFile, JSON.stringify({ ...db, [outAt]: { id: `stub-scan-${Object.keys(db).length + 1}`, status: 'completed' } }));
   process.stderr.write('\n  FINDINGS  2 (1 medium, 1 low)\n  TOKENS    160,071 uncached input, 3,265,408 cache reads, 0 cache writes, 19,397 output, 3,444,876 total\n');
   if (kind === 'exit2-sealed') die('codex-security: Error: target integrity check failed', 2);
   process.exit(0);

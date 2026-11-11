@@ -84,9 +84,10 @@ before every run). A new image comes only with a nextlevel release, and its prob
 - `nextlevel-sec-login-<account key>` at the state's `codex-home`: the sign-in. The account key is a hash of the
   profile's name, so a second account is a volume of its own; it carries no project label, since one sign-in serves
   every project.
-- `nextlevel-sec-out-<scan id>` at `/output/scan`: one scan's output, removed after it is copied out, or kept as the
-  evidence when its import is refused (`nextlevel security status` names it, with the command that removes it). A hub
-  that starts removes any other left behind.
+- `nextlevel-sec-out-<scan id>` at `/output/scan-<scan id>`: one scan's output, at a path of its own (the scanner's
+  state records each saved scan by its output path and refuses a second scan into a path an earlier scan saved to),
+  removed after it is copied out, or kept as the evidence when its import is refused (`nextlevel security status`
+  names it, with the command that removes it). A hub that starts removes any other left behind.
 
 Each has the labels `nextlevel.kind` and `nextlevel.project`, and a volume that exists with another kind is refused.
 Before each run a helper container of the same image (`--user 0:0`, every capability dropped but CHOWN and FOWNER,
@@ -129,7 +130,7 @@ container starts):
    knowledge-base folder, passed with `--scan-prompt-file`.
 8. **A dry run** of exactly the scan's command, in an output volume of its own: the scanner must accept web search off
    and approvals `never`.
-9. **The scan:** `scan /input/repository --output-dir /output/scan --headless --auth chatgpt --mode standard|deep
+9. **The scan:** `scan /input/repository --output-dir /output/scan-<scan id> --headless --auth chatgpt --mode standard|deep
    --model M --effort E [--cyber-access-program daybreak_blue --codex daybreak=true] --codex approval_policy="never"
    --codex web_search="disabled" --scan-prompt-file /input/kb/role.md --max-time N`, with a memory limit (half the
    PC's memory, between 2 and 8 GB), the seccomp profile, `no-new-privileges`, and `host.docker.internal` and
