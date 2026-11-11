@@ -141,7 +141,9 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   made final by any writer or reader past its time: `settle`, the hub's tick and the dashboard's), who closed a card
   (`closedBy`, FR-018: the owner's Done, the team's `close`, nextlevel's own), the import of the old Markdown,
   hand edits read back, and the Markdown written from them (`paths.notes`, `paths.handoff`; replies and answers in
-  quoted blocks). `src/notes.mjs` — `nextlevel note` and `nextlevel handoff` (`show`, `answer`, the team's `close`, the
+  quoted blocks); since FR-017 part 2B (2B-1a2) a note typed into the Markdown is `unconfirmed` (its own group in
+  `noteGroups`, never the orchestrator's) until the owner's Confirm on the dashboard, and a tick there only marks the
+  card (`ticked`) until the owner's Done (`test/typednotes.test.mjs`). `src/notes.mjs` — `nextlevel note` and `nextlevel handoff` (`show`, `answer`, the team's `close`, the
   owner's `reopen`; what `handoff list` gives the orchestrator within the output budget, a reopened card said). `src/lib/textin.mjs` — free text from `--file` (a file in the project, or
   stdin), never from the command line.
 - `src/lib/reports.mjs` — what the orchestrator gets of a report, a log or the owner's words (FR-012): the output

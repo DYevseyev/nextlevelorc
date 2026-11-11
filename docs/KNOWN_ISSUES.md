@@ -1117,6 +1117,9 @@ still gets past it:
   its `run.json` at the hub's next look: a worker that rewrites that file first isn't recorded.
 - **The hub's own git in a slot** (its commit for a worker whose sandbox can't write git) isn't recorded: a hook it runs
   is git's own, which the guard's git watch covers.
+- **Typed notes and ticks** (2B-1a2): a note typed into `docs/OWNER_NOTES.md` waits for your Confirm on the Notes page
+  and a tick in `docs/HANDOFF.md` is only marked on its card, since a worker's merged branch could carry either. A
+  worker can still write `.nextlevel/notes.json` itself while it runs: that is 2B-1b (signed state) and 2B-2.
 
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the

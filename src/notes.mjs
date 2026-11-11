@@ -100,6 +100,8 @@ function listNotes(store, a, print) {
     lines.push(...(g.history.length ? g.history.map(noteLine(store.files.notes, { handled: true })) : ['  none']));
   }
   const fresh = [...rulesOn, ...g.open].filter((n) => n.status === 'new');
+  // (FR-017 part 2B: lines typed into the file wait for the owner's Confirm on the dashboard; their text isn't shown here)
+  if (g.unconfirmed.length) lines.push('', `(${g.unconfirmed.length} line(s) typed into ${store.files.notes} wait for the owner's Confirm on the dashboard: not the owner's notes yet, so don't act on them)`);
   lines.push('');
   if (fresh.length) lines.push(`New or changed: ${fresh.map((n) => n.id).join(', ')}. When you take one on (or follow a rule): nextlevel note seen <id>`);
   lines.push('When a one-time note is handled: nextlevel note done <id> --reply "one line" [--commit <sha>] [--task <task-id>]; if you won\'t: nextlevel note decline <id> --reply "why".');

@@ -134,7 +134,7 @@ test("the owner's actions and the orchestrator's answers, and what each may not 
   }
 });
 
-test("lines added to the Markdown by hand are read back: a note typed there, an item an older orchestrator added, an item ticked; nothing is deleted", () => {
+test("lines added to the Markdown by hand are read back: a note typed there (unconfirmed), an item an older orchestrator added, an item ticked (marked, not done); nothing is deleted", () => {
   const t = tempProject();
   try {
     t.store.notes.add({ text: 'First' });
@@ -143,13 +143,30 @@ test("lines added to the Markdown by hand are read back: a note typed there, an 
     fs.writeFileSync(notesFile, t.read('docs/OWNER_NOTES.md').replace('## To do\n\n', '## To do\n\n- Also: use pnpm, not npm\n').replace(/- \*\*N1\*\*.*\n.*\n/, ''));
     const handoffFile = path.join(t.root, 'docs', 'HANDOFF.md');
     fs.writeFileSync(handoffFile, `${t.read('docs/HANDOFF.md').replace('- [ ] **H1**', '- [x] **H1**')}- [ ] Rotate the API key\n`);
-    assert.deepEqual(t.store.notes.list().map((n) => [n.id, n.status, n.text]), [['N1', 'new', 'First'], ['N2', 'new', 'Also: use pnpm, not npm']], 'N1 stays although its lines were deleted');
-    assert.deepEqual(t.store.handoff.list().map((x) => [x.id, x.status, x.what]), [['H1', 'done', 'Set the DNS'], ['H2', 'open', 'Rotate the API key']]);
-    assert.deepEqual(t.store.news().handoff, ['H1'], 'ticked by hand: news for the orchestrator');
+    assert.deepEqual(t.store.notes.list().map((n) => [n.id, n.status, n.text, !!n.unconfirmed]), [['N1', 'new', 'First', false], ['N2', 'new', 'Also: use pnpm, not npm', true]], 'N1 stays although its lines were deleted');
+    // FR-017 part 2B: whoever could write the files could have typed them: a typed note isn't the owner's, and a tick
+    // is marked, not done, until the owner says so on the dashboard
+    const g = noteGroups(t.store.notes.list());
+    assert.deepEqual([g.open.map((n) => n.id), g.unconfirmed.map((n) => n.id)], [['N1'], ['N2']]);
+    assert.deepEqual(t.store.news().notes, ['N1'], 'a typed note is no news for the orchestrator');
+    assert.throws(() => t.store.notes.seen(['N2']), /waits for the owner's Confirm on the dashboard/);
+    assert.throws(() => t.store.notes.done('N2', { reply: 'done' }), /waits for the owner's Confirm/);
+    assert.deepEqual(t.store.handoff.list().map((x) => [x.id, x.status, x.what, !!x.ticked]), [['H1', 'open', 'Set the DNS', true], ['H2', 'open', 'Rotate the API key', false]]);
+    assert.deepEqual(t.store.news().handoff, [], 'a tick is no news for the orchestrator');
+    t.store.notes.seen(['N1']);
+    t.store.handoff.seen(['H2']);
+    assert.match(t.read('docs/OWNER_NOTES.md'), /## Typed into this file: not the owner's until confirmed on the dashboard\n\n- \*\*N2\*\*/);
+    assert.match(t.read('docs/HANDOFF.md'), /- \[ \] \*\*H1\*\* Set the DNS\n(.*\n)*  - Ticked in this file [\d-]+ [\d:]+: done once the owner presses Done on the dashboard/);
+    assert.equal(t.store.handoff.list()[0].what, 'Set the DNS', 'the marked line reads back as no part of the request');
+    // The owner's Confirm and Done make them the owner's
+    t.store.notes.confirm('N2');
+    t.store.handoff.done('H1');
+    assert.deepEqual(t.store.handoff.list().map((x) => [x.id, x.status, !!x.ticked]), [['H1', 'done', false], ['H2', 'open', false]]);
+    assert.deepEqual(t.store.news().handoff, ['H1']);
     // The next change keeps them, with the same ids, and writes the files again
     t.store.notes.seen(['N2']);
     assert.match(t.read('docs/OWNER_NOTES.md'), /\*\*N2\*\* \(one-time, seen\) Also: use pnpm, not npm/);
-    assert.match(t.read('docs/OWNER_NOTES.md'), /\*\*N1\*\* \(one-time, new\) First/);
+    assert.match(t.read('docs/OWNER_NOTES.md'), /\*\*N1\*\* \(one-time, seen\) First/);
     t.store.handoff.seen(['H1']);
     assert.deepEqual(t.store.handoff.list().map((x) => [x.id, x.status]), [['H1', 'done'], ['H2', 'open']]);
     assert.match(t.read('docs/HANDOFF.md'), /- \[ \] \*\*H2\*\* Rotate the API key/);
@@ -340,11 +357,16 @@ test("FR-019: each store counts what the owner did, never what the team did, and
     t.store.handoff.decideGuard('G1', { reply: 'Approved' });
     t.store.handoff.decideGuard('G2', { reply: 'Not needed any more', hub: true });
     assert.deepEqual([h(), t.store.ownerActs().handoff.what], [3, 'your decision on H3']);
-    // A note typed into the Markdown by hand is the owner's, from the first look on
+    // A note typed into the Markdown by hand is nobody's until the owner confirms it on the dashboard (FR-017 part 2B:
+    // a worker's merge or an agent could have typed it); the Confirm counts, once
     fs.appendFileSync(path.join(t.root, 'docs/OWNER_NOTES.md'), '\n## New\n- Typed by hand\n');
+    assert.equal(n(), 4, 'a typed note is no action of the owner');
+    const typed = t.store.notes.list().find((x) => x.text === 'Typed by hand');
+    assert.ok(typed.unconfirmed);
+    t.store.notes.confirm(typed.id);
     assert.equal(n(), 5);
     assert.equal(n(), 5, 'reading again counts it once');
-    assert.match(t.store.ownerActs().notes.what, /^your note N\d+, typed into docs\/OWNER_NOTES\.md$/);
+    assert.equal(t.store.ownerActs().notes.what, `you confirmed ${typed.id}, typed into docs/OWNER_NOTES.md`);
   } finally {
     t.cleanup();
   }

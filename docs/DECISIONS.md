@@ -2199,3 +2199,11 @@ One entry each: date, decision, why, alternatives.
   its artifacts there; here that folder was a volume removed after its copy-out, and the new one is a fresh mount, so
   the scanner refuses that too. Another alternative, a state volume per scan, would lose the scanner's record of earlier
   scans. The dry run uses the scan's path in a volume of its own, so it stays exactly the scan's command.
+- 2026-11-11 — **A note typed into the notes file waits for the owner's Confirm; a tick in the handoff file is only
+  marked** (FR-017 part 2B, 2B-1a2). Until now a line typed into `docs/OWNER_NOTES.md` became the owner's note (and
+  started an autopilot round), and a tick in `docs/HANDOFF.md` closed the card as the owner's Done; a worker's branch
+  merged into main, or an agent in the main checkout, could do either. Now a typed note is kept, in a group of its own
+  that the orchestrator, the assistant and the counts never read (the orchestrator is told only how many wait), until
+  the owner's Confirm on the Notes page (or an edit there); a tick puts a line on the card, and the owner's Done
+  closes it. Alternatives: drop typed lines altogether (an owner who types a note out of habit loses it), or confirm
+  from a command (any agent can run one).

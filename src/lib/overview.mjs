@@ -151,6 +151,13 @@ export function ownerNeeds(b, checks = {}) {
       action: { label: 'Review it', page: 'notes', focus: g.card || '' },
     });
   }
+  // Notes typed into the notes file, and handoff cards ticked there (FR-017 part 2B): nobody's until the owner says so
+  const typed = b.cards?.unconfirmed || 0;
+  const ticked = b.cards?.ticked || 0;
+  if (typed || ticked) {
+    const what = [typed ? `${typed === 1 ? '1 note' : `${typed} notes`} typed into the notes file` : '', ticked ? `${ticked === 1 ? '1 card' : `${ticked} cards`} ticked in the handoff file` : ''].filter(Boolean).join(' and ');
+    needs.push({ kind: 'typed', level: 'warn', text: `${what}: confirm ${typed + ticked === 1 ? 'it was' : 'they were'} you`, why: "anyone who can write those files could have done it, a worker's merge too: they count as yours only once you confirm on the Notes page", action: { label: 'Review them', page: 'notes' } });
+  }
   // A release with a safety fix (safe updates): its card on Home has the notes and how to update
   const safe = (b.update?.newer || []).find((r) => r?.notes?.safety);
   if (safe && !b.update?.off) {
