@@ -1094,12 +1094,15 @@ still gets past it:
   `Get-CimInstance Win32_Process`): about 0.7 s on the owner's PC (the spike's S10: median 0.70 s, 0.64 to 1.4 s, idle)
   and more on a busy GitHub runner. It is paid only by a command that acts while something is recorded; on Linux the
   chain is read from `/proc` with no program started.
-- **PowerShell's environment.** The listing's PowerShell gets an environment made from the OS (`windowsEnv`: Windows'
-  folder, the account's home from `os.userInfo()`, its profile folders, `PSModulePath` pinned to Windows' own modules),
-  none of the caller's values, so a worker's `PSModulePath` or `.NET` profiler variables (`COR_*`) reach nothing. With
-  only `SystemRoot`, `windir` and `SystemDrive`, Windows PowerShell 5.1 gave no answer in 20 s on GitHub's Windows
-  runner, every time, while the hub's own listing in the same run answered in seconds: every command that acted while a
-  worker ran was refused.
+- **PowerShell's environment and modules.** The listing's PowerShell gets an environment made from the OS
+  (`windowsEnv`: Windows' folder, the account's home from `os.userInfo()`, its profile folders, `PSModulePath` pinned to
+  Windows' own modules), none of the caller's values, so a worker's `PSModulePath` or `.NET` profiler variables (`COR_*`)
+  reach nothing. And it loads no module (`WMI_LIST` in `src/lib/proctree.mjs`: WMI through .NET, no cmdlet). Measured on
+  GitHub's Windows runner (11 November): a cmdlet from a module (`Get-CimInstance`, `Get-Process`, `Add-Type`) took
+  about 18 s in that environment, because PowerShell 5.1 analyses its modules first, and the runner's image names a
+  pre-built cache in `PSModuleAnalysisCachePath` that the caller's environment had and this one doesn't; with only
+  `SystemRoot`, `windir` and `SystemDrive` it gave no answer in 20 s. The module-free listing took 0.28 s there (the
+  CIM listing with the full environment: 3 s) and gave the same processes.
 - **No listing.** When the listing doesn't answer in 20 s while something is recorded, the command refuses unless it
   carries a live session token of the orchestrator (its window and each round get one, `NEXTLEVEL_SESSION_TOKEN`).
 - **A process outside the tree.** A worker that starts a process whose parent chain doesn't reach its `_run` (one that

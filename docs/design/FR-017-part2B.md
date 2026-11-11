@@ -142,7 +142,7 @@ into Windows.
 - **Nothing from the caller's environment.** The check reads its record from the owner's home as the OS gives it
   (`os.userInfo().homedir`, never `NEXTLEVEL_HOME`, `USERPROFILE` or `HOME`), lists processes with Windows' own
   PowerShell at its fixed path (checked to exist) in an environment made from the OS (`windowsEnv`; none of the
-  caller's values: PowerShell 5.1 with only `SystemRoot`, `windir` and `SystemDrive` didn't answer), or `/bin/ps`, and waits `LIST_WAIT_MS` whatever
+  caller's values), loading no PowerShell module (`WMI_LIST`: a module's analysis took about 18 s there, KNOWN_ISSUES), or `/bin/ps`, and waits `LIST_WAIT_MS` whatever
   `NEXTLEVEL_PROCESS_LIST_MS` says. Test switches (`NEXTLEVEL_PROCESS_LIST_MS`, a stand-in listing,
   `NEXTLEVEL_TEST_*`) are honoured only when the tool runs from a checkout that is not an installed version folder.
 - **Its cost:** the snapshot on Windows is one PowerShell start, about a second (KNOWN_ISSUES: "over 20 s on a busy
