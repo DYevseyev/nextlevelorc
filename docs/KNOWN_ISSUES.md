@@ -1120,6 +1120,10 @@ still gets past it:
 - **Typed notes and ticks** (2B-1a2): a note typed into `docs/OWNER_NOTES.md` waits for your Confirm on the Notes page
   and a tick in `docs/HANDOFF.md` is only marked on its card, since a worker's merged branch could carry either. A
   worker can still write `.nextlevel/notes.json` itself while it runs: that is 2B-1b (signed state) and 2B-2.
+  A card typed into `docs/HANDOFF.md` is the team's ask: open whatever its box says, without the owner's replies it
+  quotes. The first import (a project with no card store yet, or a store that isn't valid JSON) still reads both files as
+  they are, as before: the notes there count as yours, and so do a card's quoted replies and ticks. It runs once per
+  project; after it, typed lines wait for you.
 
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the
