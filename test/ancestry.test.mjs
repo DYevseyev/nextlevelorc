@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { addAgent, addSession, agentsHome, allRecords, ancestryRefusal, chainIn, installedTool, looksOnly, ownChain, readRecord, removeAgents, underAgent, windowsEnv } from '../src/lib/ancestry.mjs';
+import { WMI_LIST } from '../src/lib/proctree.mjs';
 import { withoutTool } from '../src/lib/workerspec.mjs';
 import { makeProject, makeSandbox } from './helpers.mjs';
 
@@ -75,7 +76,8 @@ test("Windows' listing runs in an environment made from the OS, never the caller
   for (const name of ['SystemRoot', 'windir', 'ComSpec', 'PATH', 'APPDATA', 'ProgramFiles', 'ProgramData', 'COMPUTERNAME', 'USERNAME']) assert.ok(env[name], name);
   // What a worker sets reaches nothing: the listing gets exactly windowsEnv's, whatever the caller's environment says
   let seen = null;
-  const listing = async ({ env: e }) => ((seen = e), { list: [{ pid: 7, ppid: 1, start: 0 }] });
+  let script = null;
+  const listing = async ({ env: e, script: sc }) => ((seen = e), (script = sc), { list: [{ pid: 7, ppid: 1, start: 0 }] });
   const planted = { SystemRoot: 'D:\\evil', PSModulePath: 'D:\\evil', COR_ENABLE_PROFILING: '1', COR_PROFILER_PATH: 'D:\\evil\\p.dll', TEMP: 'D:\\evil' };
   const r = await ownChain({ pid: 7, platform: 'win32', env: planted, installed: true, listing });
   if (process.platform !== 'win32') {
@@ -88,6 +90,9 @@ test("Windows' listing runs in an environment made from the OS, never the caller
   assert.deepEqual(seen, windowsEnv('C:\\Windows'));
   assert.ok(!Object.values(seen).some((v) => String(v).includes('evil')));
   assert.equal(seen.COR_ENABLE_PROFILING, undefined);
+  // and loads no PowerShell module: WMI through .NET, no cmdlet
+  assert.equal(script, WMI_LIST);
+  assert.doesNotMatch(script, /Get-|New-Object|Add-Type|Import-Module/);
 });
 
 test('a command under a recorded process is refused and logged, for any project; one that only looks runs; a failed listing needs a session token', async () => {

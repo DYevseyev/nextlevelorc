@@ -21,7 +21,7 @@ import path from 'node:path';
 import { COMMANDS, parseCommand } from './commands.mjs';
 import { readJsonFile, updateJsonFile } from './filelock.mjs';
 import { guardDir } from './guard.mjs';
-import { LIST_WAIT_MS, listProcesses, listWaitMs } from './proctree.mjs';
+import { LIST_WAIT_MS, WMI_LIST, listProcesses, listWaitMs } from './proctree.mjs';
 
 export const RECORD = 'agents.json';
 export const REFUSED = 'refused.jsonl';
@@ -202,8 +202,8 @@ function windowsDir(env) {
 }
 // The environment Windows' PowerShell lists the processes in: what Windows gives every program, made here from the OS
 // (Windows' folder, the OS's home for this account, its name), never from the caller's environment, so no variable a
-// worker set (PSModulePath, a .NET profiler's COR_*) reaches it. With only SystemRoot, windir and SystemDrive,
-// PowerShell 5.1 gave no answer in 20 s on GitHub's Windows runner (the first Windows run of 2B-1a).
+// worker set (PSModulePath, a .NET profiler's COR_*) reaches it. The listing loads no module (WMI_LIST in
+// lib/proctree.mjs): a cmdlet's module analysis took about 18 s on GitHub's Windows runner in this environment.
 export function windowsEnv(winDir, { home = osHome(), user = os.userInfo().username, host = os.hostname() } = {}) {
   const drive = winDir.slice(0, 2);
   const sys = path.win32.join(winDir, 'System32');
@@ -250,7 +250,7 @@ export async function ownChain({ pid = process.pid, platform = process.platform,
   const winDir = windowsDir(env);
   const own = win ? windowsEnv(winDir) : { PATH: '/usr/bin:/bin', LC_ALL: 'C', LANG: 'C' };
   if (win && !fs.existsSync(path.win32.join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))) return { error: "Windows' PowerShell wasn't found at its own path" };
-  const r = await listing({ timeoutMs: wait, platform, env: own });
+  const r = await listing({ timeoutMs: wait, platform, env: own, script: WMI_LIST });
   if (r.late || r.error) return r;
   return { chain: chainIn(r.list, pid) };
 }
