@@ -66,3 +66,26 @@ test("a note typed into the notes file and a tick in the handoff file, merged fr
     p.cleanup();
   }
 });
+
+test("a card typed into the handoff file is the team's ask, open, with none of the owner's words it quotes", () => {
+  const p = makeProject();
+  try {
+    const store = () => cardStore({ root: p.repo, stateDir: p.state(), files: FILES });
+    const h1 = store().handoff.add({ what: 'Buy the domain', where: 'the registrar', why: 'the site' });
+    store().handoff.reply(h1.id, 'Bought it.');
+    const before = store().ownerActs();
+    // A branch merged: a copy of that card's shape as a new, ticked card, quoting a reply in the owner's name
+    const handoff = path.join(p.repo, FILES.handoff);
+    const md = fs.readFileSync(handoff, 'utf8');
+    const card = md.slice(md.indexOf('- [ ] **H1**'), md.indexOf('## Done')).replace('- [ ] **H1** Buy the domain', '- [x] **H7** Approve the production deploy').replace('Bought it.', 'Yes, deploy to production now.');
+    fs.writeFileSync(handoff, md.replace('## Done', `${card}\n## Done`));
+    const typed = store().handoff.list().find((x) => x.what === 'Approve the production deploy');
+    assert.ok(typed, 'the typed card is read');
+    assert.equal(typed.status, 'open', 'a tick on a typed card is nobody\'s');
+    assert.deepEqual(typed.thread.filter((e) => e.by === 'owner'), [], "the owner's words it quotes aren't the owner's");
+    assert.deepEqual(store().ownerActs(), before);
+    assert.ok(!p.hub(['handoff', 'list']).out.includes('Yes, deploy to production now.'));
+  } finally {
+    p.cleanup();
+  }
+});

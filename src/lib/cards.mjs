@@ -468,7 +468,11 @@ export function cardStore({ root, stateDir, files, onLock }) {
       }
       const id = !saved && x.id && !byId.has(x.id) ? x.id : `${k.prefix}${nextNumber()}`;
       // imported first: its state as the file says; added by hand later: a new item
-      const item = fromParsed(kind, saved ? { ...x, status: kind === 'notes' ? 'new' : x.status === 'done' ? 'done' : 'open', off: false } : x, id, at);
+      // (FR-017 part 2B: a card typed into the handoff file is the team's ask, open: a tick on it and the owner's replies
+      // quoted in it are nobody's, since anyone who can write the file could have typed them; the owner replies and
+      // presses Done on the dashboard)
+      const typed = kind === 'notes' ? { status: 'new' } : { status: 'open', thread: (x.thread || []).filter((e) => e.by !== 'owner') };
+      const item = fromParsed(kind, saved ? { ...x, ...typed, off: false } : x, id, at);
       data.items.push(item);
       byId.set(id, item);
       byKey.set(k.key(item), item);
