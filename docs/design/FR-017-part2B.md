@@ -1,6 +1,6 @@
 # FR-017 part 2B: workers can't reach the hub: design
 
-Status: **step 1, reviewed** (the architect's review, 6 November: GO with changes R1 to R10, folded in below; section
+Status: **step 1, reviewed** (the maintainers' design review, 6 November: GO with changes R1 to R10, folded in below; section
 11 lists them). Design and a spike plan, no code. The spike (section 8) needs the owner's yes for a throwaway Windows
 user; its results go into section 8's table, in a documentation pull request, before 2B-2 starts. Step 2 builds what
 the review settled, in the pull requests of section 9.
@@ -372,7 +372,7 @@ everywhere but GitHub's own runners; the host with a stub engine; the walls prob
 
 ## 8. The spike (on the owner's PC, with the owner's yes)
 
-In `nextlevel-try` and a throwaway user `nl-spike`, never Uplink; every step run by a Remote Control session, the UAC
+In a throwaway trial project and a throwaway user `nl-spike`, never a real project; every step run by a Remote Control session, the UAC
 prompts the owner's. Removed at the end (`net user nl-spike /delete`, its profile and the `C:\ProgramData` folder),
 each removal listed for the owner.
 
@@ -383,7 +383,7 @@ each removal listed for the owner.
 | S3 | Engines installed and running as the account | `agy --version`, `codex --version`, `claude --version` from the owner's install and from a machine-wide one | |
 | S4 | Sign-ins as the account | each engine's device-code login, the owner's plans; one prompt answered by each | |
 | S5 | agy in a console with no window, batch logon | the stub-free probe of FR-022's trial, run by the host | |
-| S6 | A slot clone and the hub's fetch | `clone` from a bundle with `alternates` to nextlevel-try's `.git\objects` (the account granted that folder only), a commit as the account, the owner's `git -c safe.directory=<slot> fetch`; whether that fetch needs the setting at all; `npm ci` in the slot | |
+| S6 | A slot clone and the hub's fetch | `clone` from a bundle with `alternates` to the trial project's `.git\objects` (the account granted that folder only), a commit as the account, the owner's `git -c safe.directory=<slot> fetch`; whether that fetch needs the setting at all; `npm ci` in the slot | |
 | S7 | The walls | as the account: read `~/.nextlevel`, `.env`, `%APPDATA%\GitHub CLI`, `~/.codex`, `~/.claude`, `~/.gemini`, the main checkout's `.nextlevel/` | |
 | S8 | Antivirus | Bitdefender's log after S1 to S11 | |
 | S9 | A worker's commands descend from `_run` | per engine (agy, Claude Code, Codex in its sandbox and out of it): the worker runs `nextlevel status --json` and a probe prints its parent chain; and `cmd /c start` breaks it, as expected | |
@@ -401,7 +401,7 @@ each removal listed for the owner.
    builds `winuser.mjs` and `walls.mjs` first. The host, slot clones, `login --agents`, the doctor's `agents.wall`,
    Team's "Workers run as their own Windows user" switch.
 
-## 10. The architect's answers (6 November)
+## 10. The maintainers' answers (6 November)
 
 1. **Sign broadly?** Yes, with the rollback rule (3.2), or the breadth buys little. Logs and pure caches stay unsigned
    and are never acted on. The orchestrator's direct writes becoming untraced is right: its protocol is the commands.
@@ -410,7 +410,7 @@ each removal listed for the owner.
 3. **One account per PC,** with the cross-project reach in section 7.
 4. **Protect the two Markdown files?** No: typed lines become unconfirmed cards the owner confirms (section 1).
 
-## 11. What the architect's review changed (6 November, `reviews/fr-017-2b-design-review.md`)
+## 11. What the design review changed (6 November)
 
 R1 the record covers the task's verify, `nextlevel verify` jobs and git jobs; R2 the check takes nothing from the
 caller's environment, denies by default and records `_run` from the hub's own handle; R3 detached starts are named as
