@@ -235,3 +235,30 @@ test("a signing key that is gone after the project had one: no request is acted 
     p.cleanup();
   }
 });
+
+test("the owner's new key while the hub runs: the running hub takes it, a request signed with it is acted on, and its record of the requests acted on is kept under it", async () => {
+  const p = makeProject();
+  let hub;
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    p.spec('SG-06-before', fileExists('before.mjs'));
+    p.spec('SG-06-after', fileExists('after.mjs'));
+    hub = p.hubInBackground(['run', '--tick-ms', '200']);
+    await waitUntil('the key', () => fs.existsSync(keyFile(p.repo, p.env.HOME)));
+    assert.equal(p.hub(['dispatch', 'SG-06-before']).code, 0);
+    await waitUntil('the first job taken', () => !fs.existsSync(p.state('queue', 'SG-06-before.json')), 20000);
+    newSigningKey(p.repo, { home: p.env.HOME }); // (what `nextlevel doctor --fix state.key` does)
+    assert.equal(p.hub(['dispatch', 'SG-06-after']).code, 0);
+    await waitUntil('the second job taken', () => !fs.existsSync(p.state('queue', 'SG-06-after.json')), 20000);
+    const untracedDir = p.state('untraced');
+    const setAside = fs.existsSync(untracedDir) ? fs.readdirSync(untracedDir) : [];
+    assert.deepEqual(setAside, [], 'nothing signed with the new key is set aside');
+    const key = projectSigningKey(p.repo, { home: p.env.HOME }).key;
+    const rec = JSON.parse(fs.readFileSync(path.join(guardDir(p.repo, p.env.HOME), 'acted.json'), 'utf8'));
+    assert.ok(verify(rec, { key, purpose: 'guard', name: 'guard:acted.json' }).ok, 'the record verifies with the new key');
+    assert.equal(Object.keys(rec.ids).length, 2, 'both requests kept');
+  } finally {
+    hub?.kill();
+    p.cleanup();
+  }
+});

@@ -129,7 +129,7 @@ import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { addAgent, addSession, agentsHome, installedTool, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
 import { LOOK, changeWords, diffLook, readLookRecord, takeLook, writeLookRecord } from './lib/toollook.mjs';
-import { projectSigningKey, sign, stateName, verify } from './lib/sign.mjs';
+import { markerFile, projectSigningKey, sign, stateName, verify } from './lib/sign.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
 import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
@@ -2681,14 +2681,32 @@ const TRIGGER_MAX_MS = 10 * 60_000; // a wake-up or a press first seen more than
 const untracedFile = () => path.join(guardDir(ROOT, AGENTS_HOME), 'untraced.json'); // the card's state
 const untracedLog = () => path.join(guardDir(ROOT, AGENTS_HOME), 'untraced.jsonl');
 const actedFile = () => path.join(guardDir(ROOT, AGENTS_HOME), 'acted.json');
-let signKeyCache = null;
+let signKeyCache = null; // { key, stamp }: the key, and its marker as it read when the key was taken
+const markerStamp = () => {
+  try {
+    return fs.readFileSync(markerFile(ROOT, AGENTS_HOME), 'utf8');
+  } catch {
+    return '';
+  }
+};
 // The project's key: { key } | { problem } | { missing }. `create` in the owner's processes only (lib/sign.mjs: never again
-// once its marker says there was one)
+// once its marker says there was one). Read again when its marker changes (the owner's `doctor --fix state.key` while the
+// hub runs): the running hub then checks with the new key, and keeps its record of the requests acted on under it.
 function signingKey({ create = false } = {}) {
-  if (signKeyCache?.key) return signKeyCache;
+  const stamp = markerStamp();
+  if (signKeyCache?.key && signKeyCache.stamp === stamp) return signKeyCache;
+  const before = signKeyCache;
   const k = projectSigningKey(ROOT, { home: AGENTS_HOME, create });
-  if (k.key) signKeyCache = k;
-  return k;
+  if (!k.key) {
+    signKeyCache = null;
+    return k;
+  }
+  signKeyCache = { key: k.key, stamp: markerStamp() };
+  if (before?.key && !before.key.equals(k.key)) {
+    log("nextlevel's signing key changed (the owner's fix): requests are checked with the new one from now on");
+    if (actedMem) saveActed();
+  }
+  return signKeyCache;
 }
 const reqName = (file) => stateName(path.relative(DIR, file));
 // Write a request signed (a command, the dashboard or the hub). A key that can't be had stops the write, saying why.
@@ -2738,10 +2756,13 @@ function markActed(rid) {
   m.set(rid, clockIso());
   const cut = clockNow() - ACTED_DAYS * 86_400_000;
   for (const [id, at] of m) if (isoMs(at) < cut) m.delete(id);
+  saveActed();
+}
+function saveActed() {
   const k = signingKey();
-  if (!k.key) return;
+  if (!k.key || !actedMem) return;
   try {
-    writeJson(actedFile(), sign({ ids: Object.fromEntries(m) }, { key: k.key, purpose: 'guard', name: 'guard:acted.json', by: 'hub', at: clockIso() }));
+    writeJson(actedFile(), sign({ ids: Object.fromEntries(actedMem) }, { key: k.key, purpose: 'guard', name: 'guard:acted.json', by: 'hub', at: clockIso() }));
   } catch (err) {
     log(`couldn't keep the record of the requests acted on: ${err.message}`);
   }
