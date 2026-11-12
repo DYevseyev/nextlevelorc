@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import { guardDir } from '../src/lib/guard.mjs';
 import { ownerNeeds } from '../src/lib/overview.mjs';
 import { canonical, keyFile, markerFile, newSigningKey, projectSigningKey, sign, stateName, verify } from '../src/lib/sign.mjs';
-import { fileExists, makeProject, waitUntil } from './helpers.mjs';
+import { fileExists, makeProject, waitUntil, writeSignedRequest } from './helpers.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
 const exited = (child) => new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
@@ -259,6 +259,64 @@ test("the owner's new key while the hub runs: the running hub takes it, a reques
     assert.equal(Object.keys(rec.ids).length, 2, 'both requests kept');
   } finally {
     hub?.kill();
+    p.cleanup();
+  }
+});
+
+test("a wake-up nextlevel signed but the hub first saw too late is said once in hub.log, quietly: no card, no flag, no phone message (review)", async () => {
+  const p = makeProject();
+  const ntfy = await fakeNtfy();
+  const topic = { NTFY_TOPIC: 'a-long-random-topic-for-tests-1234' };
+  try {
+    p.setConfig((c) => ({ ...c, notifications: { server: ntfy.url }, hub: { ...c.hub, autopilot: false } }));
+    const at = new Date(Date.now() - 20 * 60_000).toISOString();
+    writeSignedRequest(p, 'wakeup.json', { id: 'abcdef123456', askedAt: at, minutes: 5, reason: 'guard-test', by: 'an autopilot round' }, { by: 'orchestrator', at });
+    const hubLog = () => fs.readFileSync(p.state('logs', 'hub.log'), 'utf8');
+    const bg = p.hubInBackground(['run', '--tick-ms', '50'], topic);
+    try {
+      await waitUntil('the wake-up to be looked at', () => fs.existsSync(p.state('logs', 'hub.log')) && /wakeup\.json: not acted on/.test(hubLog()));
+    } finally {
+      bg.kill();
+      await exited(bg);
+    }
+    assert.match(hubLog(), /wakeup\.json: not acted on, too late \(it was signed 20 minutes before the hub first saw it/);
+    assert.doesNotMatch(hubLog(), /nextlevel can't trace it/);
+    const card = path.join(guardDir(p.repo, p.env.HOME), 'untraced.json');
+    assert.ok(!fs.existsSync(card) || JSON.parse(fs.readFileSync(card, 'utf8')).items.length === 0, 'no card');
+    assert.equal(ntfy.got.length, 0, 'no phone message');
+  } finally {
+    await ntfy.close();
+    p.cleanup();
+  }
+});
+
+test("the record of the requests acted on starts with the key; deleted, it isn't taken as empty: a request signed before the hub started is set aside, a new one is acted on; a new key starts it again (review)", async () => {
+  const p = makeProject();
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    p.spec('SG-07-old', fileExists('old.mjs'));
+    p.spec('SG-07-ok', fileExists('ok.mjs'));
+    const actedPath = path.join(guardDir(p.repo, p.env.HOME), 'acted.json');
+    const { key } = projectSigningKey(p.repo, { home: p.env.HOME, create: true });
+    const first = JSON.parse(fs.readFileSync(actedPath, 'utf8'));
+    assert.deepEqual(first.ids, {});
+    assert.ok(verify(first, { key, purpose: 'guard', name: 'guard:acted.json' }).ok, 'made with the key, signed');
+    assert.equal(p.hub(['dispatch', 'SG-07-old']).code, 0);
+    fs.rmSync(actedPath);
+    p.runUntilIdle();
+    const log = fs.readFileSync(p.state('logs', 'hub.log'), 'utf8');
+    assert.match(log, /acted\.json: not acted on, nextlevel can't trace it \(it is gone, though the key that started it is there\)/);
+    assert.match(log, /SG-07-old\.json: not acted on, nextlevel can't trace it \(it was signed before the hub could trust its record/);
+    assert.notEqual(p.status('SG-07-old')?.state, 'done');
+    assert.equal(p.hub(['dispatch', 'SG-07-ok']).code, 0);
+    p.runUntilIdle();
+    assert.equal(p.status('SG-07-ok').state, 'done', 'a request signed since is acted on');
+    // The owner's new key: the record starts again empty under it (nothing signed with the old key is good any more)
+    const { key: fresh } = newSigningKey(p.repo, { home: p.env.HOME });
+    const again = JSON.parse(fs.readFileSync(actedPath, 'utf8'));
+    assert.deepEqual(again.ids, {});
+    assert.ok(verify(again, { key: fresh, purpose: 'guard', name: 'guard:acted.json' }).ok);
+  } finally {
     p.cleanup();
   }
 });

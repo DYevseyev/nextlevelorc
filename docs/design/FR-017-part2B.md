@@ -229,7 +229,12 @@ doctor's `state.key`, an error). Choices left to this step, with the safer readi
 - `nextlevel doctor --fix state.key` makes a new key and lists the requests that were waiting (the hub then sets them
   aside), rather than signing them again: in 1b1 nothing else is signed, and signing what waits would take over a
   planted file. It runs only in the owner's own window (never the dashboard's button, never in an agent's session).
-- A wake-up's and a press's 10 minutes go by the hub's clock (`src/lib/clock.mjs`, a test clock under the stubs).
+- A wake-up's and a press's 10 minutes go by the hub's clock (`src/lib/clock.mjs`, a test clock under the stubs). One
+  nextlevel signed but the hub saw too late isn't a forgery: it is said once in hub.log, with no card, flag or phone
+  message.
+- `acted.json` is made, empty and signed, with the key (and again with a new key, since nothing signed with the old one
+  is good any more); a running hub that sees the key's record change takes the new key and signs its own record again.
+  With a key there, a missing `acted.json` was deleted: it is treated like one that fails its check.
 Next (2B-1b2 on): the stores with `seq` and `seen.json`, the PC's files and the launcher's check, the other requests
 (`ui-open.json`, the stop requests, scan and tester requests) and the migration.
 

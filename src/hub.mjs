@@ -2734,9 +2734,10 @@ function acted() {
   try {
     rec = JSON.parse(fs.readFileSync(actedFile(), 'utf8'));
   } catch (err) {
-    if (err.code === 'ENOENT') return actedMem;
+    // (made with the key, lib/sign.mjs: with a key there, a missing record was deleted, not empty)
+    if (err.code === 'ENOENT' && !k.key) return actedMem;
   }
-  const v = k.key && rec ? verify(rec, { key: k.key, purpose: 'guard', name: 'guard:acted.json' }) : { ok: false, why: "it can't be read" };
+  const v = k.key && rec ? verify(rec, { key: k.key, purpose: 'guard', name: 'guard:acted.json' }) : { ok: false, why: rec === null && fs.existsSync(actedFile()) ? "it can't be read" : 'it is gone, though the key that started it is there' };
   if (!v.ok) {
     actedSince = clockNow();
     untraced({ file: actedFile(), kind: 'acted', why: v.why || 'its signature fails', what: 'the record of the requests nextlevel acted on', keep: true });
@@ -2768,7 +2769,9 @@ function saveActed() {
   }
 }
 // Whether a request may be acted on: signed, not acted on before, not older than its time. -> '' or why not, in words
+let lateTrigger = false; // (the last requestProblem: a wake-up or a press nextlevel signed, only seen too late)
 function requestProblem(file, obj, { trigger = false } = {}) {
+  lateTrigger = false;
   const v = checkSigned(file, obj);
   if (v.hold) return null; // (no key: it waits; Home says why)
   if (!v.ok) return v.why;
@@ -2776,6 +2779,7 @@ function requestProblem(file, obj, { trigger = false } = {}) {
   const age = clockNow() - at;
   if (at < actedSince) return 'it was signed before the hub could trust its record of the requests acted on';
   if (age > ACTED_DAYS * 86_400_000) return `it was signed ${Math.round(age / 86_400_000)} days ago, longer than nextlevel keeps track of what it acted on`;
+  if (trigger && age > TRIGGER_MAX_MS) lateTrigger = true;
   if (trigger && age > TRIGGER_MAX_MS) return `it was signed ${Math.round(age / 60_000)} minutes before the hub first saw it (a wake-up or a press counts only within ${TRIGGER_MAX_MS / 60_000})`;
   if (!trigger && (typeof obj.rid !== 'string' || !obj.rid)) return 'it has no request id';
   if (!trigger && acted().has(obj.rid)) return 'it was acted on already (a copy of a request nextlevel took)';
@@ -2790,6 +2794,22 @@ const readUntraced = () => {
   }
 };
 const flaggedOnce = new Set(); // (a file ignored where it is, a wake-up or a press: said once per content)
+// A wake-up or a press nextlevel signed but the hub saw too late (it was stopped, or busy): not a forgery, so no card, no
+// flag and no phone message; said once in hub.log
+function lateRequest({ file, why, what }) {
+  let hash = '';
+  try {
+    hash = createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 16);
+  } catch {
+    // gone meanwhile
+  }
+  const once = `${file}:${hash}`;
+  if (flaggedOnce.has(once)) return;
+  flaggedOnce.add(once);
+  log(`${rel(file)}: not acted on, too late (${why}): ${what}`);
+}
+// The callers' one way: a late trigger said quietly, anything else set aside as untraced
+const notActed = (args) => (lateTrigger ? lateRequest(args) : untraced(args));
 // A request nextlevel can't trace: moved aside (or left where it is, for a file the command keeps), logged, its running
 // tasks flagged, said on Home and the phone
 function untraced({ file, kind, why, what, keep = false }) {
@@ -5642,7 +5662,7 @@ function takeAsk(s, now) {
     if (why === null) return;
     s.wakeTaken = key;
     if (why) {
-      untraced({ file: WAKEFILE, kind: 'wakeup', why, what: requestWords('wakeup', ask), keep: true });
+      notActed({ file: WAKEFILE, kind: 'wakeup', why, what: requestWords('wakeup', ask), keep: true });
       return;
     }
     if (takeWake(s, ask, { cfg: CFG.rounds, now }) !== 'stale') log(`autopilot: the orchestrator asked for a wake-up in ${s.wake.minutes} min${s.wake.due ? ` (at ${new Date(isoMs(s.wake.due)).toLocaleTimeString()}${s.wake.why ? `: ${s.wake.why}` : ''})` : ', its time set when its round ends'}`);
@@ -5669,7 +5689,7 @@ function observe() {
     let pressed = pressCount(press);
     if (pressed !== (s.runNow || 0)) {
       const why = requestProblem(ROUNDNOW, press, { trigger: true });
-      if (why) untraced({ file: ROUNDNOW, kind: 'round-now', why, what: requestWords('round-now', press), keep: true });
+      if (why) notActed({ file: ROUNDNOW, kind: 'round-now', why, what: requestWords('round-now', press), keep: true });
       if (why !== '') pressed = s.runNow || 0;
     }
     if (settings.autopilot && settings.onAt && settings.onAt !== s.onAt) autopilotOn(s, settings.onAt);

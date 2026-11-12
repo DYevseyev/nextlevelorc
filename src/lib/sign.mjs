@@ -25,6 +25,17 @@ export const keyFile = (root, home) => path.join(keysDir(home), `${projectKey(ro
 // never made again by itself (a worker that deleted the key must not get a fresh one its own files then match)
 export const markerFile = (root, home) => path.join(guardDir(root, home), 'signing.json');
 const keyHash = (key) => createHash('sha256').update(key).digest('hex').slice(0, 16);
+// The hub's record of the requests it acted on (signed with the key's `guard` purpose), started empty with each new key:
+// once a key is there, the record missing means it was deleted, which the hub doesn't take as "nothing acted on yet"
+export const actedFile = (root, home) => path.join(guardDir(root, home), 'acted.json');
+const emptyActed = (key, at) => `${JSON.stringify(sign({ ids: {} }, { key, purpose: 'guard', name: 'guard:acted.json', by: 'hub', at }), null, 2)}\n`;
+function startActed(root, home, key, at) {
+  try {
+    writeOnce(actedFile(root, home), emptyActed(key, at));
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+}
 
 function readKey(file) {
   try {
@@ -74,6 +85,7 @@ export function projectSigningKey(root, { home, create = false, at = new Date().
   if (!marker) {
     try {
       writeOnce(mf, `${JSON.stringify({ since: at, keyHash: keyHash(key) }, null, 2)}\n`);
+      startActed(root, home, key, at);
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       return projectSigningKey(root, { home, create: false, at });
@@ -88,9 +100,12 @@ export function projectSigningKey(root, { home, create = false, at = new Date().
 // the old one is no longer good; the caller lists what that sets aside.
 export function newSigningKey(root, { home, at = new Date().toISOString() } = {}) {
   const key = randomBytes(KEY_BYTES);
+  // (the record of the requests acted on starts again empty: nothing signed with the old key is good any more. A running
+  // hub signs its own record again with the new key when it sees the marker change)
   for (const [file, text] of [
     [keyFile(root, home), `${key.toString('hex')}\n`],
     [markerFile(root, home), `${JSON.stringify({ since: at, keyHash: keyHash(key) }, null, 2)}\n`],
+    [actedFile(root, home), emptyActed(key, at)],
   ]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
