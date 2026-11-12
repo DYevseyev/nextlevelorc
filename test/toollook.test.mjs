@@ -36,16 +36,22 @@ test('a look: each part compared with the last one; a part whose folder is anoth
     const bin = path.join(tmp, 'bin');
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'nextlevel.cmd'), '@echo off\n');
-    let status = '';
+    const vdir = path.join(tmp, 'v');
+    fs.mkdirSync(path.join(vdir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(vdir, 'src', 'hub.mjs'), 'export {};\n');
+    let files = ['src/hub.mjs'];
     let config = 'user.name\nOwner\0core.editor\nnotepad\0';
+    const calls = [];
     const git = (args) => {
-      if (args[0] === 'status') return { ok: true, out: status };
+      calls.push(args);
+      if (args[0] === 'status') return { ok: false, out: '' };
+      if (args[0] === 'ls-files') return { ok: true, out: files.join('\0') };
       if (args[0] === 'config' && args[1] === '--global') return { ok: true, out: config };
       if (args[0] === 'config' && args[1] === '--system') return { ok: false, out: '' };
       if (args[0] === 'config' && args[1] === '--get') return { ok: true, out: 'https://github.com/owner/nextlevel.git\n' };
       return { ok: false, out: '' };
     };
-    const look = (version = '/v/a', clone = '') => takeLook({ git, version, clone, bin, home: tmp });
+    const look = (version = vdir, clone = '') => takeLook({ git, version, clone, bin, home: tmp });
     const a = look();
     assert.deepEqual(diffLook(a, look()), [], 'nothing changed: nothing said');
     // A setting that doesn't run anything changes nothing; one that does is said
@@ -57,17 +63,28 @@ test('a look: each part compared with the last one; a part whose folder is anoth
     assert.deepEqual(diffLook(a, b)[0].items, ['alias.nltest = !echo guard-test (global)']);
     // A file beside the command, and nextlevel's own files
     fs.writeFileSync(path.join(bin, 'guard-test.txt'), 'guard-test\n');
-    status = ' M src/hub.mjs\n?? src/extra.mjs\n';
+    fs.writeFileSync(path.join(vdir, 'src', 'hub.mjs'), 'export const changed = 1;\n');
+    fs.writeFileSync(path.join(vdir, 'src', 'extra.mjs'), 'export {};\n');
+    files = ['src/hub.mjs', 'src/extra.mjs'];
     const c = look();
     assert.deepEqual(diffLook(b, c).map((x) => x.part).sort(), ['bin', 'version']);
-    assert.deepEqual(diffLook(b, c).find((x) => x.part === 'version').items, [' M src/hub.mjs', '?? src/extra.mjs']);
+    assert.deepEqual(diffLook(b, c).find((x) => x.part === 'version').items.map((x) => x.replace(/ \(.*$/, '')), ['src/extra.mjs', 'src/hub.mjs', 'no longer: src/hub.mjs']);
     assert.deepEqual(diffLook(b, c).find((x) => x.part === 'bin').items, ['guard-test.txt']);
-    assert.match(changeWords(diffLook(b, c)).join('\n'), /nextlevel's own files \(the version that runs\):  M src\/hub\.mjs; \?\? src\/extra\.mjs/);
+    assert.match(changeWords(diffLook(b, c)).join('\n'), /nextlevel's own files \(the version that runs\): src\/extra\.mjs \(/);
+    // The look never asks git status (it would hash a changed file through a clean filter), and lists config with includes
+    assert.ok(!calls.some((a) => a[0] === 'status'), JSON.stringify(calls));
+    assert.ok(calls.filter((a) => a[0] === 'config' && a.includes('--list')).every((a) => a.includes('--includes')));
     // After an update the hub runs from another version's folder: its files are compared from there on
-    assert.deepEqual(diffLook(c, look('/v/b')), []);
-    // The clone and its origin, for an installed tool
-    const d = look('/v/a', '/tool');
+    const other = path.join(tmp, 'v2');
+    fs.mkdirSync(other);
+    assert.deepEqual(diffLook(c, look(other)), []);
+    // The clone and its origin, its own settings and hooks, for an installed tool
+    const clone = path.join(tmp, 'tool');
+    fs.mkdirSync(path.join(clone, '.git', 'hooks'), { recursive: true });
+    const d = look(vdir, clone);
     assert.deepEqual(d.parts.origin.items, ['https://github.com/owner/nextlevel.git']);
+    fs.writeFileSync(path.join(clone, '.git', 'hooks', 'post-checkout'), 'echo guard-test\n');
+    assert.deepEqual(diffLook(d, look(vdir, clone)).map((x) => x.part), ['clonegit']);
     // A global hooks folder: the files in it count too
     const hooks = path.join(tmp, 'hooks');
     fs.mkdirSync(hooks);
@@ -155,5 +172,36 @@ test("a worker that changes a global git setting and a file beside the nextlevel
     await stopUi(ui);
     await ntfy.close();
     p.cleanup();
+  }
+});
+
+test("the look runs nothing it looks at: a clean filter a worker set up in the global settings and the tree's attributes never runs", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nextlevel-look-filter-'));
+  try {
+    const repo = path.join(tmp, 'v');
+    const global = path.join(tmp, 'gitconfig');
+    fs.writeFileSync(global, '[filter "nltest"]\n\tclean = touch ../ran-filter && cat\n');
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: '1' };
+    const g = (args, cwd = repo) => {
+      const r = spawnSync('git', ['-c', 'core.fsmonitor=false', '--no-optional-locks', ...args], { cwd, env, encoding: 'utf8' });
+      return { ok: r.status === 0, out: r.stdout || '' };
+    };
+    fs.mkdirSync(repo);
+    g(['init', '-q']);
+    fs.writeFileSync(path.join(repo, '.gitattributes'), '* filter=nltest\n');
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+    g(['add', '-A']);
+    g(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'one']);
+    fs.rmSync(path.join(tmp, 'ran-filter'), { force: true });
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'two\n'); // (a changed file: git status would hash it through the filter)
+    const look = takeLook({ git: g, version: repo, bin: path.join(tmp, 'bin'), home: tmp });
+    assert.ok(look.parts.version.items.some((x) => x.startsWith('a.txt (')), JSON.stringify(look.parts.version));
+    assert.ok(!fs.existsSync(path.join(tmp, 'ran-filter')), 'the filter ran');
+    assert.ok(look.parts.gitglobal.items.some((x) => x.startsWith('filter.nltest.clean')), 'and the look names it');
+    // (the stand-in itself: git status would have run it)
+    g(['status', '--porcelain']);
+    assert.ok(fs.existsSync(path.join(tmp, 'ran-filter')), 'git status runs the filter here, so the test means something');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

@@ -238,7 +238,9 @@ As built (2B-1a3, `src/lib/toollook.mjs`): every part is compared with the hub's
 (`tool-look.json`), so the launcher is compared with what it was rather than with the version's copy (a pinned older
 version runs beside a newer launcher), and the clone's origin with the last look (state.json doesn't record it). Held
 tasks say why (`waiting`); the owner's Seen takes the files as they are now as the next look's base. A global hooks
-folder's files count with the global settings.
+folder's files count with the global settings, and an included file's settings with the file that includes it. Files are
+the ones `git ls-files` lists, hashed by nextlevel, never `git status` (which hashes a changed file through the clean
+filter its attributes name); the clone's own settings, hooks and `info/` files are a part of their own.
 
 ## 4. The agents' account (layer 2)
 

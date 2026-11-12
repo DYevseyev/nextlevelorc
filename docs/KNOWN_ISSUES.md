@@ -1126,9 +1126,10 @@ still gets past it:
   project; after it, typed lines wait for you.
 
 ## nextlevel's own files, looked at after each attempt (FR-017 part 2B, 2B-1a3)
-After each attempt and at the hub's start, the hub compares nextlevel's own files (`git status` in the version that
-runs, and in the tool's clone), the clone's origin, the files in `~/.nextlevel/bin` and your global and system git
-settings that run a program or send a push elsewhere (with a global hooks folder's files) with its last look
+After each attempt and at the hub's start, the hub compares nextlevel's own files (each file git lists in the version that
+runs and in the tool's clone, hashed by nextlevel: never `git status`, which would run a clean filter), the clone's
+origin, its own git settings, hooks and `info/` files, the files in `~/.nextlevel/bin` and your global and system git
+settings that run a program or send a push elsewhere (an included file's too, with a global hooks folder's files) with its last look
 (`src/lib/toollook.mjs`, kept in `~/.nextlevel/guard/<project>/tool-look.json`). A change holds every task in the queue
 (checks, pushes and git jobs go on) until you press Seen on Home; the attempts that ran since the last look are flagged,
 and the phone hears it once. What it doesn't do:
@@ -1138,6 +1139,9 @@ and the phone hears it once. What it doesn't do:
   developer running a hub from one), holds dispatch until Seen: the hub can't tell who made it. An update to another
   version starts the look again from that version's files.
 - **The clone's origin** is compared with the last look, not with a record of where the install came from.
+- **The hub's other git still reads your global settings.** The look itself runs nothing it looks at, but a filter or a
+  hook a worker put in your global settings runs in the hub's ordinary git work (a slot's merge, a commit) until you
+  see the card: after the fact, as above.
 
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the

@@ -2617,7 +2617,7 @@ function lookGit(args, cwd) {
   const r = spawnSync('git', ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${none}`, '--no-optional-locks', ...args], { cwd, env: readEnv(), encoding: 'utf8', windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
   return { ok: r.status === 0, out: r.stdout || '' };
 }
-const lookNow = () => takeLook({ git: lookGit, version: TOOL_ROOT, clone: toolClone(), bin: path.join(homeDir(), 'bin'), home: os.homedir() });
+const lookNow = () => takeLook({ git: lookGit, version: TOOL_ROOT, clone: toolClone(), bin: path.join(homeDir(), 'bin'), home: process.env.HOME || os.homedir() }); // (~ in core.hooksPath: git reads HOME, on Windows too)
 const runningTasks = (but) => allJobs().filter((j) => j.type === 'task' && j.id !== but && ['running', 'verifying'].includes(j.state)).map((j) => j.id);
 function lookAgain(when, tasks = []) {
   let rec;
