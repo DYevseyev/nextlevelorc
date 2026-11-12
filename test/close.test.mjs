@@ -163,8 +163,11 @@ test('nextlevel close (FR-021): a task never dispatched, one thrown away, refusa
     assert.equal(p.hub(['wait', 'M1-06-activity', '--minutes', '3']).code, 0);
     const again = p.hub(['retry', 'M1-03-blocked', '--feedback', 'the owner wants it after all']);
     assert.match(again.out, /M1-03-blocked was closed \d{4}-\d\d-\d\d: the owner's call\. It is open again once the hub starts this retry/);
-    await waitUntil('the retry to start', () => !closed(p)['M1-03-blocked']);
-    assert.match(fs.readFileSync(p.state('logs', 'hub.log'), 'utf8'), /M1-03-blocked: dispatched or retried, so it is open again \(it was closed \d{4}-\d\d-\d\d: the owner's call\)/);
+    // (the hub writes its log line just after the closure goes, with a console write between that can wait on the
+    // test's pipe: wait for the line itself)
+    const reopened = /M1-03-blocked: dispatched or retried, so it is open again \(it was closed \d{4}-\d\d-\d\d: the owner's call\)/;
+    await waitUntil('the retry to start, said in hub.log', () => reopened.test(fs.readFileSync(p.state('logs', 'hub.log'), 'utf8')));
+    assert.equal(closed(p)['M1-03-blocked'], undefined, 'the closure is gone');
     assert.equal(p.hub(['wait', 'M1-03-blocked', '--minutes', '3']).code, 0);
     assert.notEqual(m(await view(), 'M1').tasks.find((t) => t.id === 'M1-03-blocked').state, 'closed');
 
