@@ -414,8 +414,11 @@ Windows PowerShell 5.1 refusing to parse `(a; b)` inside parentheses.
 1. **2B-1a, the command refuses a worker:** `lib/ancestry.mjs`, the record (attempts and their verify, `nextlevel
    verify` jobs, git jobs and pushes), the session token, PATH, the refusals logged and flagged on the task, their
    tests. This stops the ordinary command on its own.
-   **2B-1a2, what a worker writes that an owner would:** typed notes confirmed on the dashboard, the look after each
-   attempt (3.4), their tests. (Split from 2B-1a to keep each pull request reviewable.)
+   **2B-1a2, typed notes confirmed on the dashboard:** a note typed into the notes file waits for the owner's Confirm
+   (the orchestrator sees only that it waits, never its text, and it starts no round); a tick in the handoff file is
+   marked on its card until the owner presses Done; Home asks about both. Their tests.
+   **2B-1a3, the look after each attempt** (3.4), its tests. (Both split from 2B-1a to keep each pull request
+   reviewable.)
 2. **2B-1b, signed state:** `lib/sign.mjs`, every signed writer, `seq` and expiry, the migration, the untraced card,
    their tests.
 3. **2B-2, the agents' account (layer 2):** after the spike passes, and after or with the runner's part B, whichever

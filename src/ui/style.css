@@ -815,3 +815,5 @@ form.persona-form p { margin: 0; }
   table.run-steps th:last-child, table.run-steps td:last-child { display: none; }
   table.run-steps td, table.run-steps th { padding: 4px 5px; }
 }
+.cardx p.warn { color: var(--warn); }
+.card.typed { border-left: 3px solid var(--warn); }

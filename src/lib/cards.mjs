@@ -178,7 +178,7 @@ function markdownItems(text, { checkboxes }) {
       }
       cur.entry = null;
       // its fields: "- Where: ..." (as nextlevel writes them), or "Where: ..." on a line of its own
-      const labels = 'Where|Why|Reply|Replied|Added|Asked|Seen|Done|Declined|Withdrawn|Removed|Edited|Switched off|Cancelled|Closed|Reopened';
+      const labels = 'Where|Why|Reply|Replied|Added|Asked|Seen|Done|Declined|Withdrawn|Removed|Edited|Switched off|Cancelled|Closed|Reopened|Ticked';
       const sub = line.trim().match(new RegExp(`^[-*]\\s+(${labels})\\b:?\\s*(.*)$`, 'i')) || line.trim().match(new RegExp(`^(${labels}):\\s*(.*)$`, 'i'));
       if (sub) {
         const key = sub[1].toLowerCase();
@@ -255,7 +255,7 @@ const indent = (text) => String(text).split('\n').map((l, i) => (i ? `  ${l}` : 
 const links = (x) => [x.commit ? `commit ${x.commit}` : '', x.task ? `task ${x.task}` : ''].filter(Boolean).join(', ');
 
 export function notesMarkdown(items, { store = '.nextlevel/notes.json' } = {}) {
-  const { rules, open, history } = noteGroups(items);
+  const { rules, open, history, unconfirmed } = noteGroups(items);
   const item = (n) => {
     const tags = [n.type === 'rule' ? 'rule' : 'one-time', n.off ? 'off' : n.status].join(', ');
     const meta = [`Added ${when(n.createdAt)}${n.editedAt ? `, edited ${when(n.editedAt)}` : ''}${n.seenAt ? ` · seen by the orchestrator ${when(n.seenAt)}` : ''}`];
@@ -275,6 +275,7 @@ export function notesMarkdown(items, { store = '.nextlevel/notes.json' } = {}) {
     '     The orchestrator reads them with nextlevel note list and answers with nextlevel note seen, done or decline. -->',
     '',
     ...section('Standing rules', rules),
+    ...(unconfirmed.length ? section("Typed into this file: not the owner's until confirmed on the dashboard", unconfirmed) : []),
     ...section('To do', open),
     ...section('History', history),
   ].join('\n').replace(/\n+$/, '\n');
@@ -294,6 +295,7 @@ export function handoffMarkdown(items, { store = '.nextlevel/handoff.json' } = {
     if (x.where) out.push(`  - Where: ${x.where}`);
     if (x.why) out.push(`  - Why: ${x.why}`);
     out.push(`  - Asked ${when(x.createdAt)}${x.task ? ` (task ${x.task})` : ''}`);
+    if (x.ticked && x.status === 'open') out.push(`  - Ticked in this file ${when(x.ticked.at)}: done once the owner presses Done on the dashboard`);
     if (x.accept) out.push(`  - Acceptance: ${x.accept.plan} on ${x.accept.env}: ${acceptWords(x)}`);
     // (the replies and answers, and the card's closings and reopenings, in time order: undo Done, FR-018)
     for (const e of conversation(x)) {
@@ -456,22 +458,29 @@ export function cardStore({ root, stateDir, files, onLock }) {
       if (known) {
         // a ticked item is done; nothing else a hand edit says is taken over (and a held change's card is decided on
         // the dashboard only: a tick in the file never approves anything)
-        if (kind === 'handoff' && known.status === 'open' && x.status === 'done' && !known.guard) {
-          Object.assign(known, { status: 'done', doneAt: at, updatedAt: at });
-          acted(data, `you ticked ${known.id} in ${files.handoff}`, at);
+        // Since FR-017 part 2B (2B-1a2) a tick is only marked: anyone who can write the file (a worker's merge, an agent
+        // in the main checkout) could have made it, so the card is done when the owner presses Done on the dashboard
+        if (kind === 'handoff' && known.status === 'open' && x.status === 'done' && !known.guard && !known.ticked) {
+          Object.assign(known, { ticked: { at, file: files.handoff } });
           changed = true;
         }
         continue;
       }
       const id = !saved && x.id && !byId.has(x.id) ? x.id : `${k.prefix}${nextNumber()}`;
       // imported first: its state as the file says; added by hand later: a new item
-      const item = fromParsed(kind, saved ? { ...x, status: kind === 'notes' ? 'new' : x.status === 'done' ? 'done' : 'open', off: false } : x, id, at);
+      // (FR-017 part 2B: a card typed into the handoff file is the team's ask, open: a tick on it and the owner's replies
+      // quoted in it are nobody's, since anyone who can write the file could have typed them; the owner replies and
+      // presses Done on the dashboard)
+      const typed = kind === 'notes' ? { status: 'new' } : { status: 'open', thread: (x.thread || []).filter((e) => e.by !== 'owner') };
+      const item = fromParsed(kind, saved ? { ...x, ...typed, off: false } : x, id, at);
       data.items.push(item);
       byId.set(id, item);
       byKey.set(k.key(item), item);
       data.next = Math.max(nextNumber(), Number(id.slice(1)) + 1);
-      // (a note typed into the file is the owner's; a "- [ ]" line there is a team's on an older role doc)
-      if (saved && kind === 'notes') acted(data, `your note ${id}, typed into ${files.notes}`, at);
+      // (a note typed into the file waits for the owner's Confirm on the dashboard, FR-017 part 2B: anyone who can write
+      // the file could have typed it, so it is nobody's until then, and the orchestrator doesn't see it; a "- [ ]" line
+      // there is a team's on an older role doc)
+      if (saved && kind === 'notes') item.unconfirmed = { at, file: files.notes };
       changed = true;
     }
     return { data, changed };
@@ -557,6 +566,10 @@ export function cardStore({ root, stateDir, files, onLock }) {
     return t;
   };
 
+  // (the orchestrator never answers a note the owner hasn't confirmed: it isn't the owner's yet)
+  const notConfirmed = (n) => {
+    if (n.unconfirmed) throw new Error(`${n.id} was typed into ${n.unconfirmed.file} and waits for the owner's Confirm on the dashboard: it isn't the owner's note yet`);
+  };
   const notes = {
     list: () => load('notes').data.items,
     add({ text, type = 'once' }) {
@@ -569,12 +582,25 @@ export function cardStore({ root, stateDir, files, onLock }) {
         return item;
       });
     },
-    // The owner's edit: the orchestrator reads it again (new), unless it was handled already
+    // The owner's Confirm of a note typed into the file (FR-017 part 2B): it is theirs now, and the orchestrator sees it
+    confirm(id) {
+      return change('notes', (data) => {
+        const n = find(data, id);
+        if (!n.unconfirmed) throw new Error(`${n.id} is confirmed already`);
+        const at = now();
+        delete n.unconfirmed;
+        acted(data, `you confirmed ${n.id}, typed into ${files.notes}`, at);
+        return Object.assign(n, { updatedAt: at });
+      });
+    },
+    // The owner's edit: the orchestrator reads it again (new), unless it was handled already (an edit of a typed note is
+    // the owner's, so it confirms it too)
     edit(id, text) {
       return change('notes', (data) => {
         const n = find(data, id);
         if (!['new', 'seen'].includes(n.status)) throw new Error(`${n.id} is ${n.status} already: add a new note instead`);
         const at = now();
+        delete n.unconfirmed;
         Object.assign(n, { text: textOf(text), status: 'new', editedAt: at, updatedAt: at, seenAt: null });
         acted(data, `your change to ${n.id}`, at);
         return n;
@@ -587,6 +613,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
         if (!['new', 'seen'].includes(n.status)) throw new Error(`${n.id} is ${n.status} already`);
         const at = now();
         acted(data, `you withdrew ${n.id}`, at);
+        delete n.unconfirmed;
         return Object.assign(n, { status: 'withdrawn', handledAt: at, updatedAt: at });
       });
     },
@@ -616,6 +643,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
         const at = now();
         return ids.map((id) => {
           const n = find(data, id);
+          notConfirmed(n);
           if (n.status === 'new') Object.assign(n, { status: 'seen', seenAt: at, updatedAt: at });
           return n;
         });
@@ -624,6 +652,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
     done(id, { reply, commit = '', task = '' }) {
       return change('notes', (data) => {
         const n = find(data, id);
+        notConfirmed(n);
         if (n.type === 'rule') throw new Error(`${n.id} is a standing rule: it stays until the owner removes it (nextlevel note seen ${n.id} says you follow it)`);
         if (!['new', 'seen'].includes(n.status)) throw new Error(`${n.id} is ${n.status} already`);
         const at = now();
@@ -633,6 +662,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
     decline(id, { reply }) {
       return change('notes', (data) => {
         const n = find(data, id);
+        notConfirmed(n);
         if (!['new', 'seen'].includes(n.status)) throw new Error(`${n.id} is ${n.status} already`);
         const at = now();
         return Object.assign(n, { status: 'declined', reply: line(reply, 'why'), handledAt: at, updatedAt: at, seenAt: n.seenAt || at });
@@ -876,6 +906,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
     if (x.status !== 'open') throw new Error(`${x.id} is ${x.status} already`);
     if (said) ownerSays(x, said, at);
     acted(data, said ? `your reply on ${x.id}, marked done` : `you marked ${x.id} done`, at);
+    delete x.ticked;
     x.events = [...eventsOf(x), { kind: 'done', by: 'owner', how: '', note: '', at }];
     return Object.assign(x, { status: 'done', closedBy: 'owner', doneAt: at, updatedAt: at });
   }
@@ -925,7 +956,7 @@ export function cardStore({ root, stateDir, files, onLock }) {
   // Something the orchestrator hasn't answered or picked up: a new note or rule (on), a handoff item the owner
   // did or replied to since it last looked.
   const news = () => ({
-    notes: notes.list().filter((n) => n.status === 'new' && !n.off).map((n) => n.id),
+    notes: notes.list().filter((n) => n.status === 'new' && !n.off && !n.unconfirmed).map((n) => n.id),
     handoff: handoff.list().filter((x) => x.status !== 'cancelled' && Math.max(ms(x.doneAt), ms(x.repliedAt), ms(x.reopenedAt)) > ms(x.seenAt)).map((x) => x.id),
   });
   // What the owner did on each store, as counted (FR-019): { notes: { n, at, what }, handoff: { n, at, what } }. Reading
@@ -948,9 +979,13 @@ export function cardStore({ root, stateDir, files, onLock }) {
 }
 
 // Where a note is on the Notes page: standing rules (not removed), to do (one-time, new or seen), history.
+// (unconfirmed: typed into the Markdown and waiting for the owner's Confirm, FR-017 part 2B: in no other group, so the
+// orchestrator, the assistant and the counts never take one for the owner's)
 export function noteGroups(items) {
-  const rules = items.filter((n) => n.type === 'rule' && n.status !== 'removed');
-  const open = items.filter((n) => n.type !== 'rule' && ['new', 'seen'].includes(n.status));
-  const history = items.filter((n) => !rules.includes(n) && !open.includes(n)).sort((a, b) => String(b.handledAt || b.updatedAt).localeCompare(String(a.handledAt || a.updatedAt)));
-  return { rules, open, history };
+  const unconfirmed = items.filter((n) => n.unconfirmed && ['new', 'seen'].includes(n.status));
+  const rest = items.filter((n) => !unconfirmed.includes(n));
+  const rules = rest.filter((n) => n.type === 'rule' && n.status !== 'removed');
+  const open = rest.filter((n) => n.type !== 'rule' && ['new', 'seen'].includes(n.status));
+  const history = rest.filter((n) => !rules.includes(n) && !open.includes(n)).sort((a, b) => String(b.handledAt || b.updatedAt).localeCompare(String(a.handledAt || a.updatedAt)));
+  return { rules, open, history, unconfirmed };
 }

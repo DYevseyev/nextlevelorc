@@ -2464,6 +2464,8 @@ function handoffCard(x) {
     h('dl.facts', {}, x.where ? [h('dt', {}, 'Where'), h('dd', {}, x.where)] : null, x.why ? [h('dt', {}, 'Why'), h('dd', {}, x.why)] : null,
       h('dt', {}, 'Asked'), h('dd', {}, ago2(x.createdAt), x.task ? [' · ', taskLink(x.task)] : null)),
     x.accept ? acceptBox(x) : null,
+    // (FR-017 part 2B: a tick in the handoff file is marked, never Done: anyone who can write the file could have made it)
+    x.ticked && open ? h('p.small.warn', {}, `Ticked in ${x.ticked.file} ${ago2(x.ticked.at)}. It counts as done only when you press Done here: anyone who can write that file could have ticked it.`) : null,
     threadView(x, { when: ago2, fold: 2, open: cards.unfolded.has(x.id), onToggle: (on) => (on ? cards.unfolded.add(x.id) : cards.unfolded.delete(x.id)), events: x.guard ? [] : x.events, eventLabel }),
     x.reopenedAt && open ? h('p.small.muted', {}, "Reopening doesn't undo what the team already did: it sees the card open again at its next start or round.") : null);
   // A Done that can still be undone (undo Done): nothing reached the team yet
@@ -2591,7 +2593,7 @@ const NOTE_STATE = {
 function noteCard(n) {
   const key = `n:${n.id}`;
   const rule = n.type === 'rule';
-  const [kind, text] = n.off ? ['idle', () => 'Switched off'] : NOTE_STATE[n.status] || ['idle', () => n.status];
+  const [kind, text] = n.unconfirmed ? ['warn', () => 'Typed into the file: not confirmed'] : n.off ? ['idle', () => 'Switched off'] : NOTE_STATE[n.status] || ['idle', () => n.status];
   const busy = cards.busy.has(key);
   const card = h(`div.cardx.note.s-${n.status}${n.off ? '.off' : ''}`, { id: `card-${n.id}` },
     h('div.cardx-head', {}, h('span.cid', {}, n.id), h('span.type', {}, rule ? 'Standing rule' : 'One-time'), h(`span.badge.${kind}`, {}, text(n)), h('span.muted.small.when', {}, `added ${ago2(n.createdAt)}`)));
@@ -2615,6 +2617,7 @@ function noteCard(n) {
   if (live && !editing) {
     const act = (action, label, primary = false) => h(`button.btn.small${primary ? '.primary' : ''}`, { type: 'button', disabled: busy, onclick: () => cardPost('/api/notes', { action, id: n.id }, key) }, label);
     const buttons = [];
+    if (n.unconfirmed) buttons.push(act('confirm', 'Confirm: it is mine', true));
     if (['new', 'seen'].includes(n.status)) buttons.push(h('button.btn.small', { type: 'button', onclick: () => { cards.edits.set(n.id, n.text); renderCards(); } }, 'Edit'));
     if (rule) {
       buttons.push(n.off ? act('on', 'Switch on') : act('off', 'Switch off'));
@@ -2648,7 +2651,7 @@ function renderCards() {
   const d = cards.data;
   if (!d) return;
   if (d.files) $('#notes-files').textContent = `${d.files.notes} and ${d.files.handoff}`;
-  const { rules, open, history } = d.notes;
+  const { rules, open, history, unconfirmed = [] } = d.notes;
   const q = cards.search.trim().toLowerCase();
   const found = history.filter((n) => !q || `${n.id} ${n.text} ${n.reply} ${n.commit} ${n.task}`.toLowerCase().includes(q));
   // The held changes come from the guard's records; their handoff cards aren't shown twice
@@ -2676,6 +2679,10 @@ function renderCards() {
       d.handoff.history.length ? h('details.learn.done-cards', { open: historyOpen }, h('summary', {}, `Done and cancelled (${d.handoff.history.length})`), h('div.cards.card-list', {}, d.handoff.history.map(handoffCard))) : null),
     h('div.grid', {},
       h('div.col', {},
+        // (FR-017 part 2B: notes typed into the Markdown wait for the owner's Confirm; the orchestrator doesn't see them)
+        unconfirmed.length ? h('div.card.typed', {}, h('h2', {}, 'Typed into the notes file ', h('span.muted', {}, String(unconfirmed.length))),
+          h('p.muted.small', {}, `Anyone who can write ${d.files?.notes || 'the notes file'} could have typed these, a worker's merge too: they count as yours, and the orchestrator sees them, once you confirm them.`),
+          h('div.cards', {}, unconfirmed.map(noteCard))) : null,
         addNoteBox(),
         h('div.card', {}, h('h2', {}, 'Standing rules ', h('span.muted', {}, rules.length ? String(rules.length) : '')),
           rules.length ? h('div.cards', {}, rules.map(noteCard)) : h('p.muted', {}, 'None. A standing rule stays listed, and followed, until you remove it.'))),

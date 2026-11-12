@@ -8293,7 +8293,7 @@ function cardsSummary() {
     const draftWaits = (x) => x.status === 'open' && x.acceptState === 'fixing' && (!ap.autopilot || !!ap.pausedReason);
     const items = all.filter((x) => awaitsOwner(x) || draftWaits(x));
     // (closed: the handled items' ids, so Home's Blockers doesn't count a "Needs you" the owner has done)
-    return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id), now: all.some((x) => x.pending) ? new Date(clockNow()).toISOString() : undefined };
+    return { stamp: store.stamp(), rules: g.rules.length, open: g.open.length, fresh: store.news().notes.length, unconfirmed: g.unconfirmed.length, ticked: all.filter((x) => x.status === 'open' && x.ticked).length, handoff: items.length, items, closed: all.filter((x) => x.status !== 'open').map((x) => x.id), now: all.some((x) => x.pending) ? new Date(clockNow()).toISOString() : undefined };
   } catch (err) {
     return { stamp: '', error: err.message, items: [] };
   }
@@ -8390,6 +8390,8 @@ function noteAction(b) {
       return { item: n.edit(id, String(b.text ?? '')), message: 'Changed: the orchestrator reads it again.' };
     case 'withdraw':
       return { item: n.withdraw(id), message: 'Withdrawn.' };
+    case 'confirm':
+      return { item: n.confirm(id), message: 'Confirmed: it is your note now, and the orchestrator reads it at its next start or round.' };
     case 'off':
       return { item: n.setOff(id, true), message: "Switched off: the orchestrator doesn't follow it until you switch it on." };
     case 'on':
