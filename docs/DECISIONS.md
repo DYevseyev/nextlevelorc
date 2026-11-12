@@ -2180,6 +2180,17 @@ One entry each: date, decision, why, alternatives.
   owner-session and concurrent-edit checks as the switch guard the write. Zero pauses new reviews until the owner
   raises the cap, which Home says explicitly. Existing reservations keep counting, pending events keep waiting,
   and a review already running finishes. No ledger migration or new scheduler behavior is needed.
+- 2026-11-11 — **A worker's command is refused by its ancestry, not its variables** (FR-017 part 2B, 2B-1a). The hub
+  records the processes it starts for an attempt (`_run`, its verify's shells), for checks, git jobs and pushes, in
+  `~/.nextlevel/guard/<project>/agents.json`, by pid and the time it recorded them; a command that acts walks its own
+  parents in one snapshot and refuses under any of them. Every project's record is read (a worker can name any
+  project); `/proc` on Linux, one PowerShell listing on Windows (about 0.7 s, paid only while something is recorded);
+  with no listing, only the orchestrator's session token runs. The look-only list is the design's (status, result,
+  wait, usage, note list, handoff list/show, doctor without --fix, version, help); a new command acts until it is
+  listed. Alternatives: a token in the worker's environment (it can be cleared, as the variables can), a named pipe
+  to the hub (more moving parts, and the worker can still reach the files), or waiting for the agents' Windows user
+  (2B-2, which needs the spike first). The typed notes and the look after each attempt became their own pull request
+  (2B-1a2) to keep this one reviewable.
 - 2026-11-11 - **Each security scan writes its output to a path of its own (`/output/scan-<scan id>`).** The scanner's
   state, the project's state volume, records every saved scan by its output folder's path and refuses to save a later
   scan into a path an earlier one has ("The scan artifact directory belongs to an existing scan"), whatever the folder

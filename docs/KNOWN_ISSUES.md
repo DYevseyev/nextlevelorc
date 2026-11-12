@@ -985,7 +985,9 @@ command**. A determined agent, running as the owner, can still:
   (`NEXTLEVEL_AGENT`, `NEXTLEVEL_SESSION`, `NEXTLEVEL_TASK_ID`: `src/lib/session.mjs`). A command started without them
   (`env -u`, `Remove-Item Env:`, a scheduled task) is taken for the owner's: `nextlevel update` (to a release that passes
   the tool's checks, or back to an older one) and `nextlevel channel` (a project on a candidate branch) run, `nextlevel report` files on a yes, and a worker's `nextlevel push` and `note`/`handoff` go through
-  (the worker checks there read the same variables: FR-017 part 2 keeps workers from the hub instead).
+  (the worker checks there read the same variables). Since FR-017 part 2B (2B-1a) a command that acts is refused
+  under a worker, its task's verify or a check by its ancestry, whatever its variables say ("A command under a worker",
+  below); the orchestrator and the assistant still pass for the owner this way.
 - **Turn on the GitHub checks runner, or turn off fork pull requests' workflows, as the owner.** `nextlevel team runner
   on` and the doctor's fix of `runner.forks` refuse in an agent's session, read by the same variables; a command that
   clears them is taken for the owner's. In part A `on` changes nothing; the fork fix closes a setting, never opens one.
@@ -1082,6 +1084,39 @@ command**. A determined agent, running as the owner, can still:
   compare merges with a record the hub keeps).
 Fix later (part 2 and after): the workers can't reach the hub at all; then a separate Windows user for agents, with its
 own home folder and no access to the owner's sign-ins, `.env` or nextlevel's files.
+
+## A command under a worker (FR-017 part 2B, 2B-1a)
+A `nextlevel` command that acts is refused when one of its parent processes is one the hub recorded: a worker's own
+process (`_run`), its task's verify, a `nextlevel verify` check, a git job or a push (`src/lib/ancestry.mjs`, the record in
+`~/.nextlevel/guard/<project>/agents.json`, refusals in `refused.jsonl` beside it and on the task). What it costs and what
+still gets past it:
+- **The listing's cost.** On Windows the chain comes from one listing of all processes (Windows' own PowerShell,
+  `Get-CimInstance Win32_Process`): about 0.7 s on the owner's PC (the spike's S10: median 0.70 s, 0.64 to 1.4 s, idle)
+  and more on a busy GitHub runner. It is paid only by a command that acts while something is recorded; on Linux the
+  chain is read from `/proc` with no program started.
+- **PowerShell's environment and modules.** The listing's PowerShell gets an environment made from the OS
+  (`windowsEnv`: Windows' folder, the account's home from `os.userInfo()`, its profile folders, `PSModulePath` pinned to
+  Windows' own modules), none of the caller's values, so a worker's `PSModulePath` or `.NET` profiler variables (`COR_*`)
+  reach nothing. And it loads no module (`WMI_LIST` in `src/lib/proctree.mjs`: WMI through .NET, no cmdlet). Measured on
+  GitHub's Windows runner (11 November): a cmdlet from a module (`Get-CimInstance`, `Get-Process`, `Add-Type`) took
+  about 18 s in that environment, because PowerShell 5.1 analyses its modules first, and the runner's image names a
+  pre-built cache in `PSModuleAnalysisCachePath` that the caller's environment had and this one doesn't; with only
+  `SystemRoot`, `windir` and `SystemDrive` it gave no answer in 20 s. The module-free listing took 0.28 s there (the
+  CIM listing with the full environment: 3 s) and gave the same processes.
+- **No listing.** When the listing doesn't answer in 20 s while something is recorded, the command refuses unless it
+  carries a live session token of the orchestrator (its window and each round get one, `NEXTLEVEL_SESSION_TOKEN`).
+- **A process outside the tree.** A worker that starts a process whose parent chain doesn't reach its `_run` (one that
+  detaches and outlives it, a scheduled task, `cmd /c start` on Windows) and runs `nextlevel` from it passes. So does a
+  worker that writes the hub's files directly (`.nextlevel/queue/`, `wakeup.json`, the cards): signing them is 2B-1b,
+  and keeping workers out of the files is the agents' Windows user (2B-2).
+- **nextlevel's code from a checkout of its own.** The test switches (`HOME`/`USERPROFILE` for the record's home,
+  `NEXTLEVEL_PROCESS_LIST_MS`) count only when nextlevel runs from a checkout that is neither a version folder nor the
+  tool's clone. A worker that clones nextlevel's public repository (or copies its code) and runs it from there with
+  another home passes: that is the worker running code of its own that writes the hub's files, as above (2B-1b, 2B-2).
+- **A worker in a window of its own** (`workers.window`) or one an earlier hub run started is recorded from the pid in
+  its `run.json` at the hub's next look: a worker that rewrites that file first isn't recorded.
+- **The hub's own git in a slot** (its commit for a worker whose sandbox can't write git) isn't recorded: a hook it runs
+  is git's own, which the guard's git watch covers.
 
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the

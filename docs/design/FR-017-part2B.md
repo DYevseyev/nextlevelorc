@@ -108,22 +108,27 @@ into Windows.
 
 ### 3.1 The command: refused by ancestry
 
-- **The record.** As a worker starts, the hub writes `~/.nextlevel/guard/<project>/workers.json`: each running
-  attempt's task id and its `_run` process (pid and start time, from the hub's own handle: below), signed by the hub.
-  Removed as the attempt's verify ends. It lives outside the project, beside the guard's records, so no worker reaches
-  it in layer 2.
+- **The record.** As a worker starts, the hub writes `~/.nextlevel/guard/<project>/agents.json`: each running
+  attempt's task id and its `_run` process (its pid and the time the hub recorded it: a process with that pid counts
+  only if it started no later than 2 s after that time, so a pid Windows gave to a later program never matches),
+  signed by the hub (2B-1b). Removed as the attempt's verify ends. It lives outside the project, beside the guard's
+  records, so no worker reaches it in layer 2. The command reads every project's record on the PC: a worker can name
+  any project, or none.
 - **The record covers the attempt's verify too.** A task's verify commands run the worker's code (its scripts and
   tests) in the slot as the owner, from the hub (`finishTask`), after the worker's own processes ended. The record
   keeps the attempt until its verify ends, and names each verify shell the hub starts (pid and start time, from the
   hub's own child handle). The same holds for the processes of a `nextlevel verify` job and of the hub's git jobs
-  (a project hook): they are recorded as `check` and `git-job`, and an acting command under them refuses as under a
-  worker. In layer 2 a task's verify runs as the agents' account, through the host (section 4.3).
+  and pushes (a project hook): they are recorded as `check` and `git-job`, and an acting command under them refuses as
+  under a worker. (The hub's own git in a slot around an attempt, a commit for a worker whose sandbox can't write git,
+  runs in one call the hub waits for and isn't recorded: the hooks it could run are git's own, which gitguard watches.) In layer 2 a task's verify runs as the agents' account, through the host (section 4.3).
 - **The record comes from the hub's own handles.** The hub knows `_run`'s pid from the child it started; it reads
   that process's start time from one snapshot and records it. Every worker process descends from `_run`, so the
   engine's pid (which `run.json` reports, and a worker can rewrite) isn't needed for the check. An attempt the hub
-  started in a window of its own (FR-010) is recorded from the window's process the same way.
+  started in a window of its own (FR-010), or that an earlier hub run started, has no handle: it is recorded from
+  `run.json`'s pid at the hub's next look, while that process runs (a worker could rewrite it first: section 7).
 - **The check** (`src/lib/ancestry.mjs`, new, pure apart from the snapshot): one snapshot of all processes
-  (`listProcesses`), the command's own chain of parents by parent id, each parent valid only if it started before its
+  (`listProcesses`; on Linux the chain is read from `/proc`, one file per parent, with no program to start), the
+  command's own chain of parents by parent id, each parent valid only if it started before its
   child (the rule `proctree.mjs` already uses). A link to a recorded worker process refuses: "this command runs under
   task <id>'s worker: workers don't ask the hub for anything; put it in your report". The refusal is logged in the
   guard's `refused.jsonl` and flags the task (section 5).
@@ -136,7 +141,8 @@ into Windows.
   `~/.nextlevel/bin` off its PATH, a worker reaches even the read-only ones only by their full path.)
 - **Nothing from the caller's environment.** The check reads its record from the owner's home as the OS gives it
   (`os.userInfo().homedir`, never `NEXTLEVEL_HOME`, `USERPROFILE` or `HOME`), lists processes with Windows' own
-  PowerShell at its fixed path (checked to exist), or `/bin/ps`, and waits `LIST_WAIT_MS` whatever
+  PowerShell at its fixed path (checked to exist) in an environment made from the OS (`windowsEnv`; none of the
+  caller's values), loading no PowerShell module (`WMI_LIST`: a module's analysis took about 18 s there, KNOWN_ISSUES), or `/bin/ps`, and waits `LIST_WAIT_MS` whatever
   `NEXTLEVEL_PROCESS_LIST_MS` says. Test switches (`NEXTLEVEL_PROCESS_LIST_MS`, a stand-in listing,
   `NEXTLEVEL_TEST_*`) are honoured only when the tool runs from a checkout that is not an installed version folder.
 - **Its cost:** the snapshot on Windows is one PowerShell start, about a second (KNOWN_ISSUES: "over 20 s on a busy
@@ -149,6 +155,10 @@ into Windows.
   disk) and records its SHA-256, with the session's end, in the signed record beside the workers'. The command hashes
   the token it carries and compares; the hash leaves the record when the session ends. With no worker running, it
   runs. The spike measures whether Codex's sandbox lets the listing run (S2); if it does, the token is only a backstop.
+  The hub has a token of its own the same way (`NEXTLEVEL_HUB_TOKEN`, its hash recorded while it runs), given only to
+  the nextlevel processes it starts (`_run`, a round's `_cycle`...), each of which takes it out of its environment as it
+  starts: so a worker's `_run` still starts when the listing fails, and nothing it starts carries the token (a worker's
+  environment and what the hub records never get either token).
 - **PATH:** `workerEnv` drops `~/.nextlevel/bin` and the version's own bin folder from a worker's PATH (safe updates
   put the version's command first on PATH for what it starts).
 
@@ -176,12 +186,16 @@ into Windows.
   request whose `at` is older than that is set aside. The triggers that act at once (`wakeup.json`, `round-now.json`,
   `ui-open.json`, the stop requests) are also set aside when the hub first sees them more than 10 minutes after `at`.
   Queue jobs, outbox messages and scan and tester requests wait as long as they must.
-- **The key's life.** Written once, by `init`, the hub's first start or the update that brings this. Once
+- **The key's life.** Written once, by `init`, the installer (`pc.key`), the hub's first start or the update that
+  brings this. Once
   `format.json` says the project's state is signed, a missing or changed key is never written again by itself: the
   hub stops acting on requests and Home says so, with the owner's fix (`nextlevel doctor --fix state.key` in their
   own window, which lists every file it signs and signs the current state again as the owner's, so a planted file
   isn't taken over unseen).
 - **What isn't signed:** logs and pure caches (`usage.json`, `switches.json`, `logs/`, `chats/`): never acted on.
+- **The launcher** (`src/launch.mjs`, outside every version) checks `channels.json`'s and `versions.json`'s signature
+  with the PC's key, with its own copy of the check (it imports nothing from a version); a bad one stops it with the
+  repair command, as a missing version folder does.
 - **Who signs:** `lib/sign.mjs` (new), used by every writer of a signed file: the hub's `writeJson`; `_run` (a job's
   `run.json` and `status.json`; it is the hub's child, outside the worker's tree); `cards.mjs`'s store writes; the
   commands' queue, outbox, wakeup, security and tester requests; the dashboard (approvals, `round-now.json`,
@@ -204,7 +218,9 @@ into Windows.
   which it may. The spike checks both (S2).
   The orchestrator's sessions also carry their session token (3.1), which counts only when the process listing fails.
   If S2 shows that Codex's sandbox can't read `~/.nextlevel/keys`, the orchestrator's requests carry that token in
-  place of a signature, and the hub checks it against the record before acting. Nothing else changes.
+  place of a signature, and the hub checks it against the record before acting. In that case the command doesn't
+  judge the token itself: it can't read the record, so it hands the token on with its request and the hub decides.
+  Nothing else changes.
 - **The orchestrator on Claude Code or agy**, as the owner: as the owner's window.
 - **The dashboard and the hub** sign in process.
 
@@ -281,7 +297,7 @@ host, or on the fetched `task/<id>` in the main repository. The hub reads a slot
 branch reaches the slot as a bundle: the hub writes `git bundle create` of the base into the host's inbox, and the host
 fetches from that file. The account never reads the main repository's `config`, refs or hooks. It reads only
 `.git\objects` (granted on that folder alone), for the slot's `alternates`. A `git gc` in the main repository that prunes
-objects only a `--shared` slot references would break it: if the spike shows that, slots are cut loose (`git repack -a
+objects only a slot's `alternates` reach would break it: if the spike shows that, slots are cut loose (`git repack -a
 -d`, then `alternates` removed).
 
 What reads the slot as a worktree today (`gitguard`'s slot hooks, `slotwatch`, `findProject`'s slot test,
@@ -313,7 +329,8 @@ What reads the slot as a worktree today (`gitguard`'s slot hooks, `slotwatch`, `
 - **Ports:** the account's dev servers bind `127.0.0.1` with the slot's port offset, as today.
 - **Antivirus:** a new user starting Node and engines from `C:\ProgramData` may trip Bitdefender. Measured (S7); if
   anything is blocked or quarantined, the spike stops and the owner is told.
-- **Disk:** a clone with `--shared` costs the working tree only.
+- **Disk:** a slot reads the main repository's objects through `alternates`, so it costs its working tree and its
+  own commits only.
 
 ### 4.7 The proof
 
@@ -374,27 +391,31 @@ everywhere but GitHub's own runners; the host with a stub engine; the walls prob
 
 In a throwaway trial project and a throwaway user `nl-spike`, never a real project; every step run by a Remote Control session, the UAC
 prompts the owner's. Removed at the end (`net user nl-spike /delete`, its profile and the `C:\ProgramData` folder),
-each removal listed for the owner.
+each removal listed for the owner. Every script is parse-checked (`[Parser]::ParseFile`) before the owner is asked for a
+UAC click, and elevated steps run with a transcript: in part 1 an elevated window that opened and closed at once was
+Windows PowerShell 5.1 refusing to parse `(a; b)` inside parentheses.
 
 | # | What | How | Result |
 |---|---|---|---|
-| S1 | A process as `nl-spike` with built-in tools only | `schtasks /create /ru nl-spike /rp <pw> /sc once ...` then `/run`; Node prints `whoami` and a file it wrote | |
+| S1 | A process as `nl-spike` with built-in tools only | `schtasks /create /ru nl-spike /rp <pw> /sc once ...` then `/run`; Node prints `whoami` and a file it wrote | **Part 1 (7 Nov):** never started. A stored-password task for a new standard user stays at 0x41303 "has not yet run" unless the account holds "Log on as a batch job" (SeBatchLogonRight), which `Register-ScheduledTask -User -Password` didn't grant (held only by Administrators, Backup Operators, Performance Log Users). The elevated step grants it (`secedit`, 4.2) and the removal takes it back. Rerun with the right granted: still to do |
 | S2 | The orchestrator's commands in Codex's sandbox | from the orchestrator on Codex: read `~/.nextlevel`, write `.nextlevel/`, run the process listing | |
 | S3 | Engines installed and running as the account | `agy --version`, `codex --version`, `claude --version` from the owner's install and from a machine-wide one | |
 | S4 | Sign-ins as the account | each engine's device-code login, the owner's plans; one prompt answered by each | |
 | S5 | agy in a console with no window, batch logon | the stub-free probe of FR-022's trial, run by the host | |
-| S6 | A slot clone and the hub's fetch | `clone` from a bundle with `alternates` to the trial project's `.git\objects` (the account granted that folder only), a commit as the account, the owner's `git -c safe.directory=<slot> fetch`; whether that fetch needs the setting at all; `npm ci` in the slot | |
+| S6 | A slot clone and the hub's fetch | the slot made by `git init`, then `alternates` written to the trial project's `.git\objects` (the account granted that folder only), then `git fetch` from a thin bundle (`git bundle create x.bundle <base>^!` or `<old base>..<base>`, whose missing objects `alternates` supplies), a commit as the account, the owner's `git -c safe.directory=<slot> fetch`; whether that fetch needs the setting at all; `npm ci` in the slot | |
 | S7 | The walls | as the account: read `~/.nextlevel`, `.env`, `%APPDATA%\GitHub CLI`, `~/.codex`, `~/.claude`, `~/.gemini`, the main checkout's `.nextlevel/` | |
-| S8 | Antivirus | Bitdefender's log after S1 to S11 | |
+| S8 | Antivirus | Bitdefender's log after S1 to S11 | Part 1: no detections (the PC ran Defender) |
 | S9 | A worker's commands descend from `_run` | per engine (agy, Claude Code, Codex in its sandbox and out of it): the worker runs `nextlevel status --json` and a probe prints its parent chain; and `cmd /c start` breaks it, as expected | |
-| S10 | The listing's cost | `listProcesses` timed 20 times on the owner's PC while two workers build, and from the orchestrator in Codex's sandbox (with S2) | |
+| S10 | The listing's cost | `listProcesses` timed 20 times on the owner's PC while two workers build, and from the orchestrator in Codex's sandbox (with S2) | Part 1, owner's shell, idle PC, a fresh `powershell.exe` each time: median about 0.7 s (min 0.64, max 1.4). In KNOWN_ISSUES. Under workers and in Codex's sandbox: part 2 |
 | S11 | The owner's fetch from an account-owned slot | a `core.fsmonitor`, `core.hooksPath` and a `filter` planted in the slot's config: the owner's `git fetch` runs none of them | |
 
 ## 9. The pull requests (step 2)
 
 1. **2B-1a, the command refuses a worker:** `lib/ancestry.mjs`, the record (attempts and their verify, `nextlevel
-   verify` jobs, git jobs), PATH, typed notes confirmed on the dashboard, the look after each attempt (3.4), their tests.
-   This stops the ordinary command on its own.
+   verify` jobs, git jobs and pushes), the session token, PATH, the refusals logged and flagged on the task, their
+   tests. This stops the ordinary command on its own.
+   **2B-1a2, what a worker writes that an owner would:** typed notes confirmed on the dashboard, the look after each
+   attempt (3.4), their tests. (Split from 2B-1a to keep each pull request reviewable.)
 2. **2B-1b, signed state:** `lib/sign.mjs`, every signed writer, `seq` and expiry, the migration, the untraced card,
    their tests.
 3. **2B-2, the agents' account (layer 2):** after the spike passes, and after or with the runner's part B, whichever

@@ -25,6 +25,16 @@ export function listWaitMs(env = process.env) {
 // processes have no start time: they are never a worker's.)
 const CIM_LIST =
   "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { '{0}|{1}|{2}|{3}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate.ToUniversalTime().ToString('o'), $_.Name } }";
+// The same lines with no PowerShell module loaded: WMI through .NET's System.Management, no cmdlet at all. A cmdlet from
+// a module (Get-CimInstance, Get-Process, Add-Type, New-Object) makes PowerShell 5.1 analyse its modules first, which took
+// about 18 s on GitHub's Windows runner without the image's pre-built cache (PSModuleAnalysisCachePath), against 0.2 s
+// for this. The ancestry check (lib/ancestry.mjs) runs it in an environment of its own, where no such cache is named.
+export const WMI_LIST = [
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+  "$null = [Reflection.Assembly]::LoadWithPartialName('System.Management')",
+  "$s = [System.Management.ManagementObjectSearcher]::new('SELECT ProcessId, ParentProcessId, CreationDate, Name FROM Win32_Process')",
+  "foreach ($p in $s.Get()) { $c = $p['CreationDate']; if ($c) { '{0}|{1}|{2}|{3}' -f $p['ProcessId'], $p['ParentProcessId'], [System.Management.ManagementDateTimeConverter]::ToDateTime($c).ToUniversalTime().ToString('o'), $p['Name'] } }",
+].join('; ');
 // Windows' own PowerShell, by its full path: never a program of that name in the project's folder or on PATH
 const powershell = (env) => (env.SystemRoot || env.SYSTEMROOT ? path.win32.join(env.SystemRoot || env.SYSTEMROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe');
 const encoded = (script) => ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
@@ -118,11 +128,12 @@ export function parsePs(text) {
 }
 
 // One snapshot of all processes: { list } | { late: true } (no answer in `timeoutMs`: the listing is stopped, and the
-// caller asks again later) | { error }. `command` ([file, args]) stands in for the listing in tests, printing Windows' lines.
-export async function listProcesses({ timeoutMs = listWaitMs(), platform = process.platform, env = process.env, command } = {}) {
+// caller asks again later) | { error }. `command` ([file, args]) stands in for the listing in tests, printing Windows' lines;
+// `script` is the PowerShell script on Windows (WMI_LIST: the same lines without a module).
+export async function listProcesses({ timeoutMs = listWaitMs(), platform = process.platform, env = process.env, command, script = CIM_LIST } = {}) {
   if (timeoutMs <= 0) return { late: true };
   const win = platform === 'win32';
-  const [file, args] = command || (win ? [powershell(env), encoded(CIM_LIST)] : ['ps', ['-A', '-o', PS_COLUMNS]]);
+  const [file, args] = command || (win ? [powershell(env), encoded(script)] : ['ps', ['-A', '-o', PS_COLUMNS]]);
   const r = await ask(file, args, { timeoutMs, env: win ? env : { ...env, ...C_LOCALE } });
   if (r.late || !r.ok) return r.late ? { late: true } : { error: r.error };
   const list = (win || command ? parseCim : parsePs)(r.out);
