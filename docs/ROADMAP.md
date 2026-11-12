@@ -6,8 +6,9 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
 ## Safety: from bars to walls
 - **Workers can't reach the hub at all** (FR-017 part 2B, `docs/design/FR-017-part2B.md`). Since 2B-1a a command that
   acts is refused under a worker by its process ancestry, whatever its variables say. Since 2B-1a2 a note typed into
-  the notes file, or a tick in the handoff file, waits for the owner's Confirm on the dashboard. Next: nextlevel's own
-  folders looked at after each attempt (2B-1a3), then the hub's files signed (2B-1b).
+  the notes file, or a tick in the handoff file, waits for the owner's Confirm on the dashboard. Since 2B-1a3 nextlevel's
+  own files and the owner's global git settings are looked at after each attempt and at the hub's start: a change
+  holds dispatch until the owner's Seen. Next: the hub's files signed (2B-1b).
 - **The agents as another Windows user** (FR-017 part 2B: a separate account, a container or WSL). Every agent runs as
   your own user today, so an engine without its own permission checks can read and write anything you can
   (`docs/KNOWN_ISSUES.md`, "What an agent running as the owner can still do"). This turns what stays open into walls.

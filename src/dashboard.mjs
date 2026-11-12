@@ -811,6 +811,9 @@ export async function startDashboard(api, { port = 0, open = true, say = (m) => 
       case 'POST /api/slotescape':
         // Seen, on the card of a worker that did something outside its slot
         return reply(res, await act((say) => api.slotEscapeSeen(say)));
+      case 'POST /api/toolchange':
+        // Seen, on the card that says nextlevel's own files or the owner's git settings changed (FR-017 part 2B, 2B-1a3)
+        return reply(res, await act((say) => api.toolChangeSeen(say)));
       case 'POST /api/blockalert':
         // Seen, on the card of a round on Antigravity that ran commands clearing the push block
         return reply(res, await act((say) => api.blockAlertSeen(say)));

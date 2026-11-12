@@ -2207,3 +2207,13 @@ One entry each: date, decision, why, alternatives.
   the owner's Confirm on the Notes page (or an edit there); a tick puts a line on the card, and the owner's Done
   closes it. Alternatives: drop typed lines altogether (an owner who types a note out of habit loses it), or confirm
   from a command (any agent can run one).
+- 2026-11-11 — **nextlevel's own files are compared with the hub's last look, and a change holds dispatch until the
+  owner's Seen** (FR-017 part 2B, 2B-1a3). After each attempt and at the hub's start: each file git lists (`ls-files`, hashed by
+  nextlevel; never `git status`, which runs clean filters) in the running version and the tool's clone, the clone's own
+  settings and hooks, the clone's origin, `~/.nextlevel/bin`, and the global and system git settings that run
+  a program or send a push elsewhere. Everything is compared with the last look, kept outside the project in the guard's
+  folder, rather than with a fixed reference (the version's copy of the launcher, state.json's origin): a pinned older
+  version legitimately runs beside a newer launcher, and state.json doesn't record the origin. Holding dispatch, not
+  stopping the hub: checks, pushes and git jobs the orchestrator asked for still run, as with FR-013's missing files.
+  Alternatives: a card alone (a worker's next task would run under the changed code before the owner sees it), or
+  putting the files back (the hub can't tell the owner's own edit from a worker's).

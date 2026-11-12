@@ -192,7 +192,10 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   check, a git job or a push, refused by its chain of parent processes (FR-017 part 2B, 2B-1a): the record the hub keeps
   in the guard's folder (`agents.json`: recordAgent, forgetAgents, agentsTick in `hub.mjs`; runLogged's `agent`), the
   orchestrator's session token, the look-only list, `refused.jsonl` and the task's `refused`; `test/ancestry.test.mjs`
-  and the stub worker's `askhub` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
+  and the stub worker's `askhub` task. `src/lib/toollook.mjs` — the look after each attempt (2B-1a3): nextlevel's own
+  files, its clone's origin, `~/.nextlevel/bin` and the owner's global git settings compared with the last look in the
+  guard's folder (`tool-look.json`; lookAgain, toolLookWaits, toolChangeSeen in `hub.mjs`): a change holds dispatch until
+  the owner's Seen on Home; `test/toollook.test.mjs` and the stub worker's `toolgit` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
   and `CONIN$`); `src/lib/toolfiles.mjs` — the files the tools need, launchers followed to what they run (FR-013);
   `src/lib/slotfiles.mjs` — the hub's files in a worker's slot, never written through a link;
   `src/lib/workerlog.mjs` — a worker's log as plain, redacted text. `src/lib/sandbox.mjs` —
