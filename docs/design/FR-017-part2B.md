@@ -210,6 +210,29 @@ into Windows.
   stores again, since files the older version wrote are unsigned.
 - **The file protocol stays:** same folders, same names, one more field. A hub that doesn't know `sig` ignores it.
 
+As built (2B-1b1, `src/lib/sign.mjs`): 2B-1b is built in steps, and the first signs the **requests** only: a job in
+`queue/` (the commands' and the hub's), a phone message in `outbox/`, `wakeup.json` and a press of Run a round now. Each
+carries an id (`rid`) in the signed object; `acted.json` in the guard's folder, signed by the hub (purpose `guard`),
+keeps the ids acted on for 30 days. A job or a message without a good signature is moved to `.nextlevel/untraced/`; a
+wake-up or a press, which the orchestrator's command or the dashboard rewrites in place, is ignored where it is and logged
+once per content. Each is logged in hub.log and the guard's `untraced.jsonl`, flags the tasks running since the hub's
+last look (`untraced` in their status, in the summary `nextlevel result` and the orchestrator read), and puts one card
+on Home (Seen, `POST /api/untraced`) with at most one phone message an hour. What a request asked for is said in words
+from code that never quote its text (a message's title, a push's target), so a `.env` value planted there doesn't reach
+the card or the phone. The key's record is `signing.json` beside the guard's records, not `format.json`: once it is
+there, a missing or changed key is never made again by itself, and the hub acts on no request (a Home card and the
+doctor's `state.key`, an error). Choices left to this step, with the safer reading taken:
+- Pending requests written before the update are unsigned and go to the card, as the design says, rather than being
+  signed by the update (signing them would take over a planted one unseen).
+- `acted.json` that fails its check is logged on the card and not read, and the hub then refuses any request signed before its own start
+  (`actedSince`), since it can't tell which of them it acted on already.
+- `nextlevel doctor --fix state.key` makes a new key and lists the requests that were waiting (the hub then sets them
+  aside), rather than signing them again: in 1b1 nothing else is signed, and signing what waits would take over a
+  planted file. It runs only in the owner's own window (never the dashboard's button, never in an agent's session).
+- A wake-up's and a press's 10 minutes go by the hub's clock (`src/lib/clock.mjs`, a test clock under the stubs).
+Next (2B-1b2 on): the stores with `seq` and `seen.json`, the PC's files and the launcher's check, the other requests
+(`ui-open.json`, the stop requests, scan and tester requests) and the migration.
+
 ### 3.3 The owner's own commands and the orchestrator's
 
 - **The owner's window** (START.cmd, PowerShell): the command reads the key and signs. Nothing changes for the owner.

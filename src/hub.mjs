@@ -129,6 +129,7 @@ import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { addAgent, addSession, agentsHome, installedTool, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
 import { LOOK, changeWords, diffLook, readLookRecord, takeLook, writeLookRecord } from './lib/toollook.mjs';
+import { projectSigningKey, sign, stateName, verify } from './lib/sign.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
 import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
@@ -513,7 +514,8 @@ function enqueue(job) {
   mkdirp(QUEUE);
   // (a job the one-click update queues, its backup push, role-doc commit or bridge test, is its own: its hold lets it through)
   const own = queuedByUpdate(ROOT) ? { by: 'update', update: process.env.NEXTLEVEL_UPDATE_ID } : {};
-  writeJson(path.join(QUEUE, `${job.id}.json`), { ...job, ...own, queuedAt: now() });
+  // (signed, with an id of its own: the hub acts on it once, and never on a job it can't trace, FR-017 part 2B)
+  writeSigned(path.join(QUEUE, `${job.id}.json`), { ...job, ...own, queuedAt: now(), rid: randomBytes(8).toString('hex') });
   setStatus(job.id, {
     type: job.type,
     kind: job.kind,
@@ -782,7 +784,7 @@ function cmdWakeup(argv) {
   if (reason.length > MAX_WAKE_REASON) throw new Error(`the reason has ${reason.length} characters, more than ${MAX_WAKE_REASON}: say it in one short line (what the next round reads, and why): nothing was asked.`);
   // (an id of its own: the round that clears an ask says which, so the same words at the same time can't come back)
   const ask = { id: randomBytes(6).toString('hex'), askedAt: clockIso(), minutes, reason, by: session };
-  writeJson(WAKEFILE, ask);
+  writeSigned(WAKEFILE, ask); // (signed: the hub takes no wake-up it can't trace, FR-017 part 2B)
   const min = CFG.rounds.wakeMinMinutes;
   console.log(
     `Asked for a round in ${Math.max(minutes, min)} min or later, because: ${reason}\n` +
@@ -835,12 +837,13 @@ function forPhone(rawTitle, message) {
 function queueNotify(rawTitle, rawMessage, priority = 'default', tags = '') {
   const { title, message } = forPhone(rawTitle, rawMessage);
   mkdirp(OUTBOX);
-  writeJson(path.join(OUTBOX, `${stamp()}-${Math.random().toString(36).slice(2, 8)}.json`), {
+  writeSigned(path.join(OUTBOX, `${stamp()}-${Math.random().toString(36).slice(2, 8)}.json`), {
     title,
     message,
     priority,
     tags,
     attempts: 0,
+    rid: randomBytes(8).toString('hex'),
   });
 }
 // The message may come from a file (--file <path>, a file in the project folder; --file -: stdin), never cut by a
@@ -879,6 +882,7 @@ function summary(s) {
   if (s.detail) bits.push(s.detail);
   // (FR-017 part 2B: nextlevel commands its worker or verify ran, refused by their ancestry)
   if (s.toolChange) bits.push(`nextlevel's own code or your git settings changed while it ran (${String(s.toolChange).slice(0, 200)})`);
+  if (Array.isArray(s.untraced) && s.untraced.length) bits.push(`${s.untraced.length} request(s) nextlevel didn't write appeared while it ran, set aside (${[...new Set(s.untraced.map((u) => String(u.what || u.kind).slice(0, 60)))].slice(0, 3).join('; ')})`);
   if (Array.isArray(s.refused) && s.refused.length) bits.push(`${s.refused.length} nextlevel command(s) from its worker refused (${[...new Set(s.refused.map((r) => r.command))].join(', ')})`);
   if (s.state === 'queued' && s.waiting) bits.push(`waiting: ${s.waiting}`);
   if (s.error) bits.push(s.stoppedOutside ? s.error.replace(/^stopped from outside: /, '') : s.error);
@@ -1381,6 +1385,7 @@ function statusData(jobs = allJobs(), st = runState()) {
     blockAlert: blockAlertView(), // a round on Antigravity that ran commands clearing the push block (lib/blockwatch.mjs)
     slotEscape: slotEscapeView(), // a worker that did something outside its slot (lib/slotwatch.mjs)
     toolChange: toolChangeView(), // nextlevel's own code or the owner's git settings changed (the look after each attempt)
+    untraced: untracedView(), // requests nextlevel didn't write, set aside (FR-017 part 2B, 2B-1b), or a signing key it can't have
     workers: workersView(), // which workers there are, on which engine and model, and what each takes
   };
 }
@@ -1806,7 +1811,7 @@ async function startTask(queuedJob) {
   fs.rmSync(path.join(d, 'run.json'), { force: true });
   fs.rmSync(path.join(d, 'verify.log'), { force: true });
   fs.rmSync(path.join(d, 'unresolved.diff'), { force: true });
-  fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+  dequeue(job);
   // The attempts of a task share worker.log: this one's output starts here (the dashboard shows only it). Its worker
   // writes it in every mode, a window of its own too (FR-010).
   const logFile = path.join(d, 'worker.log');
@@ -2662,6 +2667,181 @@ function toolChangeSeen(say = (m) => console.log(m)) {
   say('Marked as seen: tasks start again.');
 }
 
+// ---------- signed requests (FR-017 part 2B, 2B-1b; docs/design/FR-017-part2B.md 3.2 and 5) ----------
+// What the commands, the dashboard and the hub write for the hub to act on (a job in queue/, a message in outbox/,
+// wakeup.json, round-now.json) carries an HMAC with the project's key, kept outside the project (lib/sign.mjs). A request
+// without a good one is never acted on: a queue job or an outbox message is set aside into .nextlevel/untraced/, a
+// wake-up or a press of Run a round now is ignored; each is logged (hub.log, the guard's untraced.jsonl), flags the
+// tasks that were running, and is said on Home with Seen (one card, one phone message an hour at most). A request is acted
+// on once: its own id (`rid`) goes into the guard's acted.json, kept 30 days.
+let SIGNER = ''; // 'hub' in the hub's loop, 'dashboard' in the dashboard's process; else whose session this is
+const signerNow = () => SIGNER || (process.env.NEXTLEVEL_AGENT === 'orchestrator' || process.env.NEXTLEVEL_SESSION === 'autopilot' ? 'orchestrator' : 'owner');
+const ACTED_DAYS = 30;
+const TRIGGER_MAX_MS = 10 * 60_000; // a wake-up or a press first seen more than 10 minutes after it was signed is set aside
+const untracedFile = () => path.join(guardDir(ROOT, AGENTS_HOME), 'untraced.json'); // the card's state
+const untracedLog = () => path.join(guardDir(ROOT, AGENTS_HOME), 'untraced.jsonl');
+const actedFile = () => path.join(guardDir(ROOT, AGENTS_HOME), 'acted.json');
+let signKeyCache = null;
+// The project's key: { key } | { problem } | { missing }. `create` in the owner's processes only (lib/sign.mjs: never again
+// once its marker says there was one)
+function signingKey({ create = false } = {}) {
+  if (signKeyCache?.key) return signKeyCache;
+  const k = projectSigningKey(ROOT, { home: AGENTS_HOME, create });
+  if (k.key) signKeyCache = k;
+  return k;
+}
+const reqName = (file) => stateName(path.relative(DIR, file));
+// Write a request signed (a command, the dashboard or the hub). A key that can't be had stops the write, saying why.
+function writeSigned(file, obj) {
+  const k = signingKey({ create: true });
+  if (!k.key) throw new Error(k.problem || "nextlevel's signing key can't be had");
+  writeJson(file, sign(obj, { key: k.key, name: reqName(file), by: signerNow(), at: clockIso() }));
+}
+// -> { ok, by, at } | { ok: false, why } | { hold: why } (no key: nothing is acted on, nothing is set aside)
+function checkSigned(file, obj) {
+  const k = signingKey();
+  if (!k.key) return { hold: k.problem || "nextlevel's signing key isn't there yet: the hub makes it as it starts" };
+  return verify(obj, { key: k.key, name: reqName(file) });
+}
+// The ids of the requests acted on (the guard's acted.json, signed by the hub; kept in memory too, so a file put back
+// or rewritten changes nothing while the hub runs). A record that doesn't verify: requests signed before this hub
+// started aren't taken (a copy of an old one can't be told from a new one), and the card says so.
+let actedMem = null;
+let actedSince = 0; // requests signed before this time aren't taken (a record that couldn't be trusted)
+function acted() {
+  if (actedMem) return actedMem;
+  actedMem = new Map();
+  const k = signingKey();
+  let rec = null;
+  try {
+    rec = JSON.parse(fs.readFileSync(actedFile(), 'utf8'));
+  } catch (err) {
+    if (err.code === 'ENOENT') return actedMem;
+  }
+  const v = k.key && rec ? verify(rec, { key: k.key, purpose: 'guard', name: 'guard:acted.json' }) : { ok: false, why: "it can't be read" };
+  if (!v.ok) {
+    actedSince = clockNow();
+    untraced({ file: actedFile(), kind: 'acted', why: v.why || 'its signature fails', what: 'the record of the requests nextlevel acted on', keep: true });
+    return actedMem;
+  }
+  for (const [rid, at] of Object.entries(rec.ids && typeof rec.ids === 'object' ? rec.ids : {})) if (typeof at === 'string') actedMem.set(rid, at);
+  return actedMem;
+}
+// A queued job taken from the queue (started, or ended without running): its request id is acted on, never again
+function dequeue(job) {
+  markActed(job?.rid);
+  fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+}
+function markActed(rid) {
+  if (!rid) return;
+  const m = acted();
+  m.set(rid, clockIso());
+  const cut = clockNow() - ACTED_DAYS * 86_400_000;
+  for (const [id, at] of m) if (isoMs(at) < cut) m.delete(id);
+  const k = signingKey();
+  if (!k.key) return;
+  try {
+    writeJson(actedFile(), sign({ ids: Object.fromEntries(m) }, { key: k.key, purpose: 'guard', name: 'guard:acted.json', by: 'hub', at: clockIso() }));
+  } catch (err) {
+    log(`couldn't keep the record of the requests acted on: ${err.message}`);
+  }
+}
+// Whether a request may be acted on: signed, not acted on before, not older than its time. -> '' or why not, in words
+function requestProblem(file, obj, { trigger = false } = {}) {
+  const v = checkSigned(file, obj);
+  if (v.hold) return null; // (no key: it waits; Home says why)
+  if (!v.ok) return v.why;
+  const at = isoMs(v.at);
+  const age = clockNow() - at;
+  if (at < actedSince) return 'it was signed before the hub could trust its record of the requests acted on';
+  if (age > ACTED_DAYS * 86_400_000) return `it was signed ${Math.round(age / 86_400_000)} days ago, longer than nextlevel keeps track of what it acted on`;
+  if (trigger && age > TRIGGER_MAX_MS) return `it was signed ${Math.round(age / 60_000)} minutes before the hub first saw it (a wake-up or a press counts only within ${TRIGGER_MAX_MS / 60_000})`;
+  if (!trigger && (typeof obj.rid !== 'string' || !obj.rid)) return 'it has no request id';
+  if (!trigger && acted().has(obj.rid)) return 'it was acted on already (a copy of a request nextlevel took)';
+  return '';
+}
+const readUntraced = () => {
+  try {
+    const r = JSON.parse(fs.readFileSync(untracedFile(), 'utf8'));
+    return r && typeof r === 'object' && Array.isArray(r.items) ? r : { items: [] };
+  } catch {
+    return { items: [] };
+  }
+};
+const flaggedOnce = new Set(); // (a file ignored where it is, a wake-up or a press: said once per content)
+// A request nextlevel can't trace: moved aside (or left where it is, for a file the command keeps), logged, its running
+// tasks flagged, said on Home and the phone
+function untraced({ file, kind, why, what, keep = false }) {
+  let size = 0;
+  let hash = '';
+  try {
+    const buf = fs.readFileSync(file);
+    size = buf.length;
+    hash = createHash('sha256').update(buf).digest('hex').slice(0, 16);
+  } catch {
+    // gone meanwhile
+  }
+  const once = `${file}:${hash}`;
+  if (keep && flaggedOnce.has(once)) return;
+  flaggedOnce.add(once);
+  let moved = '';
+  if (!keep) {
+    const dir = path.join(DIR, 'untraced');
+    try {
+      mkdirp(dir);
+      moved = path.join(dir, `${stamp()}-${path.basename(file)}`);
+      fs.renameSync(file, moved);
+    } catch (err) {
+      moved = '';
+      fs.rmSync(file, { force: true });
+      log(`couldn't keep ${rel(file)} aside (${err.message}): removed`);
+    }
+  }
+  const tasks = [...new Set([...sinceLastLook, ...runningTasks()])];
+  for (const t of tasks) {
+    const prev = Array.isArray(jobStatus(t)?.untraced) ? jobStatus(t).untraced : [];
+    setStatus(t, { untraced: [...prev, { at: clockIso(), kind, what: String(what).slice(0, 200) }].slice(-20) });
+  }
+  const item = { at: clockIso(), kind, file: rel(file), ...(moved ? { aside: rel(moved) } : {}), size, hash, why: String(why).slice(0, 300), what: String(what).slice(0, 300), tasks };
+  try {
+    mkdirp(path.dirname(untracedLog()));
+    fs.appendFileSync(untracedLog(), `${JSON.stringify(item)}\n`);
+  } catch {
+    // the card and hub.log still say it
+  }
+  log(`${rel(file)}: not acted on, nextlevel can't trace it (${why}): ${what}${moved ? `; kept in ${rel(moved)}` : ''}${tasks.length ? `; running then: ${tasks.join(', ')}` : ''}`);
+  const card = readUntraced();
+  const phoned = card.phonedAt && clockNow() - isoMs(card.phonedAt) < 3_600_000;
+  card.items = [...card.items, item].slice(-20);
+  if (!phoned) card.phonedAt = clockIso();
+  try {
+    writeJson(untracedFile(), card);
+  } catch (err) {
+    log(`couldn't keep the card of requests set aside: ${err.message}`);
+  }
+  if (!phoned) queueNotify(`${NAME}: a request nextlevel didn't write was set aside`, `${what} (${rel(file)}): ${why}. Nothing was done with it. See Home on the dashboard.`, 'high', 'warning');
+}
+const untracedView = () => {
+  const c = readUntraced();
+  const k = signingKey();
+  if (!c.items.length && !k.problem) return null;
+  return { items: c.items.map((x) => ({ at: x.at, what: x.what, why: x.why, file: x.aside || x.file, tasks: x.tasks || [] })), keyProblem: k.problem || '' };
+};
+function untracedSeen(say = (m) => console.log(m)) {
+  const c = readUntraced();
+  writeJson(untracedFile(), { items: [], phonedAt: c.phonedAt || null });
+  say('Marked as seen. Nothing of what was set aside was done: if you want it, do it yourself.');
+}
+// What a queued job or an outbox message asks for, in words from code
+const requestWords = (kind, obj) =>
+  kind === 'queue'
+    ? `${obj?.type === 'task' ? 'a task' : `a ${/^(check|push|git)$/.test(obj?.type) ? `${obj.type} ` : ''}job`}${typeof obj?.id === 'string' && JOB_ID_RE.test(obj.id) ? ` ${obj.id}` : ''}`
+    : kind === 'outbox'
+      ? 'a phone message' // (its words aren't repeated: whoever wrote it, they could hold anything)
+      : kind === 'wakeup'
+        ? 'a wake-up for the orchestrator'
+        : 'a press of Run a round now';
+
 async function stoppedFromOutside(s, run) {
   guardClose(`worker:${s.id}`);
   // Nobody reads what its worker started any more: its slot is held until nothing of it runs there (a worker's process
@@ -3485,7 +3665,7 @@ function attemptLog(id, s = jobStatus(id), max = 256 * 1024) {
 
 async function runCheck(job) {
   const d = jobDir(job.id);
-  fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+  dequeue(job);
   writeJson(path.join(d, 'job.json'), job);
   setStatus(job.id, { state: 'running', startedAt: now(), waiting: null });
   if (job.type === 'push') return runPush(job);
@@ -5030,7 +5210,7 @@ const GIT_OPS = {
 
 async function runGitJob(job) {
   const d = jobDir(job.id);
-  fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+  dequeue(job);
   writeJson(path.join(d, 'job.json'), job);
   setStatus(job.id, { state: 'running', startedAt: now() });
   const logFile = path.join(d, 'git.log');
@@ -5086,6 +5266,17 @@ function track(id, promise) {
 }
 
 async function pollJobs() {
+  // (the tasks a request that appears now is flagged on: those running at the last look and now, by the hub's own clock)
+  sinceLastLook = new Set([...lastLookRunning, ...runningTasks()]);
+  try {
+    await pollJobsNow();
+  } finally {
+    lastLookRunning = new Set(runningTasks());
+  }
+}
+let lastLookRunning = new Set();
+let sinceLastLook = new Set();
+async function pollJobsNow() {
   agentsTick();
   // Git's own hooks and settings are looked at before the hub's git work (starting a task, checking one, a commit, a
   // merge, a push): a change the hub didn't make stops all of it until the owner decides (gitGuard). Looked at once,
@@ -5140,7 +5331,15 @@ async function pollJobs() {
     .filter((f) => f.endsWith('.json'))
     .map((f) => {
       const job = readJson(path.join(QUEUE, f));
-      if (job && (typeof job.id !== 'string' || !JOB_ID_RE.test(job.id) || job.id.includes('..'))) {
+      if (!job) return null;
+      // (signed by nextlevel, never acted on before: else set aside, FR-017 part 2B; with no key, nothing runs)
+      const why = requestProblem(path.join(QUEUE, f), job);
+      if (why === null) return null;
+      if (why) {
+        untraced({ file: path.join(QUEUE, f), kind: 'queue', why, what: requestWords('queue', job) });
+        return null;
+      }
+      if (typeof job.id !== 'string' || !JOB_ID_RE.test(job.id) || job.id.includes('..')) {
         fs.rmSync(path.join(QUEUE, f), { force: true });
         log(`queue: ${f} not run: its id ${JSON.stringify(String(job.id).slice(0, 80))} isn't a plain name`);
         return null;
@@ -5186,7 +5385,7 @@ async function pollJobs() {
         if (job.type === 'check') {
           if (jobStatus(job.id)?.waiting !== stopped()) setStatus(job.id, { waiting: stopped() });
         } else if (job.type !== 'task' && !job.guard) {
-          fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+          dequeue(job);
           setStatus(job.id, { state: 'blocked', detail: `not run: ${stopped()}`, finishedAt: now(), acked: false });
           log(`${job.id}: not run: all git work is stopped`);
           jobEnded(job.id);
@@ -5206,7 +5405,7 @@ async function pollJobs() {
         track(job.id, runCheck(job));
       }
     } catch (err) {
-      fs.rmSync(path.join(QUEUE, `${job.id}.json`), { force: true });
+      dequeue(job);
       setStatus(job.id, { state: 'error', error: err.message, finishedAt: now(), acked: false });
       log(`could not start ${job.id}: ${err.message}`);
       jobEnded(job.id);
@@ -5220,16 +5419,25 @@ async function flushOutbox() {
     const p = path.join(OUTBOX, f);
     const m = readJson(p);
     if (!m) continue;
+    // (signed by nextlevel, never sent before: else set aside, FR-017 part 2B; with no key, nothing is sent)
+    const why = requestProblem(p, m);
+    if (why === null) continue;
+    if (why) {
+      untraced({ file: p, kind: 'outbox', why, what: requestWords('outbox', m) });
+      continue;
+    }
     try {
-      // (the orchestrator can write the outbox: what is in it is redacted as it goes, whoever wrote it)
+      // (what is in it is redacted as it goes, whoever wrote it)
       await notify(m.title, m.message, { priority: m.priority, tags: m.tags, server: CFG.config.notifications.server, root: ROOT });
+      markActed(m.rid);
       fs.rmSync(p, { force: true });
     } catch (err) {
-      m.attempts = (m.attempts || 0) + 1;
-      if (m.attempts >= 5) {
+      const attempts = (Number.isSafeInteger(m.attempts) ? m.attempts : 0) + 1;
+      if (attempts >= 5) {
+        markActed(m.rid);
         fs.rmSync(p, { force: true });
         log(`dropped notification "${m.title}": ${err.message}`);
-      } else writeJson(p, m);
+      } else writeSigned(p, { ...m, attempts }); // (the hub's own write: the same request, its id unchanged)
     }
   }
 }
@@ -5408,7 +5616,14 @@ function takeAsk(s, now) {
     const id = wakeId(ask.id);
     key = wakeKey(ask);
     if ((id && id === s.wakeCleared) || key === s.wakeTaken) return;
+    // (signed by the orchestrator's command, and seen within minutes of it: else ignored and said, FR-017 part 2B)
+    const why = requestProblem(WAKEFILE, ask, { trigger: true });
+    if (why === null) return;
     s.wakeTaken = key;
+    if (why) {
+      untraced({ file: WAKEFILE, kind: 'wakeup', why, what: requestWords('wakeup', ask), keep: true });
+      return;
+    }
     if (takeWake(s, ask, { cfg: CFG.rounds, now }) !== 'stale') log(`autopilot: the orchestrator asked for a wake-up in ${s.wake.minutes} min${s.wake.due ? ` (at ${new Date(isoMs(s.wake.due)).toLocaleTimeString()}${s.wake.why ? `: ${s.wake.why}` : ''})` : ', its time set when its round ends'}`);
   } catch (err) {
     // (an ask the hub can't read is no ask, said once: the rest of autopilot goes on, and a round's end too)
@@ -5427,8 +5642,15 @@ function observe() {
   } catch (err) {
     log(`autopilot: couldn't read the cards: ${err.message}`);
   }
-  const pressed = pressCount(readJsonFile(ROUNDNOW, {}));
+  const press = readJsonFile(ROUNDNOW, {});
   rounds((s, now) => {
+    // (a press is a count signed by the dashboard, seen within minutes of it: else ignored and said, FR-017 part 2B)
+    let pressed = pressCount(press);
+    if (pressed !== (s.runNow || 0)) {
+      const why = requestProblem(ROUNDNOW, press, { trigger: true });
+      if (why) untraced({ file: ROUNDNOW, kind: 'round-now', why, what: requestWords('round-now', press), keep: true });
+      if (why !== '') pressed = s.runNow || 0;
+    }
     if (settings.autopilot && settings.onAt && settings.onAt !== s.onAt) autopilotOn(s, settings.onAt);
     if (acts) {
       const seen = s.owner || { notes: 0, handoff: 0 };
@@ -7187,6 +7409,16 @@ async function cmdRun(argv) {
     log(`couldn't record the hub's token for the ancestry check: ${err.message}`);
   }
   lookAgain('while the hub was stopped'); // (what changed in nextlevel's own code or the owner's git settings since the last look)
+  // The hub signs its own requests, and makes the project's key the first time (never again once its marker says it had
+  // one: lib/sign.mjs); a key it can't have stops every request, said on Home
+  SIGNER = 'hub';
+  try {
+    const k = signingKey({ create: true });
+    if (!k.key) log(`requests aren't acted on: ${k.problem}`);
+    else acted();
+  } catch (err) {
+    log(`couldn't make nextlevel's signing key: ${err.message}`);
+  }
   log(`hub started · ${CFG.slots} worker slot(s) in ${SLOTS_ROOT}${ports} · autopilot ${getSettings().autopilot ? 'ON' : 'off'} · Ctrl+C to stop`);
   // A slot held for a stopped worker's processes is looked at once more (a restart of the PC ends them)
   for (const n of Object.keys(heldSlots())) cleanSlot(Number(n));
@@ -8296,6 +8528,7 @@ function dashboardState() {
     blockAlert: blockAlertView(),
     slotEscape: slotEscapeView(),
     toolChange: toolChangeView(),
+    untraced: untracedView(),
     active,
     queued: jobs.filter((j) => j.state === 'queued').map(pick),
     review: finished.filter((j) => !j.acked).map(pick),
@@ -8600,7 +8833,12 @@ function runRoundNow(say) {
   // (a count, under the file's lock: the hub only reads it, and starts a round when it has changed since it last looked;
   // the press is never lost without a word: a lock taken over on the way, or the count not as written, is said)
   const events = [];
-  const { n } = updateJsonFile(ROUNDNOW, (r) => ({ n: pressCount(r) + 1, at: clockIso(), by: 'owner' }), {}, { onLock: lockLog(ROUNDNOW, events) });
+  // (signed: the hub counts no press it can't trace, FR-017 part 2B)
+  const k = signingKey({ create: true });
+  if (!k.key) throw new Error(k.problem || "nextlevel's signing key can't be had");
+  // (a count the hub can't trace, a hand-written one, isn't built on: the next press is one more than the hub last took)
+  const base = (r) => (verify(r, { key: k.key, name: reqName(ROUNDNOW) }).ok ? pressCount(r) : Math.max(0, roundsState({ quiet: true }).runNow || 0));
+  const { n } = updateJsonFile(ROUNDNOW, (r) => sign({ n: base(r) + 1 }, { key: k.key, name: reqName(ROUNDNOW), by: signerNow(), at: clockIso() }), {}, { onLock: lockLog(ROUNDNOW, events) });
   const also =
     pressCount(readJsonFile(ROUNDNOW, {})) < n // (another press since only raises it)
       ? ' But round-now.json says otherwise right after: another process changed it. If no round starts, press it again (hub.log has what nextlevel saw).'
@@ -8613,6 +8851,7 @@ function runRoundNow(say) {
 // What the dashboard may read and do. Windows it opens (orchestrator, guide) are opened by running the
 // same commands the owner would type (`nextlevel orchestrator`, `nextlevel guide <engine>`).
 function dashboardApi() {
+  SIGNER = 'dashboard'; // (what the dashboard writes for the hub is signed as its: lib/sign.mjs)
   return {
     root: ROOT,
     name: NAME,
@@ -8677,6 +8916,7 @@ function dashboardApi() {
     blockAlertSeen, // Seen, on the card of a round on Antigravity that ran commands clearing the push block
     slotEscapeSeen, // Seen, on the card of a worker that did something outside its slot
     toolChangeSeen, // Seen, on the card that says nextlevel's own code or the owner's git settings changed
+    untracedSeen, // Seen, on the card of requests nextlevel didn't write (FR-017 part 2B, 2B-1b)
     askEstimate, // the Advisor panel's estimate of what a question sends
     advisorMemory, // the Advisor panel's Memory: list, and the owner's add, edit and remove
     askTripwireSeen: (say = (m) => console.log(m)) => {

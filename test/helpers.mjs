@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { projectSigningKey, sign, stateName } from '../src/lib/sign.mjs';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const BIN = path.join(REPO, 'bin', 'nextlevel.mjs');
@@ -434,4 +435,15 @@ export function testClock(p, at) {
   };
   clock.set(at);
   return clock;
+}
+
+// A request written into a project's state as nextlevel's own command would write it: signed with the project's key
+// (FR-017 part 2B, 2B-1b). For tests of what the hub does with a request it can trace; one written without this is set
+// aside. `rel`: its path under .nextlevel/ (queue/x.json, outbox/x.json, wakeup.json, round-now.json).
+export function writeSignedRequest(p, rel, obj, { by = 'owner', at = new Date().toISOString() } = {}) {
+  const { key, problem } = projectSigningKey(p.repo, { home: p.env.HOME, create: true });
+  if (!key) throw new Error(problem || 'no signing key');
+  const file = p.state(...rel.split('/'));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(sign(obj, { key, name: stateName(rel), by, at })));
 }

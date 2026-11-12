@@ -638,6 +638,18 @@ owner decides. Nothing waiting: passes quietly, with the number of protected pat
 removes. Something waiting: **warn**, with each change's id, who made it and its files; **error** while git work is
 stopped. Its record unreadable: **info**.
 
+### state.key
+The **key nextlevel signs its requests with** (FR-017 part 2B, `docs/design/FR-017-part2B.md` 3.2): what a nextlevel
+command, the dashboard or the hub writes for the hub to act on (a job in `queue/`, a phone message in `outbox/`,
+`wakeup.json`, a press of Run a round now) carries an HMAC made with a key per project kept outside the project, in
+`~/.nextlevel/keys/<project>.key`, with a record of it beside the guard's (`signing.json`). The hub makes it at its first
+start. A request without a good signature (a worker that wrote the file by hand) is set aside, unacted on, with a card
+on Home. Once the project has had a key, a missing or changed key is never made again by itself: the hub acts on no
+request until the owner says. Passes quietly with the key, or before the hub's first start. The key gone, unreadable or
+not the one recorded: **error**, with the fix `nextlevel doctor --fix state.key` in the owner's own PowerShell window
+(never the dashboard's button, never in an agent's session): a new key, and a list of the requests that were waiting,
+which the hub then sets aside to be asked again.
+
 ### bridge.test
 The bridge test's verdict for each engine workers run on: the workers' own, the second worker's and their fallback's
 (one verdict per engine, `.nextlevel/bridge-tests/<engine>.json`). Two workers try a real push to a throwaway remote, and the hub
