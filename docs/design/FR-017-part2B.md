@@ -235,6 +235,9 @@ doctor's `state.key`, an error). Choices left to this step, with the safer readi
 - `acted.json` is made, empty and signed, with the key (and again with a new key, since nothing signed with the old one
   is good any more); a running hub that sees the key's record change takes the new key and signs its own record again.
   With a key there, a missing `acted.json` was deleted: it is treated like one that fails its check.
+- A task whose queued request is set aside doesn't stay "queued": its job ends as an error that says so, with the
+  command to ask again (`nextlevel retry <id>`); while the key can't be had, a queued task says it waits for the key
+  (`waitingFor: 'key'`).
 Next (2B-1b2 on): the stores with `seq` and `seen.json`, the PC's files and the launcher's check, the other requests
 (`ui-open.json`, the stop requests, scan and tester requests) and the migration.
 

@@ -2793,6 +2793,7 @@ const readUntraced = () => {
     return { items: [] };
   }
 };
+const KEY_WAIT = "nextlevel's signing key can't be had, so nothing asked of the hub is acted on (Home says the fix: nextlevel doctor --fix state.key, in your own window)";
 const flaggedOnce = new Set(); // (a file ignored where it is, a wake-up or a press: said once per content)
 // A wake-up or a press nextlevel signed but the hub saw too late (it was stopped, or busy): not a forgery, so no card, no
 // flag and no phone message; said once in hub.log
@@ -2837,6 +2838,12 @@ function untraced({ file, kind, why, what, keep = false }) {
       fs.rmSync(file, { force: true });
       log(`couldn't keep ${rel(file)} aside (${err.message}): removed`);
     }
+  }
+  // (a job the hub's own record has as queued, whose queue file is the one set aside: it won't run, and says so, rather
+  // than wait as "queued" for ever. Nothing is taken from the file but its name)
+  const own = kind === 'queue' && !keep ? path.basename(file, '.json') : '';
+  if (own && JOB_ID_RE.test(own) && !own.includes('..') && jobStatus(own)?.state === 'queued') {
+    setStatus(own, { state: 'error', notStarted: true, error: `its request in the queue was set aside, not acted on (${String(why).slice(0, 200)}): nothing ran. If you want it, ask again: nextlevel retry ${own}`, waiting: null, waitingFor: null, finishedAt: now(), acked: false });
   }
   const tasks = [...new Set([...sinceLastLook, ...runningTasks()])];
   for (const t of tasks) {
@@ -5375,11 +5382,17 @@ async function pollJobsNow() {
       if (!job) return null;
       // (signed by nextlevel, never acted on before: else set aside, FR-017 part 2B; with no key, nothing runs)
       const why = requestProblem(path.join(QUEUE, f), job);
-      if (why === null) return null;
+      // (a job the hub has a record of says why it waits; the file can't be checked, so nothing else is taken from it)
+      const known = typeof job.id === 'string' && JOB_ID_RE.test(job.id) && !job.id.includes('..') && jobStatus(job.id)?.state === 'queued' ? jobStatus(job.id) : null;
+      if (why === null) {
+        if (known && known.waitingFor !== 'key') setStatus(job.id, { waiting: KEY_WAIT, waitingFor: 'key' });
+        return null;
+      }
       if (why) {
         untraced({ file: path.join(QUEUE, f), kind: 'queue', why, what: requestWords('queue', job) });
         return null;
       }
+      if (known?.waitingFor === 'key') setStatus(job.id, { waiting: null, waitingFor: null });
       if (typeof job.id !== 'string' || !JOB_ID_RE.test(job.id) || job.id.includes('..')) {
         fs.rmSync(path.join(QUEUE, f), { force: true });
         log(`queue: ${f} not run: its id ${JSON.stringify(String(job.id).slice(0, 80))} isn't a plain name`);
@@ -7504,7 +7517,7 @@ async function cmdRun(argv) {
       log(`hub error: ${err.message}`);
     }
     // (a task held for what it needs waits for a retry that moves it: nothing more happens by itself)
-    if (a['exit-when-idle'] && tick > 1 && !advisorReview.child && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && ['needs', 'look'].includes(j.waitingFor))) && !roundWaiting()) break;
+    if (a['exit-when-idle'] && tick > 1 && !advisorReview.child && !busy.size && !cleaning.size && !cycle && !lockTest.child && !fixing && !scanBusy() && !watch.child && !pendingRequests(ROOT).length && !acceptBusy() && !versionLook && !pendingRuns(ROOT, DIR).length && !allJobs().some((j) => ACTIVE.has(j.state) && !(j.state === 'queued' && ['needs', 'look', 'key'].includes(j.waitingFor))) && !roundWaiting()) break;
     await sleep(num(a['tick-ms'], 5000));
   }
   if (busy.size) {

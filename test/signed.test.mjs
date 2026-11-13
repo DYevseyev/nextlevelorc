@@ -222,6 +222,8 @@ test("a signing key that is gone after the project had one: no request is acted 
     fs.rmSync(kf);
     p.runUntilIdle();
     assert.equal(p.status('SG-05-ok').state, 'queued', 'nothing acted on');
+    assert.equal(p.status('SG-05-ok').waitingFor, 'key', 'and it says what it waits for');
+    assert.match(p.status('SG-05-ok').waiting, /signing key can't be had.*nextlevel doctor --fix state\.key/);
     assert.ok(fs.existsSync(p.state('queue', 'SG-05-ok.json')), 'nothing set aside either');
     assert.ok(!fs.existsSync(kf), 'the hub made no new key');
     const r = p.hub(['notify', 'x', 'y']);
@@ -307,7 +309,9 @@ test("the record of the requests acted on starts with the key; deleted, it isn't
     const log = fs.readFileSync(p.state('logs', 'hub.log'), 'utf8');
     assert.match(log, /acted\.json: not acted on, nextlevel can't trace it \(it is gone, though the key that started it is there\)/);
     assert.match(log, /SG-07-old\.json: not acted on, nextlevel can't trace it \(it was signed before the hub could trust its record/);
-    assert.notEqual(p.status('SG-07-old')?.state, 'done');
+    // (its job says so, rather than wait as queued for ever)
+    assert.equal(p.status('SG-07-old').state, 'error');
+    assert.match(p.status('SG-07-old').error, /its request in the queue was set aside, not acted on \(it was signed before the hub could trust its record[^)]*\): nothing ran\. If you want it, ask again: nextlevel retry SG-07-old/);
     assert.equal(p.hub(['dispatch', 'SG-07-ok']).code, 0);
     p.runUntilIdle();
     assert.equal(p.status('SG-07-ok').state, 'done', 'a request signed since is acted on');
