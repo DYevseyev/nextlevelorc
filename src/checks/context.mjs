@@ -47,11 +47,14 @@ import { homeDir, jsonStore, userState } from '../lib/home.mjs';
 import { TOOL_ROOT } from '../lib/project.mjs';
 import { runInConsole } from '../lib/console.mjs';
 import { readEnv } from '../lib/gitlock.mjs';
+import { agentsHome } from '../lib/ancestry.mjs';
 import { ownerWriteProblem, recordOwner } from '../lib/guard.mjs';
 import { resolveBin, runCached, runQuiet } from '../lib/proc.mjs';
 import { canWriteGit, detectSandbox } from '../lib/sandbox.mjs';
 import { apiPortOpen } from '../lib/securityrun.mjs';
 import { withLease } from '../lib/securityscan.mjs';
+import { agentSession } from '../lib/session.mjs';
+import { newSigningKey, projectSigningKey } from '../lib/sign.mjs';
 import { probeBrowser } from '../lib/testerbrowser.mjs';
 import { reachOf, request } from '../lib/testernet.mjs';
 import { parseEnvFile } from '../notify.mjs';
@@ -158,6 +161,23 @@ export function makeContext({ root = null, problem = '', config, configInfo, sta
     cache: jsonStore(stateDir && path.join(stateDir, 'check-cache.json')),
     userState: userState(),
     hubAlive,
+    // the key nextlevel signs requests with (FR-017 part 2B, 2B-1b: lib/sign.mjs), where the hub reads it
+    signing: {
+      look: () => projectSigningKey(root, { home: agentsHome({ toolRoot: TOOL_ROOT }) }),
+      renew: () => newSigningKey(root, { home: agentsHome({ toolRoot: TOOL_ROOT }) }),
+      // the requests waiting in the project's state, which a new key sets aside
+      pending: () =>
+        ['queue', 'outbox']
+          .flatMap((d) => {
+            try {
+              return fs.readdirSync(path.join(stateDir, d)).filter((f) => f.endsWith('.json')).map((f) => `${d}/${f}`);
+            } catch {
+              return [];
+            }
+          })
+          .concat(['wakeup.json'].filter((f) => fs.existsSync(path.join(stateDir, f)))),
+    },
+    agentSession: agentSession(process.env),
     uses: (engine) => !!engineUse(cfg, engine),
     usage: (engine) => engineUse(cfg, engine),
     profiles: profilesInUse(cfg),

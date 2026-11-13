@@ -34,6 +34,7 @@ import { advisorCheck, claudeChecks, codexChecks, agyChecks, fullAccessCheck, pr
 import { toolFilesCheck } from './files.mjs';
 import { ghAuthCheck, ghTool, gitTool, identityCheck, readTokenCheck, repoChecks } from './git.mjs';
 import { guardCheck } from './guard.mjs';
+import { signingCheck } from './signing.mjs';
 import { channelCheck, commandCheck, updatesCheck } from './install.mjs';
 import { projectChecks } from './project.mjs';
 import { runnerChecks } from './runner.mjs';
@@ -80,6 +81,7 @@ export const CHECKS = [
   pushLockCheck,
   portsCheck,
   guardCheck,
+  signingCheck,
   bridgeCheck,
   lockCheck,
   hubCheck,

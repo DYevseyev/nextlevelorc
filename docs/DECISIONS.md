@@ -2217,3 +2217,13 @@ One entry each: date, decision, why, alternatives.
   stopping the hub: checks, pushes and git jobs the orchestrator asked for still run, as with FR-013's missing files.
   Alternatives: a card alone (a worker's next task would run under the changed code before the owner sees it), or
   putting the files back (the hub can't tell the owner's own edit from a worker's).
+- 2026-11-12 — **The requests the hub acts on are signed, in a step of their own** (FR-017 part 2B, 2B-1b1). A queued
+  job, a phone message, a wake-up and a press of Run a round now carry an HMAC with a key per project outside the
+  project (`src/lib/sign.mjs`); one without a good signature is set aside (a job or a message moved to
+  `.nextlevel/untraced/`) or ignored (a wake-up or a press, rewritten in place by their writers), logged, flagged on the
+  tasks that ran since the last look, and shown on one Home card with Seen. 2B-1b is split: requests first, the stores
+  with `seq` next, so each pull request stays reviewable. The key's record is `signing.json` in the guard's folder,
+  written with the key: once there, a missing key is never made again by itself (a worker that deleted it must not get
+  a fresh one its own files then match). The fix makes a new key and lists, rather than signs, what was waiting, and runs
+  only in the owner's window. Alternatives: sign the pending requests at the update (it would take over a planted one),
+  or `format.json` as the record (it lives in the project, where an agent can write).

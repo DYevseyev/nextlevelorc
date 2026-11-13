@@ -117,6 +117,15 @@ export function fakeContext(o = {}) {
         return o.browser?.install || '';
       },
     },
+    signing: {
+      look: () => o.signing?.look || { key: Buffer.alloc(32) },
+      renew: () => {
+        calls.push('signing renew');
+        return { key: Buffer.alloc(32, 1) };
+      },
+      pending: () => o.signing?.pending || [],
+    },
+    agentSession: o.agentSession || null,
     uses: (engine) => !!engineUse(config, engine),
     usage: (engine) => engineUse(config, engine),
     profiles: profilesInUse(config),
