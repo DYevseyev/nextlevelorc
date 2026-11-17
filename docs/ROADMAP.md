@@ -8,7 +8,9 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
   acts is refused under a worker by its process ancestry, whatever its variables say. Since 2B-1a2 a note typed into
   the notes file, or a tick in the handoff file, waits for the owner's Confirm on the dashboard. Since 2B-1a3 nextlevel's
   own files and the owner's global git settings are looked at after each attempt and at the hub's start: a change
-  holds dispatch until the owner's Seen. Next: the hub's files signed (2B-1b).
+  holds dispatch until the owner's Seen. Since 2B-1b1 the requests the hub acts on (a queued job, a phone message, a
+  wake-up, a press of Run a round now) are signed with a key kept outside the project: one a worker wrote by hand is set
+  aside, with a card on Home. Next: the hub's stores signed, with no going back (2B-1b2).
 - **The agents as another Windows user** (FR-017 part 2B: a separate account, a container or WSL). Every agent runs as
   your own user today, so an engine without its own permission checks can read and write anything you can
   (`docs/KNOWN_ISSUES.md`, "What an agent running as the owner can still do"). This turns what stays open into walls.

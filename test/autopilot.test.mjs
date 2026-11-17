@@ -9,7 +9,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { REPO, hubRounds, makeProject, processesGone, testClock, waitUntil } from './helpers.mjs';
+import { REPO, hubRounds, makeProject, processesGone, testClock, waitUntil, writeSignedRequest } from './helpers.mjs';
 import { readLedger } from '../src/lib/usage.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
@@ -464,7 +464,7 @@ test('a round that ended while the hub was stopped, after it moved work and aske
       round: { startedAt: '2026-10-06T10:00:00.000Z', reasons: [{ type: 'owner', what: 'your new note N1', at: '2026-10-06T10:00:00.000Z' }], type: 'owner', what: 'your new note N1', realN: 1, retried: false, log, engine: 'codex' },
     });
     writeOver(p.state('cycle.json'), { pid: 999999, startedAt: '2026-10-06T10:00:00.000Z', log, launched: true, endedAt: '2026-10-06T10:21:00.000Z', exitCode: 0 });
-    writeOver(p.state('wakeup.json'), { id: '0123456789ab', askedAt: '2026-10-06T10:20:00.000Z', minutes: 25, reason: 'the CI run of ci-stub is still running', by: 'an autopilot round' });
+    writeSignedRequest(p, 'wakeup.json', { id: '0123456789ab', askedAt: '2026-10-06T10:20:00.000Z', minutes: 25, reason: 'the CI run of ci-stub is still running', by: 'an autopilot round' }, { by: 'orchestrator', at: '2026-10-06T10:25:00.000Z' });
     bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
     await until(p, 'the round to be ended', () => ended(p) === 1);
     assert.match(hubLog(p), /autopilot: cycle ended \(exit 0, something real happened: 3 commit\(s\) were pushed to ci-stub; it asked for a wake-up, its next round \(at /);
@@ -703,7 +703,8 @@ test('only the orchestrator asks for a wake-up; the owner\'s side of the cards r
     assert.match(ok.out, /Asked for a round in 10 min or later, because: the CI run is still running/);
     const asked = JSON.parse(fs.readFileSync(p.state('wakeup.json'), 'utf8'));
     assert.match(asked.id, /^[0-9a-f]{12}$/);
-    assert.deepEqual({ ...asked, id: '' }, { id: '', askedAt: '2026-10-06T10:00:00.000Z', minutes: 10, reason: 'the CI run is still running', by: 'an autopilot round' });
+    assert.equal(asked.sig?.by, 'orchestrator', 'signed (FR-017 part 2B)');
+    assert.deepEqual({ ...asked, id: '', sig: undefined }, { id: '', sig: undefined, askedAt: '2026-10-06T10:00:00.000Z', minutes: 10, reason: 'the CI run is still running', by: 'an autopilot round' });
     // The owner's side of the cards is what wakes the team: in an agent's session it is refused
     for (const args of [['note', 'add', 'keep going'], ['handoff', 'reply', 'H1', 'yes'], ['handoff', 'done', 'H1']]) {
       const r = p.hub(args, { extraEnv: orch });
@@ -771,14 +772,17 @@ test('rounds whose engine never starts: what started them waits, the hour counts
     assert.equal(JSON.parse(fs.readFileSync(p.state('round-now.json'), 'utf8')).n, 1, 'the hub left the count as it was');
     await looks(p, 3);
     assert.equal(started(p), 4, 'pressed once: one round');
-    // A count set out of range in the file (an agent can write it, and that is taken as a press: KNOWN_ISSUES) doesn't
-    // stop the button: it reads as 0, and the owner's next press is one round more
+    // A count written into the file by hand (an agent can write it) isn't the dashboard's: no press, said in hub.log
+    // (FR-017 part 2B, 2B-1b); it doesn't stop the button either: the owner's next press is one more than the hub last took,
+    // one round more
     writeOver(p.state('round-now.json'), { n: 1e308 });
-    await until(p, 'the round for the changed count', () => started(p) === 5 && ended(p) === 5);
+    await until(p, 'the hand-written count to be set aside', () => /round-now\.json: not acted on, nextlevel can't trace it \(it has no signature\)/.test(hubLog(p)));
+    await looks(p, 3);
+    assert.equal(started(p), 4, 'no round for a count nextlevel can trace to no one');
     assert.equal((await api.post('/api/round', {})).status, 200);
-    assert.equal(readState(p, 'round-now.json').n, 1);
-    await until(p, "the owner's press", () => started(p) === 6 && ended(p) === 6);
-    assert.equal(reasons(p)[5], 'you pressed Run a round now');
+    assert.equal(readState(p, 'round-now.json').n, 2);
+    await until(p, "the owner's press", () => started(p) === 5 && ended(p) === 5);
+    assert.equal(reasons(p)[4], 'you pressed Run a round now');
   } finally {
     await stopUi(ui);
     await stopHub(p, bg);

@@ -1143,6 +1143,22 @@ and the phone hears it once. What it doesn't do:
   hook a worker put in your global settings runs in the hub's ordinary git work (a slot's merge, a commit) until you
   see the card: after the fact, as above.
 
+## Signed requests (FR-017 part 2B, 2B-1b1)
+What the hub acts on from a file (a job in `.nextlevel/queue/`, a phone message in `outbox/`, `wakeup.json`, a press of
+Run a round now) carries a signature made with a key kept outside the project (`~/.nextlevel/keys/<project>.key`). A
+file without a good one is set aside (`.nextlevel/untraced/`) or ignored, with a card on Home. What it doesn't do yet:
+- **A worker running as you can read the key.** It sits in your profile, which every agent can read in layer 1: a worker
+  that looks for it can sign. The agents' own Windows account (layer 2) closes that. Until then the signature stops a
+  worker that writes a request by hand without knowing about the key, and the look after each attempt (above) and
+  ancestry (2B-1a) stand beside it.
+- **Only requests are signed.** The cards, settings and the other stores the hub reads aren't yet (2B-1b2), nor
+  `channels.json` and `versions.json` (the launcher), nor `ui-open.json`, the stop requests and scan and tester requests.
+- **Requests from before the update** are unsigned, so they are set aside on the card: ask again for what you want.
+- **A lost key stops requests.** If `~/.nextlevel/keys/<project>.key` goes, or is changed, the hub acts on no request
+  until you run `nextlevel doctor --fix state.key` in your own PowerShell window, in the project folder. A new key sets
+  aside what was waiting.
+- **An older version** ignores the signature: going back to one acts on unsigned requests again.
+
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the
   older version shows the card open and never makes it final. Click Done again. Coming forward again, a pending Done is

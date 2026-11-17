@@ -20,7 +20,7 @@ import { guardDir, recordOwner } from '../src/lib/guard.mjs';
 import { writeShims } from '../src/lib/install.mjs';
 import { isProtected, protectedList } from '../src/lib/protect.mjs';
 import { branchNameProblem, deployList, isDeployBranch, parseLsRemote, pushArgs, targetProblem } from '../src/lib/push.mjs';
-import { BIN, REPO, makeProject, withEnv } from './helpers.mjs';
+import { BIN, REPO, makeProject, withEnv, writeSignedRequest } from './helpers.mjs';
 import { client, request, startUi, stopUi } from './ui-helpers.mjs';
 
 const IS_WIN = process.platform === 'win32';
@@ -346,14 +346,17 @@ test('push names its branch: none refuses; backup/main and a CI branch push only
     assert.deepEqual(queued(p), []);
     // ... and by the hub: jobs written into the queue by hand (the state folder is writable by the orchestrator), and one
     // from before FR-015 with no branch, which that nextlevel took to mean main
-    const craft = (id, job) => fs.writeFileSync(p.state('queue', `${id}.json`), JSON.stringify({ id, type: 'push', queuedAt: new Date().toISOString(), ...job }));
+    // (signed as nextlevel's command would sign them: a job written without a signature is set aside before any of this,
+    // FR-017 part 2B, 2B-1b; these are what the hub checks after, for one that a worker that read the key signed)
+    let n = 0;
+    const craft = (id, job) => writeSignedRequest(p, `queue/${id}.json`, { id, type: 'push', queuedAt: new Date().toISOString(), rid: `c0ffee${String(n++).padStart(10, '0')}`, ...job });
     fs.mkdirSync(p.state('queue'), { recursive: true });
     Object.keys(forms).forEach((form, i) => craft(`push-crafted-${i}`, { target: form }));
     craft('push-old', {});
     craft('push-fake-approval', { target: 'main', approval: 'G9' });
     craft('push-from-a-remote', { target: 'backup/main', from: 'origin/main' });
     // an id that would give the job a folder outside jobs/: never run, no folder
-    fs.writeFileSync(p.state('queue', 'escape.json'), JSON.stringify({ id: '../../escaped-push', type: 'push', target: 'backup/escape', queuedAt: new Date().toISOString() }));
+    writeSignedRequest(p, 'queue/escape.json', { id: '../../escaped-push', type: 'push', target: 'backup/escape', queuedAt: new Date().toISOString(), rid: 'c0ffeeffffffffff' });
     const run = await hubRun(p);
     assert.equal(run.code, 0, run.out);
     assert.equal(fs.existsSync(path.join(p.repo, 'escaped-push')), false, 'no folder outside jobs/');

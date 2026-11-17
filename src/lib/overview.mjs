@@ -265,6 +265,23 @@ export function ownerNeeds(b, checks = {}) {
       more: { label: 'See it on Build', page: 'build' },
     });
   }
+  // Requests nextlevel didn't write (a job in the queue, a phone message, a wake-up, a press), set aside unacted on, or a
+  // signing key it can't have (FR-017 part 2B, 2B-1b)
+  if (b.untraced?.keyProblem) {
+    needs.push({ kind: 'signkey', level: 'error', text: `Nothing the team or you ask of the hub is acted on: ${b.untraced.keyProblem}`, why: "nextlevel signs every request it writes with a key kept outside the project, so it never acts on one a worker wrote by hand. Without the key it can't tell, so it acts on none." });
+  }
+  if (b.untraced?.items?.length) {
+    const u = b.untraced.items;
+    const tasks = [...new Set(u.flatMap((x) => x.tasks || []))];
+    needs.push({
+      kind: 'untraced',
+      level: 'error',
+      text: `${u.length === 1 ? 'A request' : `${u.length} requests`} nextlevel didn't write ${u.length === 1 ? 'was' : 'were'} set aside, not acted on: ${u.slice(-4).map((x) => `${x.what} (${x.why})`).join('; ')}${u.length > 4 ? '; ...' : ''}.${tasks.length ? ` Running then: ${tasks.join(', ')}.` : ''}`,
+      why: "nextlevel signs what its commands and the dashboard write, so a file written another way (by a worker, by hand, or before this update) is never acted on. Nothing here acts on it: if you or the team made it before this update, do it again; if not, look at what those tasks did.",
+      action: { label: 'Seen', post: '/api/untraced', body: {} },
+      more: { label: 'See it on Build', page: 'build' },
+    });
+  }
   for (const a of b.alerts || []) {
     // (a worker stopped from outside points at the antivirus: Setup lists the tool files that are gone)
     if (a.kind === 'outside') needs.push({ kind: 'task', level: 'error', text: a.text, action: { label: 'Open Setup', page: 'setup' }, more: { label: 'See it on Build', page: 'build' } });

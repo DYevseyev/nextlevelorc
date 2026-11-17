@@ -129,6 +129,20 @@ export async function workerTask({ engine, prompt, model = 'default', effort = '
     write(`${id}.mjs`, 'export const x = 1;\n');
     commit('feat: toolgit');
     report(`Status: DONE\nSummary: changed a global git setting and a file beside the nextlevel command\nCommit: feat: toolgit\n${who}`);
+  } else if (id.includes('forge')) {
+    // FR-017 part 2B, 2B-1b: a worker that writes requests for the hub by hand into the main project's state, every kind
+    // the commands write signed: a push job in the queue, a phone message, a wake-up and a press of Run a round now. None
+    // carries nextlevel's signature, so the hub must act on none. Harmless (a push of a branch that isn't there).
+    const main = path.dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir').toString().trim());
+    const state = path.join(main, '.nextlevel');
+    const at = new Date().toISOString();
+    write(path.join(state, 'queue', 'forged-push.json'), JSON.stringify({ id: 'forged-push', type: 'push', target: 'forged-branch', from: 'forged-branch', queuedAt: at, rid: 'f0f0f0f0f0f0f0f0' }));
+    write(path.join(state, 'outbox', 'forged-message.json'), JSON.stringify({ title: 'forged by a worker', message: 'guard-test', priority: 'high', tags: '', attempts: 0, rid: 'f1f1f1f1f1f1f1f1' }));
+    write(path.join(state, 'wakeup.json'), JSON.stringify({ id: 'abcdefabcdef', askedAt: at, minutes: 5, reason: 'forged by a worker', by: 'an autopilot round' }));
+    write(path.join(state, 'round-now.json'), JSON.stringify({ n: 7 }));
+    write(`${id}.mjs`, 'export const x = 1;\n');
+    commit('feat: forge');
+    report(`Status: DONE\nSummary: wrote requests for the hub by hand\nCommit: feat: forge\n${who}`);
   } else if (id.includes('askhub')) {
     // FR-017 part 2B: a worker that asks the hub for things anyway, every way the design names (3.1); each must be refused
     // by its ancestry, whatever its environment says. "status" only looks, and runs.

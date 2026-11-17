@@ -195,7 +195,11 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   and the stub worker's `askhub` task. `src/lib/toollook.mjs` — the look after each attempt (2B-1a3): nextlevel's own
   files, its clone's origin, `~/.nextlevel/bin` and the owner's global git settings compared with the last look in the
   guard's folder (`tool-look.json`; lookAgain, toolLookWaits, toolChangeSeen in `hub.mjs`): a change holds dispatch until
-  the owner's Seen on Home; `test/toollook.test.mjs` and the stub worker's `toolgit` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
+  the owner's Seen on Home; `test/toollook.test.mjs` and the stub worker's `toolgit` task. `src/lib/sign.mjs` — signed
+  requests (2B-1b1): the project's key in `~/.nextlevel/keys/` and its record (`signing.json`) beside the guard's, `sign`
+  and `verify` (HMAC per purpose over a canonical form and the file's name); the hub's side is "signed requests" in
+  `hub.mjs` (writeSigned, requestProblem, untraced, acted.json, Home's `untraced` card with Seen), the doctor's
+  `state.key` (`src/checks/signing.mjs`); `test/signed.test.mjs` and the stub worker's `forge` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
   and `CONIN$`); `src/lib/toolfiles.mjs` — the files the tools need, launchers followed to what they run (FR-013);
   `src/lib/slotfiles.mjs` — the hub's files in a worker's slot, never written through a link;
   `src/lib/workerlog.mjs` — a worker's log as plain, redacted text. `src/lib/sandbox.mjs` —

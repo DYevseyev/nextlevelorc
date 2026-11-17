@@ -469,7 +469,10 @@ test('a team change reaches the next task, never a running one; the job records 
     assert.deepEqual([p.status('M9-03-fail').engine, p.status('M9-03-fail').model, p.status('M9-03-fail').effort], ['claude', 'sonnet', 'low']);
 
     // The day's numbers: four attempts and their minutes, and Codex's tokens from its workers' output
-    const day = Object.values(JSON.parse(fs.readFileSync(p.state('usage.json'), 'utf8'))).at(-1);
+    // (the hub counts an attempt just after its status says it ended: wait for the count itself)
+    const today = () => Object.values(JSON.parse(fs.readFileSync(p.state('usage.json'), 'utf8'))).at(-1);
+    await wait(() => today()?.attempts >= 4, 'the fourth attempt to be counted');
+    const day = today();
     assert.equal(day.attempts, 4);
     assert.ok(day.workerMinutes > 0);
     assert.equal(day.codexTokens, 2 * 12345, 'two attempts ran on Codex');

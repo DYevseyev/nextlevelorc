@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BIN, makeProject, withEnv } from './helpers.mjs';
+import { BIN, makeProject, withEnv, writeSignedRequest } from './helpers.mjs';
 
 // An ntfy server that keeps what it gets.
 async function fakeNtfy() {
@@ -99,8 +99,11 @@ test("every phone message goes out redacted like a report (FR-017): notify, noti
     assert.equal(now.code, 0, now.out);
     // notify, queued for the hub
     assert.equal((await run(p, ['notify', 'Queued', `again ${VALUE}`], env)).code, 0);
-    // written straight into the outbox, as an agent can (the orchestrator can write the state folder)
-    fs.writeFileSync(p.state('outbox', 'zz-by-an-agent.json'), JSON.stringify({ title: `Raw ${VALUE}`, message: `raw message ${VALUE}`, priority: 'high', tags: '', attempts: 0 }));
+    // written straight into the outbox, as an agent can (the orchestrator can write the state folder): never sent, set
+    // aside (FR-017 part 2B, 2B-1b), and the phone's word of it carries no value; one signed (a worker that read the key,
+    // KNOWN_ISSUES) is still redacted as it goes
+    fs.writeFileSync(p.state('outbox', 'zz-by-an-agent.json'), JSON.stringify({ title: `Unsigned ${VALUE}`, message: `raw message ${VALUE}`, priority: 'high', tags: '', attempts: 0 }));
+    writeSignedRequest(p, 'outbox/zz-signed.json', { title: `Raw ${VALUE}`, message: `raw message ${VALUE}`, priority: 'high', tags: '', attempts: 0, rid: 'aaaaaaaaaaaaaaaa' });
     // a handoff card whose request carries it, answered by the team: the phone gets a message that names the card
     fs.writeFileSync(p.state('request.md'), `Rotate the key ${VALUE}\nWhere: the provider's panel\nWhy: it was in a log\n`);
     fs.writeFileSync(p.state('answer.md'), 'Done: the new one is in .env.\n');
@@ -113,7 +116,8 @@ test("every phone message goes out redacted like a report (FR-017): notify, noti
 
     const titles = ntfy.got.map((m) => m.title);
     assert.deepEqual(titles.slice(0, 1), ['Key ***']);
-    for (const t of ['Queued', 'Raw ***', 'proj: the team answered H1']) assert.ok(titles.includes(t), `${t}: ${JSON.stringify(titles)}`);
+    for (const t of ['Queued', 'Raw ***', 'proj: the team answered H1', "proj: a request nextlevel didn't write was set aside"]) assert.ok(titles.includes(t), `${t}: ${JSON.stringify(titles)}`);
+    assert.ok(!titles.includes('Unsigned ***'), 'an unsigned message is never sent');
     assert.ok(titles.some((t) => /^proj daily: /.test(t)), JSON.stringify(titles));
     const byTitle = (t) => ntfy.got.find((m) => m.title === t);
     assert.equal(byTitle('Key ***').message, 'The key is ***; SERVICE_TOKEN=***');

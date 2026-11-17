@@ -1499,6 +1499,31 @@ test('bridge.test: one verdict per worker engine (the workers, their fallback), 
   assert.deepEqual(prof.steps.map((s) => s.command), ['nextlevel run', 'nextlevel bridge-test --profile codex-small']);
 });
 
+test('state.key: the key requests are signed with; a new one only in the owner\'s own window (FR-017 part 2B, 2B-1b)', async () => {
+  const ok = await check('state.key');
+  assert.equal(ok.status, 'ok');
+  const none = await check('state.key', { signing: { look: { missing: true } } });
+  assert.deepEqual([none.status, none.detail], ['ok', 'made when the hub first starts']);
+  const gone = "nextlevel's signing key (/home/me/.nextlevel/keys/p.key) is gone, though the project had one since 2026-11-12. Requests aren't acted on: a new key isn't made by itself. In your own PowerShell window, in the project folder: nextlevel doctor --fix state.key";
+  const bad = await check('state.key', { signing: { look: { problem: gone } } });
+  assert.deepEqual([bad.status, bad.detail], ['fail', gone]);
+  assert.deepEqual(bad.steps.map((s) => s.command), ['nextlevel doctor --fix state.key']);
+  assert.equal(byId('state.key').fixInWindow, true, "never the dashboard's button");
+  assert.equal(byId('state.key').canFix(bad, bad.ctx), true);
+  // The fix: a new key, naming what waited (set aside by the hub)
+  const ui = fakeUi();
+  const fx = await fixed('state.key', { signing: { look: { problem: gone }, pending: ['queue/t1.json', 'wakeup.json'] } }, ui);
+  assert.ok(fx.ctx.calls.includes('signing renew'));
+  assert.match(ui.said.join('\n'), /sets them aside: queue\/t1\.json, wakeup\.json/);
+  // Never in an agent's session: the key would be one its own files then match
+  const agent = await check('state.key', { signing: { look: { problem: gone } }, agentSession: 'worker' });
+  assert.equal(byId('state.key').canFix(agent, agent.ctx), false);
+  assert.throws(() => byId('state.key').fix(agent.ctx, fakeUi()), /owner's/);
+  assert.ok(!agent.ctx.calls.includes('signing renew'));
+  const noProject = await check('state.key', { root: null });
+  assert.equal(noProject.status, 'skip');
+});
+
 test('guard.held: the changes to protected files that wait for the owner, and the protected paths in effect', async () => {
   // The held changes are kept in the owner's home, outside the project (lib/guard.mjs)
   const held = (items) => ({ [path.posix.join('/home/me', '.nextlevel', 'guard', projectKey('/proj'), 'held.json')]: JSON.stringify({ next: 3, items }) });
