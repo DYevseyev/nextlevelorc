@@ -2227,3 +2227,14 @@ One entry each: date, decision, why, alternatives.
   a fresh one its own files then match). The fix makes a new key and lists, rather than signs, what was waiting, and runs
   only in the owner's window. Alternatives: sign the pending requests at the update (it would take over a planted one),
   or `format.json` as the record (it lives in the project, where an agent can write).
+- 2026-11-17 — **Signed stores start with the two only the hub writes** (FR-017 part 2B, 2B-1b2). `rounds.json` and
+  `closed.json` get the whole mechanism (a `seq` per write, the hub's memory `seen.json` and the last good copy in the
+  guard's folder, set aside and put back), so the stores with several writers (cards, settings, job records) can follow
+  on a mechanism already reviewed. A store the hub has no number for is taken as it is, once: refusing it would lose
+  every project's closures and round state at the update, and what it holds was acted on before the update anyway. The
+  hole that leaves (delete `seen.json`, then plant a store) is closed by the key's record saying the memory was started:
+  a missing one is then distrusted, like `acted.json`. A bad store is replaced by the hub's last good copy rather than
+  by an empty one: for rounds that keeps the brake and the fuse where they were, for closures the owner's decisions.
+  Readers outside the hub check no number: they change nothing, and giving them the memory would mean a second writer
+  for it. Alternative: keep the number inside the guard's folder only and leave the files unsigned with a hash (a
+  command's write, coming in 2B-1b3, could then never be told from a worker's).

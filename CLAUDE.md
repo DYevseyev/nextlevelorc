@@ -199,7 +199,10 @@ In this file and in the code, "the owner" is the person who runs nextlevel on th
   requests (2B-1b1): the project's key in `~/.nextlevel/keys/` and its record (`signing.json`) beside the guard's, `sign`
   and `verify` (HMAC per purpose over a canonical form and the file's name); the hub's side is "signed requests" in
   `hub.mjs` (writeSigned, requestProblem, untraced, acted.json, Home's `untraced` card with Seen), the doctor's
-  `state.key` (`src/checks/signing.mjs`); `test/signed.test.mjs` and the stub worker's `forge` task. `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
+  `state.key` (`src/checks/signing.mjs`); `test/signed.test.mjs` and the stub worker's `forge` task; and signed stores
+  (2B-1b2): `rounds.json` and `closed.json` written with a rising `seq`, the hub's memory of it (`seen.json`) and the
+  last good copy (`stores/`) in the guard's folder ("signed stores" in `hub.mjs`: writeStore, readStore, takeStore;
+  `writeSignedStore` in `test/helpers.mjs` for a test that plants one). `src/lib/console.mjs` — a real console with no window (FR-010, FR-013: `CREATE_NO_WINDOW`
   and `CONIN$`); `src/lib/toolfiles.mjs` — the files the tools need, launchers followed to what they run (FR-013);
   `src/lib/slotfiles.mjs` — the hub's files in a worker's slot, never written through a link;
   `src/lib/workerlog.mjs` — a worker's log as plain, redacted text. `src/lib/sandbox.mjs` —

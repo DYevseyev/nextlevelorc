@@ -102,7 +102,9 @@ export function taskAlerts(jobs, { taskTimeoutMin = 60, graceMin = 5, now = Date
       out.push({ id: j.id, attempt, kind: 'attempts', text: `${j.id} is on attempt ${attempt}, past ${MAX_ATTEMPTS}${tally ? ` (${tally})` : ''}: it may need a smaller task, another engine or your call` });
     }
     if (j.notStarted && j.state === 'error' && !j.acked) {
-      out.push({ id: j.id, attempt, kind: 'start', text: `${j.id}'s worker didn't start: a setup problem on this PC, not the task's (${j.error || 'no reason given'})` });
+      // (a request set aside is no setup problem: the job's own words say what happened and how to ask again)
+      const aside = /^its request in the queue was set aside/.test(j.error || '');
+      out.push({ id: j.id, attempt, kind: 'start', text: aside ? `${j.id} didn't start: ${j.error}` : `${j.id}'s worker didn't start: a setup problem on this PC, not the task's (${j.error || 'no reason given'})` });
     }
     // FR-013: its processes gone without a report, from outside nextlevel (an antivirus stopped the owner's workers)
     if (j.stoppedOutside && j.state === 'stopped' && !j.acked) {
@@ -273,11 +275,14 @@ export function ownerNeeds(b, checks = {}) {
   if (b.untraced?.items?.length) {
     const u = b.untraced.items;
     const tasks = [...new Set(u.flatMap((x) => x.tasks || []))];
+    // (a store or the hub's own record is a file, not a request: 2B-1b2)
+    const files = u.some((x) => ['store', 'seen', 'acted'].includes(x.kind));
+    const noun = files ? 'file' : 'request';
     needs.push({
       kind: 'untraced',
       level: 'error',
-      text: `${u.length === 1 ? 'A request' : `${u.length} requests`} nextlevel didn't write ${u.length === 1 ? 'was' : 'were'} set aside, not acted on: ${u.slice(-4).map((x) => `${x.what} (${x.why})`).join('; ')}${u.length > 4 ? '; ...' : ''}.${tasks.length ? ` Running then: ${tasks.join(', ')}.` : ''}`,
-      why: "nextlevel signs what its commands and the dashboard write, so a file written another way (by a worker, by hand, or before this update) is never acted on. Nothing here acts on it: if you or the team made it before this update, do it again; if not, look at what those tasks did.",
+      text: `${u.length === 1 ? `A ${noun}` : `${u.length} ${noun}s`} nextlevel didn't write ${u.length === 1 ? 'was' : 'were'} set aside, not acted on: ${u.slice(-4).map((x) => `${x.what} (${x.why})`).join('; ')}${u.length > 4 ? '; ...' : ''}.${tasks.length ? ` Running then: ${tasks.join(', ')}.` : ''}`,
+      why: `nextlevel signs what its commands and the dashboard write, so a file written another way (by a worker, by hand, or before this update) is never acted on. Nothing here acts on it: if you or the team made it before this update, do it again; if not, look at what those tasks did.${files ? " Where the hub had a good copy of one of its own files, it put that back: what was written since is in .nextlevel/untraced." : ''}`,
       action: { label: 'Seen', post: '/api/untraced', body: {} },
       more: { label: 'See it on Build', page: 'build' },
     });

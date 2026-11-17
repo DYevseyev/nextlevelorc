@@ -129,7 +129,7 @@ import { chatStore } from './lib/chats.mjs';
 import { readOnly } from './lib/readonly.mjs';
 import { addAgent, addSession, agentsHome, installedTool, pruneSessions, readRecord, refusalsFor, removeAgents, removeSession } from './lib/ancestry.mjs';
 import { LOOK, changeWords, diffLook, readLookRecord, takeLook, writeLookRecord } from './lib/toollook.mjs';
-import { markerFile, projectSigningKey, sign, stateName, verify } from './lib/sign.mjs';
+import { markStores, markerFile, projectSigningKey, seenFile, sign, stateName, storeCopyFile, storesStarted, verify } from './lib/sign.mjs';
 import { agentSession, ownerOnly } from './lib/session.mjs';
 import { cmdHandoff, cmdNote } from './notes.mjs';
 import { UNDO_MS, acceptState, acceptWords, awaitsOwner, cardStore, eventsOf, firstLine, noteGroups, unreadAnswer } from './lib/cards.mjs';
@@ -1274,12 +1274,12 @@ async function cmdCleanup(argv) {
 // the Project page counted them as planned. `nextlevel close` asks the hub, which checks the task again, deletes its
 // branch when --discard says so, and keeps the closure in closed.json (lib/closures.mjs). A merge or an active job always
 // outranks a closure, and a dispatch or a retry reopens it.
-const closures = () => closuresOf(readJson(CLOSEDFILE));
+const closures = () => closuresOf(readStore(CLOSEDFILE)); // (signed: FR-017 part 2B, 2B-1b2)
 // (only the hub's process changes it: its git job, a cleanup that throws a branch away, a task it starts)
 function changeClosures(fn) {
   const map = closures();
   const r = fn(map);
-  writeJson(CLOSEDFILE, closuresFile(map));
+  writeStore(CLOSEDFILE, closuresFile(map));
   return r;
 }
 // The tasks the hub merged: the merge log, and its finished merge jobs (lib/roadmap.mjs mergedTasks)
@@ -2477,6 +2477,123 @@ async function finishTask(id, reason = '', extra = {}) {
   jobEnded(id); // a task attempt that ended, any way, starts a round (FR-019)
 }
 
+// ---------- signed stores (FR-017 part 2B, 2B-1b2; docs/design/FR-017-part2B.md 3.2 and 5) ----------
+// A store is a file the hub reads again and again and that persists: here rounds.json and closed.json, which only the
+// hub writes. Each write is signed (purpose `state`) with a number that rises (`seq`); the hub remembers the highest it
+// took of each (seen.json in the guard's folder, signed) and keeps the last good content beside it (stores/). A store
+// with no good signature, or with a lower number (a put-back copy), is set aside as untraced and the last good one is
+// put back. A store the hub has no number for yet (written before stores were signed, or before the owner's new key) is
+// taken as it is, once, and signed. Layer 1: a worker that reads the key from the owner's profile can still sign.
+const storeName = (file) => stateName(path.relative(DIR, file));
+const storeWords = (file) => (file === ROUNDSFILE ? "autopilot's record of what may start a round (rounds.json)" : file === CLOSEDFILE ? 'the list of closed tasks (closed.json)' : `the hub's ${path.basename(file)}`);
+const bodyOf = (obj) => {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const { sig, ...rest } = obj;
+  return rest;
+};
+let seenMem = null; // Map store name -> the highest seq the hub took
+let seenStrict = false; // seen.json couldn't be trusted: nothing is taken as it is, only what is signed
+const adoptedSaid = new Set();
+function seenSeqs() {
+  if (seenMem) return seenMem;
+  seenMem = new Map();
+  seenStrict = false;
+  const k = signingKey();
+  const f = seenFile(ROOT, AGENTS_HOME);
+  let rec = null;
+  try {
+    rec = JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch (err) {
+    // (a key from before stores were signed has no seen.json yet: it starts here. Once the key's record says it was
+    // started, a missing one was deleted)
+    if (err.code === 'ENOENT' && !storesStarted(ROOT, AGENTS_HOME)) return seenMem;
+  }
+  const v = k.key && rec ? verify(rec, { key: k.key, purpose: 'guard', name: 'guard:seen.json' }) : { ok: false, why: rec === null && fs.existsSync(f) ? "it can't be read" : 'it is gone, though the key that started it is there' };
+  if (!v.ok) {
+    seenStrict = true;
+    untraced({ file: f, kind: 'seen', why: v.why || 'its signature fails', what: "the hub's memory of its stores' numbers", keep: true });
+    return seenMem;
+  }
+  for (const [name, n] of Object.entries(rec.seqs && typeof rec.seqs === 'object' ? rec.seqs : {})) if (Number.isSafeInteger(n) && n >= 0) seenMem.set(name, n);
+  return seenMem;
+}
+// The hub took this content of a store at this number: remembered, and kept as the last good copy
+function takeStore(file, seq, body) {
+  const k = signingKey();
+  if (!k.key) return;
+  seenSeqs().set(storeName(file), seq);
+  try {
+    // (0: the hub saw that there is none yet, so a copy from before the owner's new key isn't one to put back)
+    if (seq > 0) writeJson(storeCopyFile(ROOT, AGENTS_HOME, file), body);
+    else fs.rmSync(storeCopyFile(ROOT, AGENTS_HOME, file), { force: true });
+    writeJson(seenFile(ROOT, AGENTS_HOME), sign({ seqs: Object.fromEntries(seenMem) }, { key: k.key, purpose: 'guard', name: 'guard:seen.json', by: 'hub', at: clockIso() }));
+    if (!storesStarted(ROOT, AGENTS_HOME)) markStores(ROOT, AGENTS_HOME);
+  } catch (err) {
+    log(`couldn't keep the hub's memory of ${rel(file)}: ${err.message}`);
+  }
+}
+// Write a store, signed with the next number. With no key (it can't be had), written as before: nothing is signed then,
+// and Home says the key's problem.
+function writeStore(file, body, { checked = false } = {}) {
+  const k = signingKey();
+  if (!k.key) return writeJson(file, bodyOf(body));
+  const name = storeName(file);
+  const entry = SIGNER === 'hub' ? seenSeqs().get(name) : undefined;
+  let last = entry || 0;
+  const now = readJson(file);
+  const v = now ? verify(now, { key: k.key, purpose: 'state', name }) : { ok: false, why: fs.existsSync(file) ? "it isn't JSON" : 'it is gone' };
+  if (v.ok && Number.isSafeInteger(v.seq)) last = Math.max(last, v.seq);
+  // (what the hub is about to write over isn't what it took: changed or deleted since it read it. Said like any other,
+  // and the hub's own content goes on)
+  if (entry !== undefined && !checked && !(v.ok && v.seq >= entry) && !(entry === 0 && now === null && !fs.existsSync(file))) {
+    untraced({ file, kind: 'store', why: v.ok ? `it is an older copy: its number ${v.seq} is below ${entry}, the last the hub took` : v.why, what: `${storeWords(file)}; the hub's own is written over it` });
+  }
+  const seq = last + 1;
+  writeJson(file, sign(bodyOf(body), { key: k.key, purpose: 'state', name, by: signerNow(), at: clockIso(), seq }));
+  if (SIGNER === 'hub') takeStore(file, seq, bodyOf(body));
+}
+// Read a store: its content without the signature, or null (none, or no JSON). The hub checks it against its memory and
+// puts the last good one back; another process (a command, the dashboard alone) takes a signed one, else the hub's last
+// good copy, and changes nothing.
+function readStore(file) {
+  const raw = readJson(file);
+  const k = signingKey();
+  if (!k.key) return bodyOf(raw); // (no key: as before stores were signed; Home says the key's problem)
+  const name = storeName(file);
+  const hub = SIGNER === 'hub';
+  const entry = hub ? seenSeqs().get(name) : undefined;
+  const v = raw === null ? { ok: false, why: fs.existsSync(file) ? "it isn't JSON" : 'it is gone' } : verify(raw, { key: k.key, purpose: 'state', name });
+  if (v.ok && Number.isSafeInteger(v.seq) && (entry === undefined || v.seq >= entry)) {
+    if (hub && v.seq !== entry) takeStore(file, v.seq, bodyOf(raw));
+    return bodyOf(raw);
+  }
+  const copy = readJson(storeCopyFile(ROOT, AGENTS_HOME, file));
+  if (!hub) return v.ok || copy === null ? bodyOf(raw) : copy;
+  const none = raw === null && !fs.existsSync(file);
+  if (none && entry === 0) return null; // (there was none, and there is none)
+  if (entry === undefined && !seenStrict) {
+    // never taken. None there: remembered as none (0), so one that appears unsigned later isn't taken as it is
+    if (none) {
+      takeStore(file, 0, null);
+      return null;
+    }
+    // one there: as it is (written before stores were signed, or before the owner's new key), signed from now on
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+    if (!adoptedSaid.has(name)) {
+      adoptedSaid.add(name);
+      log(`${rel(file)}: taken as it is (written before the hub signed it); signed from now on`);
+    }
+    writeStore(file, raw, { checked: true });
+    return bodyOf(raw);
+  }
+  if (entry === undefined && none) return null; // (the hub's memory couldn't be trusted, and there is no store: none)
+  const why = v.ok ? `it is an older copy: its number ${v.seq} is below ${entry}, the last the hub took` : v.why;
+  untraced({ file, kind: 'store', why, what: `${storeWords(file)}${copy === null ? '' : '; the last one the hub took is put back'}` });
+  if (copy === null) return null;
+  writeStore(file, copy, { checked: true });
+  return copy;
+}
+
 // ---------- a worker stopped from outside, tool files gone (FR-013) ----------
 // On a real PC an antivirus judged a worker's behaviour malicious, killed its whole chain and quarantined files of
 // the tools in it. A worker whose processes are all gone without a report was stopped from outside: what it left is
@@ -2705,6 +2822,7 @@ function signingKey({ create = false } = {}) {
   if (before?.key && !before.key.equals(k.key)) {
     log("nextlevel's signing key changed (the owner's fix): requests are checked with the new one from now on");
     if (actedMem) saveActed();
+    seenMem = null; // (the stores' memory started again with the new key: each store is taken as it is, once, and signed with it)
   }
   return signKeyCache;
 }
@@ -2827,7 +2945,7 @@ function untraced({ file, kind, why, what, keep = false }) {
   if (keep && flaggedOnce.has(once)) return;
   flaggedOnce.add(once);
   let moved = '';
-  if (!keep) {
+  if (!keep && fs.existsSync(file)) {
     const dir = path.join(DIR, 'untraced');
     try {
       mkdirp(dir);
@@ -5514,8 +5632,9 @@ const CYCLE_MIN = ROUND_LIMIT_MIN; // an autopilot round's time limit
 let roundsSaid = '';
 const reseeded = new WeakSet();
 function roundsState({ quiet = false } = {}) {
-  if (!fs.existsSync(ROUNDSFILE)) return firstState({ ownerSeen: false });
-  const saved = readJson(ROUNDSFILE);
+  // (signed: one that isn't the hub's, or an older copy, is set aside and the last good one put back, 2B-1b2)
+  const saved = readStore(ROUNDSFILE);
+  if (saved === null && !fs.existsSync(ROUNDSFILE)) return firstState({ ownerSeen: false });
   const s = saved && typeof saved === 'object' && !Array.isArray(saved) ? { ...freshState(), ...saved } : saved;
   const problem = saved === null ? 'JSON' : roundsProblem(s);
   if (!problem) return s;
@@ -5562,7 +5681,7 @@ function rounds(fn) {
   const s = roundsState();
   const before = JSON.stringify(s);
   const r = fn(s, clockNow());
-  if (JSON.stringify(s) !== before || !fs.existsSync(ROUNDSFILE) || reseeded.has(s)) writeJson(ROUNDSFILE, s);
+  if (JSON.stringify(s) !== before || !fs.existsSync(ROUNDSFILE) || reseeded.has(s)) writeStore(ROUNDSFILE, s);
   return r;
 }
 // What started a round, and work that moved, in the hub's words (never the team's: they go to the log and to Home)
@@ -5693,6 +5812,7 @@ function observe() {
     // (a Done on the dashboard past its Undo becomes final here too, with no page open and after a restart: undo Done)
     cards().handoff.settle();
     acts = cards().ownerActs();
+    closures(); // (the closed tasks' store is looked at too: one that isn't the hub's is set aside here, 2B-1b2)
   } catch (err) {
     log(`autopilot: couldn't read the cards: ${err.message}`);
   }
@@ -9296,8 +9416,8 @@ function advisorPlan(milestoneId = '', taskId = '') {
 }
 // The hub's reading of rounds.json, through its shape check: never a file the hub wouldn't read
 function advisorRounds() {
-  if (!fs.existsSync(ROUNDSFILE)) return 'No autopilot round yet.';
-  const saved = readJson(ROUNDSFILE);
+  const saved = readStore(ROUNDSFILE);
+  if (saved === null && !fs.existsSync(ROUNDSFILE)) return 'No autopilot round yet.';
   if (saved === null || roundsProblem(saved && typeof saved === 'object' && !Array.isArray(saved) ? { ...freshState(), ...saved } : saved)) return 'rounds: not readable';
   const s = { ...freshState(), ...saved };
   const last = s.last ? `The last round: started ${s.last.startedAt}${s.last.endedAt ? `, ended ${s.last.endedAt}` : ''}${s.last.type ? `, started by ${s.last.type}` : ''}${s.last.what ? ` (${s.last.what})` : ''}${s.last.how ? `, ${s.last.how}` : ''}${s.last.real ? ', with something real after it' : ''}.` : 'No round has ended yet.';

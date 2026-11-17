@@ -1151,13 +1151,33 @@ file without a good one is set aside (`.nextlevel/untraced/`) or ignored, with a
   that looks for it can sign. The agents' own Windows account (layer 2) closes that. Until then the signature stops a
   worker that writes a request by hand without knowing about the key, and the look after each attempt (above) and
   ancestry (2B-1a) stand beside it.
-- **Only requests are signed.** The cards, settings and the other stores the hub reads aren't yet (2B-1b2), nor
-  `channels.json` and `versions.json` (the launcher), nor `ui-open.json`, the stop requests and scan and tester requests.
+- **Only requests and two stores are signed.** `rounds.json` and `closed.json` are (2B-1b2, below); the cards, settings,
+  job records and the other stores the hub reads aren't yet, nor `channels.json` and `versions.json` (the launcher), nor
+  `ui-open.json`, the stop requests and scan and tester requests.
 - **Requests from before the update** are unsigned, so they are set aside on the card: ask again for what you want.
 - **A lost key stops requests.** If `~/.nextlevel/keys/<project>.key` goes, or is changed, the hub acts on no request
   until you run `nextlevel doctor --fix state.key` in your own PowerShell window, in the project folder. A new key sets
   aside what was waiting.
 - **An older version** ignores the signature: going back to one acts on unsigned requests again.
+
+## Signed stores (FR-017 part 2B, 2B-1b2)
+`.nextlevel/rounds.json` and `.nextlevel/closed.json` are signed by the hub with a number that rises; the hub remembers
+the highest it took and keeps the last good content in the guard's folder. One written another way, an older copy put
+back or a deleted one is set aside (`.nextlevel/untraced/`), said on Home's card, and the last good one written back.
+- **A worker running as you can read the key**, as for requests: it can sign a store with a higher number. Layer 2
+  closes that.
+- **After a Go back and forward again** these two stores are as the hub last took them before the Go back: the older
+  version writes them without a good signature, so coming forward they are set aside (the card says so). A task closed
+  while on the older version shows as planned again (`nextlevel close` it again), and autopilot's count of what happened
+  starts from the older state (press Run a round now if a round is owed). The migration step removes this; this step
+  isn't released without it.
+- **The commands, the daily report and the doctor don't check the number.** They take a signed store, else the hub's
+  last good copy (the report and `project.plans`: the file through its shape check), so between a change and the hub's
+  next look they can show a put-back older copy. The hub never acts on one.
+- **The hub's memory deleted** (`seen.json` in the guard's folder) is said on the card, and until its restart with a
+  good one the hub takes no store as it is. A new key (`nextlevel doctor --fix state.key`) starts the memory empty: the
+  stores there then are taken as they are, once.
+- **With no key** (it can't be read) the stores are written and read as before, unsigned; Home says the key's problem.
 
 ## Handoff cards after a Go back (undo Done, FR-018)
 - A Done made on the dashboard in the 10 seconds before a Go back to a version before undo Done stays pending there: the

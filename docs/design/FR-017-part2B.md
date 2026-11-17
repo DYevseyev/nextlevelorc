@@ -238,8 +238,28 @@ doctor's `state.key`, an error). Choices left to this step, with the safer readi
 - A task whose queued request is set aside doesn't stay "queued": its job ends as an error that says so, with the
   command to ask again (`nextlevel retry <id>`); while the key can't be had, a queued task says it waits for the key
   (`waitingFor: 'key'`).
-Next (2B-1b2 on): the stores with `seq` and `seen.json`, the PC's files and the launcher's check, the other requests
-(`ui-open.json`, the stop requests, scan and tester requests) and the migration.
+As built (2B-1b2): the stores' mechanism, on the two stores only the hub writes, `rounds.json` and `closed.json`
+("signed stores" in `hub.mjs`: writeStore, readStore, takeStore, seenSeqs).
+- Each write is signed with purpose `state` and a `seq` one above the highest the hub knows of that store. The hub
+  remembers the highest it took of each in `seen.json` in the guard's folder (signed with purpose `guard`), and keeps the
+  content it last took beside it (`stores/<name>`).
+- At each read the hub checks the store: one with no good signature, one whose `seq` is below the hub's memory (an
+  older copy put back) and one that is gone are set aside as untraced (`kind: store`, on Home's card, which then says
+  "file"), and the last good content is written back with the next number. The same is said when the hub is about to
+  write over a store that changed since it read it.
+- A store the hub has no number for (written before this step, or before the owner's new key) is taken as it is, once,
+  and signed: said in hub.log. One that isn't there at that look is remembered as none (number 0), so an unsigned one
+  that appears later is set aside, never taken as it is. `seen.json` is made with the key, and the key's record says so (`stores: true`; for a key
+  from 2B-1b1 the hub sets it at its first take): from then on a missing or bad `seen.json` is on the card
+  (`kind: seen`) and nothing is taken as it is until the hub's restart with a good one or the owner's new key, which
+  starts it empty.
+- Another process (a command, the dashboard alone, the advisor's briefing) takes a signed store, else the hub's last
+  good copy, checks no number and changes nothing. The daily report and the doctor's `project.plans` still read
+  `closed.json` through its shape check only.
+- No migration yet, so this step must not be released before it: after a Go back, the older version writes these stores
+  without a good signature, and coming forward the hub sets them aside and puts back what it last took (KNOWN_ISSUES).
+Next (2B-1b3 on): the stores several processes write (the cards, settings, usage, job records), the PC's files and the
+launcher's check, the other requests (`ui-open.json`, the stop requests, scan and tester requests) and the migration.
 
 ### 3.3 The owner's own commands and the orchestrator's
 

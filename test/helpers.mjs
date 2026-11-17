@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { projectSigningKey, sign, stateName } from '../src/lib/sign.mjs';
+import { projectSigningKey, sign, stateName, verify } from '../src/lib/sign.mjs';
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const BIN = path.join(REPO, 'bin', 'nextlevel.mjs');
@@ -446,4 +446,32 @@ export function writeSignedRequest(p, rel, obj, { by = 'owner', at = new Date().
   const file = p.state(...rel.split('/'));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(sign(obj, { key, name: stateName(rel), by, at })));
+}
+
+// A store written as the hub itself would write it (FR-017 part 2B, 2B-1b2): signed with the project's key, its number
+// one above the file's own. For tests that plant what "the last hub left"; one written without this isn't the hub's, and
+// a running hub sets it aside and puts its last good one back. `rel`: rounds.json, closed.json.
+export function writeSignedStore(p, rel, obj) {
+  const { key, problem } = projectSigningKey(p.repo, { home: p.env.HOME, create: true });
+  if (!key) throw new Error(problem || 'no signing key');
+  const file = p.state(...rel.split('/'));
+  let seq = 0;
+  try {
+    const now = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (verify(now, { key, purpose: 'state', name: stateName(rel) }).ok) seq = now.sig.seq;
+  } catch {
+    // none yet
+  }
+  const { sig, ...body } = obj;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(`${file}.test`, JSON.stringify(sign(body, { key, purpose: 'state', name: stateName(rel), by: 'hub', seq: seq + 1 })));
+  for (let i = 0; ; i++) {
+    try {
+      fs.renameSync(`${file}.test`, file); // (Windows: a reader may hold it for a moment)
+      return;
+    } catch (err) {
+      if (i >= 40) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
 }
