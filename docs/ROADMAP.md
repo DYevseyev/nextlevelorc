@@ -10,7 +10,9 @@ field report that blocks someone comes first. `docs/HISTORY.md` has what is done
   own files and the owner's global git settings are looked at after each attempt and at the hub's start: a change
   holds dispatch until the owner's Seen. Since 2B-1b1 the requests the hub acts on (a queued job, a phone message, a
   wake-up, a press of Run a round now) are signed with a key kept outside the project: one a worker wrote by hand is set
-  aside, with a card on Home. Next: the hub's stores signed, with no going back (2B-1b2).
+  aside, with a card on Home. Since 2B-1b2 the two stores only the hub writes (`rounds.json`, `closed.json`) are signed
+  with a number that rises: one written by hand, an older copy put back or a deleted one is set aside and the hub's last
+  good one put back. Next: the stores several processes write, the PC's files, and the migration (before a release).
 - **The agents as another Windows user** (FR-017 part 2B: a separate account, a container or WSL). Every agent runs as
   your own user today, so an engine without its own permission checks can read and write anything you can
   (`docs/KNOWN_ISSUES.md`, "What an agent running as the owner can still do"). This turns what stays open into walls.

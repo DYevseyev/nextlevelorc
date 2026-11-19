@@ -10,9 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { guardDir } from '../src/lib/guard.mjs';
-import { ownerNeeds } from '../src/lib/overview.mjs';
-import { canonical, keyFile, markerFile, newSigningKey, projectSigningKey, sign, stateName, verify } from '../src/lib/sign.mjs';
-import { fileExists, makeProject, waitUntil, writeSignedRequest } from './helpers.mjs';
+import { ownerNeeds, taskAlerts } from '../src/lib/overview.mjs';
+import { canonical, keyFile, markStores, markerFile, newSigningKey, projectSigningKey, seenFile, sign, stateName, storeCopyFile, storesStarted, verify } from '../src/lib/sign.mjs';
+import { fileExists, hubRounds, makeProject, waitUntil, writeSignedRequest } from './helpers.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
 const exited = (child) => new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
@@ -99,6 +99,14 @@ test("Home's card: what was set aside and the tasks running then, with Seen; a k
   const card = ownerNeeds(b).find((n) => n.kind === 'untraced');
   assert.match(card.text, /A request nextlevel didn't write was set aside, not acted on: a push job forged-push \(it has no signature\)\. Running then: SG-01-forge\./);
   assert.deepEqual(card.action, { label: 'Seen', post: '/api/untraced', body: {} });
+  // (a store is a file, not a request, and the card says the hub's copy went back: 2B-1b2)
+  const store = ownerNeeds({ ...b, untraced: { items: [{ at: 'x', kind: 'store', what: 'the list of closed tasks (closed.json); the last one the hub took is put back', why: 'it has no signature', file: '.nextlevel/closed.json', tasks: [] }], keyProblem: '' } }).find((n) => n.kind === 'untraced');
+  assert.match(store.text, /^A file nextlevel didn't write was set aside, not acted on: the list of closed tasks/);
+  assert.match(store.why, /it put that back/);
+  assert.doesNotMatch(card.why, /it put that back/);
+  // (a task whose queued request was set aside: no "setup problem on this PC", the job's own words. Review of 2B-1b1)
+  const [aside] = taskAlerts([{ id: 'SG-07-old', type: 'task', state: 'error', notStarted: true, acked: false, attempt: 1, error: 'its request in the queue was set aside, not acted on (it has no signature): nothing ran. If you want it, ask again: nextlevel retry SG-07-old' }]);
+  assert.match(aside.text, /^SG-07-old didn't start: its request in the queue was set aside, not acted on \(it has no signature\): nothing ran\. If you want it, ask again: nextlevel retry SG-07-old$/);
   const key = ownerNeeds({ ...b, untraced: { items: [], keyProblem: 'the key is gone' } });
   assert.equal(key.find((n) => n.kind === 'untraced'), undefined);
   assert.match(key.find((n) => n.kind === 'signkey').text, /Nothing the team or you ask of the hub is acted on: the key is gone/);
@@ -321,6 +329,197 @@ test("the record of the requests acted on starts with the key; deleted, it isn't
     assert.deepEqual(again.ids, {});
     assert.ok(verify(again, { key: fresh, purpose: 'guard', name: 'guard:acted.json' }).ok);
   } finally {
+    p.cleanup();
+  }
+});
+
+// ---------- signed stores (2B-1b2): rounds.json and closed.json ----------
+const readJsonFile = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+const tryJson = (f) => {
+  try {
+    return readJsonFile(f);
+  } catch {
+    return null;
+  }
+};
+async function stopBg(p, bg) {
+  if (!bg) return;
+  bg.kill();
+  await exited(bg);
+  fs.rmSync(p.state('hub.json'), { force: true });
+}
+
+test("the stores' memory starts with the key: seen.json beside acted.json, and the key's record says so; a key from before gets it at the hub's first look", () => {
+  const home = tmpHome();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nl-sign-root-'));
+  try {
+    const { key } = projectSigningKey(root, { home, create: true });
+    const seen = readJsonFile(seenFile(root, home));
+    assert.deepEqual(seen.seqs, {});
+    assert.ok(verify(seen, { key, purpose: 'guard', name: 'guard:seen.json' }).ok);
+    assert.equal(storesStarted(root, home), true);
+    // a key from before stores were signed: its record has no such word, until the hub's first look says so
+    const mf = markerFile(root, home);
+    const { stores, ...old } = readJsonFile(mf);
+    fs.writeFileSync(mf, JSON.stringify(old));
+    assert.equal(storesStarted(root, home), false);
+    markStores(root, home);
+    assert.equal(storesStarted(root, home), true);
+    assert.equal(readJsonFile(mf).keyHash, old.keyHash, 'the same key');
+    assert.ok(projectSigningKey(root, { home }).key.equals(key));
+    // the owner's new key starts it again, empty
+    fs.writeFileSync(seenFile(root, home), '{"seqs":{"state:rounds.json":9}}');
+    const fresh = newSigningKey(root, { home }).key;
+    assert.deepEqual(readJsonFile(seenFile(root, home)).seqs, {});
+    assert.ok(verify(readJsonFile(seenFile(root, home)), { key: fresh, purpose: 'guard', name: 'guard:seen.json' }).ok);
+    assert.ok(storeCopyFile(root, home, 'rounds.json').startsWith(path.join(home, '.nextlevel', 'guard')), 'the last good copies are outside the project');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a store only the hub writes (rounds.json): signed with a number that rises; one written by hand, an older copy put back and a deleted one are each set aside and the hub's last one put back, with a card", async () => {
+  const p = makeProject();
+  let bg;
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    const file = p.state('rounds.json');
+    const hubLog = () => (fs.existsSync(p.state('logs', 'hub.log')) ? fs.readFileSync(p.state('logs', 'hub.log'), 'utf8') : '');
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil('the hub to write rounds.json', () => tryJson(file)?.sig);
+    const key = projectSigningKey(p.repo, { home: p.env.HOME }).key;
+    const name = stateName('rounds.json');
+    const first = readJsonFile(file);
+    assert.ok(verify(first, { key, purpose: 'state', name }).ok, 'signed for the state');
+    assert.equal(first.sig.by, 'hub');
+    assert.ok(first.sig.seq >= 1);
+    assert.ok(!verify(first, { key, name }).ok, "not with the requests' key");
+    const guard = guardDir(p.repo, p.env.HOME);
+    await waitUntil("the hub's memory of it", () => tryJson(seenFile(p.repo, p.env.HOME))?.seqs?.[name] >= first.sig.seq);
+    // the owner's note moves the state: a higher number, and the last good copy follows
+    const old = fs.readFileSync(file, 'utf8');
+    assert.equal(p.hub(['note', 'add', 'guard-test']).code, 0);
+    await waitUntil('the note to be counted', () => tryJson(file)?.owner?.notes === 1 && tryJson(file)?.sig?.seq > first.sig.seq);
+    await waitUntil('the last good copy', () => tryJson(path.join(guard, 'stores', 'rounds.json'))?.owner?.notes === 1);
+    assert.ok(verify(tryJson(path.join(guard, 'stores', 'rounds.json')), { key, purpose: 'guard', name: 'guard:stores/rounds.json' }).ok, "the copy is signed as the guard's");
+    // an older copy, put back
+    fs.writeFileSync(file, old);
+    await waitUntil('the older copy to be set aside', () => /rounds\.json: not acted on, nextlevel can't trace it \(it is an older copy: its number \d+ is below \d+, the last the hub took\)/.test(hubLog()));
+    await waitUntil('the last one back', () => tryJson(file)?.owner?.notes === 1 && verify(tryJson(file), { key, purpose: 'state', name }).ok);
+    // one written by hand
+    fs.writeFileSync(file, JSON.stringify({ version: 1, owner: { notes: 0, handoff: 0 }, starts: [] }));
+    await waitUntil('the hand-written one to be set aside', () => /rounds\.json: not acted on, nextlevel can't trace it \(it has no signature\): autopilot's record of what may start a round \(rounds\.json\); the last one the hub took is put back; kept in \.nextlevel[\\/]untraced[\\/]/.test(hubLog()));
+    await waitUntil('the last one back again', () => tryJson(file)?.owner?.notes === 1 && tryJson(file)?.sig);
+    assert.ok(fs.readdirSync(p.state('untraced')).some((f) => f.endsWith('-rounds.json')), 'what was written is kept aside');
+    // a deleted one
+    fs.rmSync(file);
+    await waitUntil('the deleted one to be said', () => /rounds\.json: not acted on, nextlevel can't trace it \(it is gone\)/.test(hubLog()));
+    await waitUntil('and put back', () => tryJson(file)?.owner?.notes === 1);
+    // one card on Home, the store named
+    const card = readJsonFile(path.join(guard, 'untraced.json'));
+    assert.ok(card.items.length >= 3 && card.items.every((i) => i.kind === 'store'), JSON.stringify(card.items.map((i) => i.kind)));
+    assert.equal(bg.exitCode, null, 'the hub runs');
+  } finally {
+    await stopBg(p, bg);
+    p.cleanup();
+  }
+});
+
+test("closed.json from before stores were signed is taken as it is, once, and signed; after the owner's new key again; with the hub's memory deleted nothing is taken as it is: a hand-written one is set aside and the last good one put back", async () => {
+  const p = makeProject();
+  let bg;
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    const file = p.state('closed.json');
+    const name = stateName('closed.json');
+    const hubLog = () => (fs.existsSync(p.state('logs', 'hub.log')) ? fs.readFileSync(p.state('logs', 'hub.log'), 'utf8') : '');
+    const taken = () => (hubLog().match(/closed\.json: taken as it is \(written before the hub signed it\); signed from now on/g) || []).length;
+    const closure = (reason) => ({ at: '2026-11-01T10:00:00.000Z', by: 'owner', source: "the owner's command", reason, discarded: false, branch: '', jobState: '', milestone: '', title: '' });
+    fs.mkdirSync(p.state(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, tasks: { 'X-1': closure('from before') } }));
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil('closed.json to be taken as it is', () => taken() === 1 && tryJson(file)?.sig);
+    let key = projectSigningKey(p.repo, { home: p.env.HOME }).key;
+    assert.ok(verify(readJsonFile(file), { key, purpose: 'state', name }).ok);
+    assert.equal(readJsonFile(file).tasks['X-1'].reason, 'from before');
+    await stopBg(p, bg);
+    // the owner's new key (nextlevel doctor --fix state.key): the store signed with the old one is taken again, once
+    key = newSigningKey(p.repo, { home: p.env.HOME }).key;
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil('closed.json to be signed with the new key', () => taken() === 2 && verify(tryJson(file), { key, purpose: 'state', name }).ok);
+    assert.equal(readJsonFile(file).tasks['X-1'].reason, 'from before');
+    await stopBg(p, bg);
+    assert.ok(!fs.existsSync(p.state('untraced')), 'nothing was set aside so far');
+    // the hub's memory deleted, and a hand-written store: not taken as it is
+    fs.rmSync(seenFile(p.repo, p.env.HOME));
+    fs.writeFileSync(file, JSON.stringify({ version: 1, tasks: { 'X-1': closure('from before'), 'X-2': closure('planted') } }));
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil("the hub's memory to be said", () => /seen\.json: not acted on, nextlevel can't trace it \(it is gone, though the key that started it is there\): the hub's memory of its stores' numbers/.test(hubLog()));
+    await waitUntil('the hand-written one to be set aside', () => /closed\.json: not acted on, nextlevel can't trace it \(it has no signature\): the list of closed tasks \(closed\.json\); the last one the hub took is put back/.test(hubLog()));
+    await waitUntil('the last good one back', () => tryJson(file)?.sig && !tryJson(file).tasks['X-2']);
+    assert.equal(taken(), 2, 'not taken as it is');
+    assert.equal(readJsonFile(file).tasks['X-1'].reason, 'from before');
+    assert.match(p.hub(['status']).out, /./, 'the commands still read it');
+  } finally {
+    await stopBg(p, bg);
+    p.cleanup();
+  }
+});
+
+test('a store that was not there when the hub first looked (no closed.json yet) is remembered as none: one that appears unsigned is set aside, never taken as it is', async () => {
+  const p = makeProject();
+  let bg;
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    const file = p.state('closed.json');
+    const name = stateName('closed.json');
+    const hubLog = () => (fs.existsSync(p.state('logs', 'hub.log')) ? fs.readFileSync(p.state('logs', 'hub.log'), 'utf8') : '');
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil('the hub to remember there is none', () => tryJson(seenFile(p.repo, p.env.HOME))?.seqs?.[name] === 0);
+    assert.ok(!fs.existsSync(file));
+    fs.writeFileSync(file, JSON.stringify({ version: 1, tasks: { 'X-9': { at: '2026-11-01T10:00:00.000Z', by: 'owner', source: '', reason: 'planted', discarded: false, branch: '', jobState: '', milestone: '', title: '' } } }));
+    await waitUntil('the planted one to be set aside', () => /closed\.json: not acted on, nextlevel can't trace it \(it has no signature\): the list of closed tasks \(closed\.json\); kept in/.test(hubLog()));
+    await waitUntil('it to be gone from its place', () => !fs.existsSync(file));
+    assert.doesNotMatch(hubLog(), /closed\.json: taken as it is/);
+    assert.ok(fs.readdirSync(p.state('untraced')).some((f) => f.endsWith('-closed.json')));
+    assert.equal(bg.exitCode, null, 'the hub runs');
+  } finally {
+    await stopBg(p, bg);
+    p.cleanup();
+  }
+});
+
+test("the hub's last good copy of a store is signed too: one written by hand into the guard's folder is never put back, and a store with nothing good to put back is said once (review)", async () => {
+  const p = makeProject();
+  let bg;
+  try {
+    p.setConfig((c) => ({ ...c, hub: { ...c.hub, autopilot: false } }));
+    const file = p.state('closed.json');
+    const copy = storeCopyFile(p.repo, p.env.HOME, file);
+    const hubLog = () => (fs.existsSync(p.state('logs', 'hub.log')) ? fs.readFileSync(p.state('logs', 'hub.log'), 'utf8') : '');
+    const closure = (reason) => ({ at: '2026-11-01T10:00:00.000Z', by: 'owner', source: "the owner's command", reason, discarded: false, branch: '', jobState: '', milestone: '', title: '' });
+    fs.mkdirSync(p.state(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, tasks: { 'X-1': closure('from before') } }));
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    await waitUntil('closed.json to be taken and its copy kept', () => tryJson(file)?.sig && tryJson(copy)?.sig);
+    const key = projectSigningKey(p.repo, { home: p.env.HOME }).key;
+    assert.ok(verify(readJsonFile(copy), { key, purpose: 'guard', name: 'guard:stores/closed.json' }).ok, 'the copy is signed as the guard\'s');
+    assert.equal(readJsonFile(copy).sig.seq, readJsonFile(file).sig.seq, 'with the store\'s number');
+    await stopBg(p, bg);
+    // a copy written by hand, and the store itself spoiled so that the hub reaches for its copy
+    const planted = { version: 1, tasks: { 'X-1': closure('from before'), 'X-2': closure('planted') } };
+    fs.writeFileSync(copy, JSON.stringify(planted));
+    fs.writeFileSync(file, JSON.stringify(planted));
+    bg = p.hubInBackground(['run', '--tick-ms', '50']);
+    const aside = () => (hubLog().match(/closed\.json: not acted on, nextlevel can't trace it/g) || []).length;
+    await waitUntil('the store to be set aside', () => aside() >= 1);
+    await hubRounds(p, 3); // (more looks of the hub: nothing more happens)
+    assert.equal(aside(), 1, 'said once, not at every look');
+    assert.ok(!/the last one the hub took is put back/.test(hubLog().split('\n').filter((l) => /closed\.json: not acted on/.test(l)).join('\n')), 'nothing was put back');
+    assert.ok(!tryJson(file)?.tasks?.['X-2'], 'the planted closure is in no store the hub reads');
+  } finally {
+    await stopBg(p, bg);
     p.cleanup();
   }
 });

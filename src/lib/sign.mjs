@@ -28,6 +28,11 @@ const keyHash = (key) => createHash('sha256').update(key).digest('hex').slice(0,
 // The hub's record of the requests it acted on (signed with the key's `guard` purpose), started empty with each new key:
 // once a key is there, the record missing means it was deleted, which the hub doesn't take as "nothing acted on yet"
 export const actedFile = (root, home) => path.join(guardDir(root, home), 'acted.json');
+// The hub's memory of the highest number (`seq`) it took of each signed store (2B-1b2), signed with the `guard` purpose
+// and started empty with each new key; the last good copy of each store lies beside it in stores/
+export const seenFile = (root, home) => path.join(guardDir(root, home), 'seen.json');
+export const storeCopyFile = (root, home, name) => path.join(guardDir(root, home), 'stores', path.basename(name));
+const emptySeen = (key, at) => `${JSON.stringify(sign({ seqs: {} }, { key, purpose: 'guard', name: 'guard:seen.json', by: 'hub', at }), null, 2)}\n`;
 const emptyActed = (key, at) => `${JSON.stringify(sign({ ids: {} }, { key, purpose: 'guard', name: 'guard:acted.json', by: 'hub', at }), null, 2)}\n`;
 function startActed(root, home, key, at) {
   try {
@@ -35,6 +40,25 @@ function startActed(root, home, key, at) {
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
   }
+  try {
+    writeOnce(seenFile(root, home), emptySeen(key, at));
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+}
+// Whether the key's record says the stores' memory (seen.json) was started with it: then a missing seen.json was deleted.
+// A key from before stores were signed has none; the hub starts it at its first look and says so here (markStores).
+export function storesStarted(root, home) {
+  const m = readMarker(markerFile(root, home));
+  return !!m && m !== 'bad' && m.stores === true;
+}
+export function markStores(root, home) {
+  const mf = markerFile(root, home);
+  const m = readMarker(mf);
+  if (!m || m === 'bad' || m.stores === true) return;
+  const tmp = `${mf}.${randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ ...m, stores: true }, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(tmp, mf);
 }
 
 function readKey(file) {
@@ -54,9 +78,20 @@ function readMarker(file) {
   }
 }
 // A file of its own, written once (`wx`: never through a link someone put there first, never over another's key)
+// Whole from its first moment: written beside it, then linked into place (a link fails when the name is taken, as `wx`
+// does), so no reader sees it empty. Where the file system has no hard links: created and written, as before.
 function writeOnce(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, text, { flag: 'wx', mode: 0o600 });
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.new`;
+  fs.writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
+  try {
+    fs.linkSync(tmp, file);
+  } catch (err) {
+    if (err.code === 'EEXIST') throw err;
+    fs.writeFileSync(file, text, { flag: 'wx', mode: 0o600 });
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 // The project's key: { key } or { problem } (words for the owner, with the fix). `create`: only the owner's processes
@@ -84,7 +119,8 @@ export function projectSigningKey(root, { home, create = false, at = new Date().
   }
   if (!marker) {
     try {
-      writeOnce(mf, `${JSON.stringify({ since: at, keyHash: keyHash(key) }, null, 2)}\n`);
+      // (`stores`: seen.json is made with it, below; a key found without its marker had neither)
+      writeOnce(mf, `${JSON.stringify({ since: at, keyHash: keyHash(key), stores: true }, null, 2)}\n`);
       startActed(root, home, key, at);
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
@@ -104,8 +140,10 @@ export function newSigningKey(root, { home, at = new Date().toISOString() } = {}
   // hub signs its own record again with the new key when it sees the marker change)
   for (const [file, text] of [
     [keyFile(root, home), `${key.toString('hex')}\n`],
-    [markerFile(root, home), `${JSON.stringify({ since: at, keyHash: keyHash(key) }, null, 2)}\n`],
+    [markerFile(root, home), `${JSON.stringify({ since: at, keyHash: keyHash(key), stores: true }, null, 2)}\n`],
     [actedFile(root, home), emptyActed(key, at)],
+    // (the stores' memory too: the hub then takes each store as it is, once, and signs it with the new key)
+    [seenFile(root, home), emptySeen(key, at)],
   ]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;

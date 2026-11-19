@@ -9,7 +9,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { REPO, hubRounds, makeProject, processesGone, testClock, waitUntil, writeSignedRequest } from './helpers.mjs';
+import { REPO, hubRounds, makeProject, processesGone, testClock, waitUntil, writeSignedRequest, writeSignedStore } from './helpers.mjs';
 import { readLedger } from '../src/lib/usage.mjs';
 import { client, startUi, stopUi } from './ui-helpers.mjs';
 
@@ -515,7 +515,8 @@ test("a wakeup.json whose fields aren't text (an agent wrote it) is no ask: the 
 // A round the last hub left running (rounds.json and cycle.json as it wrote them), its process named by pid
 function leftRound(p, { pid, startedAt, startedReal, at = '2026-10-06T10:00:00.000Z' }) {
   const log = path.join('.nextlevel', 'logs', 'orchestrator-20261006-100000.log');
-  writeOver(p.state('rounds.json'), {
+  // (as the hub wrote it: signed, FR-017 part 2B, 2B-1b2)
+  writeSignedStore(p, 'rounds.json', {
     version: 1,
     pending: [],
     sinceReal: 1,
@@ -630,10 +631,13 @@ test('the hourly ceiling holds when rounds.json is rewritten: the hub keeps the 
       await until(p, `round ${i}`, () => started(p) === i && ended(p) === i);
     }
     // An agent rewrites rounds.json without the hour's starts; the owner adds a ninth note: it waits for the hour
+    // (since FR-017 part 2B, 2B-1b2 the file itself is set aside too, and the hub's last one put back)
     writeOver(p.state('rounds.json'), { ...readState(p, 'rounds.json'), starts: [] });
     p.hub(['note', 'add', 'Note 9']);
     await looks(p, 3);
     assert.equal(started(p), 8);
+    assert.match(hubLog(p), /rounds\.json: not acted on, nextlevel can't trace it \(its signature doesn't match[^)]*\)\): autopilot's record of what may start a round \(rounds\.json\); the last one the hub took is put back/);
+    assert.equal(readState(p, 'rounds.json').starts.length, 8, 'the last one the hub took is back');
     assert.match(statusJson(p, clock.env).autopilotNext, /^On, but waiting: 8 rounds in the last hour is the most it runs; the next starts at /);
     clock.add(61);
     await until(p, 'the ninth, once the hour has passed', () => started(p) === 9);
@@ -658,10 +662,12 @@ test("cycle.json's and rounds.json's fields that aren't text (an agent wrote the
     p.hub(['note', 'add', 'Go on']);
     await until(p, "the note's round", () => started(p) === 1 && ended(p) === 2);
     await stopHub(p, bg);
-    // rounds.json with round.log and round.what as such objects: a fresh state, said once; the notes so far are seen
+    // rounds.json with round.log and round.what as such objects: a fresh state, said once; the notes so far are seen.
+    // (Signed, as a file the hub would take: the shape check is what stands behind the signature. One an agent writes by
+    // hand has no signature and is set aside: the next test.)
     leftRound(p, { pid: 999999, startedAt: new Date(ago).toISOString(), startedReal: ago });
     const st = readState(p, 'rounds.json');
-    writeOver(p.state('rounds.json'), { ...st, round: { ...st.round, log: notText, what: notText } });
+    writeSignedStore(p, 'rounds.json', { ...st, round: { ...st.round, log: notText, what: notText } });
     bg = await hubUp(p, startHub(p, clock, { STUB_ORCH_PLAY: 'status' }));
     await looks(p, 3);
     assert.equal((hubLog(p).match(/autopilot: rounds\.json isn't as the hub writes it \(its "round"\), so it starts again from what is there now, as on its first run: the owner's actions so far count as seen/g) || []).length, 1, hubLog(p));
