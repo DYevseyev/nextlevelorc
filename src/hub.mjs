@@ -2517,6 +2517,17 @@ function seenSeqs() {
   for (const [name, n] of Object.entries(rec.seqs && typeof rec.seqs === 'object' ? rec.seqs : {})) if (Number.isSafeInteger(n) && n >= 0) seenMem.set(name, n);
   return seenMem;
 }
+// The hub's last good copy of a store, in the guard's folder: signed too (purpose `guard`) with the store's number, so
+// one written there by hand, or an older one put back, is never what the hub puts back. -> its content, or null
+const copyName = (file) => `guard:stores/${path.basename(file)}`;
+function storeCopy(file, { seq } = {}) {
+  const k = signingKey();
+  const raw = readJson(storeCopyFile(ROOT, AGENTS_HOME, file));
+  if (!k.key || raw === null) return null;
+  const v = verify(raw, { key: k.key, purpose: 'guard', name: copyName(file) });
+  if (!v.ok || (seq !== undefined && v.seq !== seq)) return null;
+  return bodyOf(raw);
+}
 // The hub took this content of a store at this number: remembered, and kept as the last good copy
 function takeStore(file, seq, body) {
   const k = signingKey();
@@ -2524,7 +2535,7 @@ function takeStore(file, seq, body) {
   seenSeqs().set(storeName(file), seq);
   try {
     // (0: the hub saw that there is none yet, so a copy from before the owner's new key isn't one to put back)
-    if (seq > 0) writeJson(storeCopyFile(ROOT, AGENTS_HOME, file), body);
+    if (seq > 0) writeJson(storeCopyFile(ROOT, AGENTS_HOME, file), sign(bodyOf(body), { key: k.key, purpose: 'guard', name: copyName(file), by: 'hub', at: clockIso(), seq }));
     else fs.rmSync(storeCopyFile(ROOT, AGENTS_HOME, file), { force: true });
     writeJson(seenFile(ROOT, AGENTS_HOME), sign({ seqs: Object.fromEntries(seenMem) }, { key: k.key, purpose: 'guard', name: 'guard:seen.json', by: 'hub', at: clockIso() }));
     if (!storesStarted(ROOT, AGENTS_HOME)) markStores(ROOT, AGENTS_HOME);
@@ -2567,7 +2578,7 @@ function readStore(file) {
     if (hub && v.seq !== entry) takeStore(file, v.seq, bodyOf(raw));
     return bodyOf(raw);
   }
-  const copy = readJson(storeCopyFile(ROOT, AGENTS_HOME, file));
+  const copy = storeCopy(file, hub && entry !== undefined ? { seq: entry } : {});
   if (!hub) return v.ok || copy === null ? bodyOf(raw) : copy;
   const none = raw === null && !fs.existsSync(file);
   if (none && entry === 0) return null; // (there was none, and there is none)
@@ -2589,7 +2600,11 @@ function readStore(file) {
   if (entry === undefined && none) return null; // (the hub's memory couldn't be trusted, and there is no store: none)
   const why = v.ok ? `it is an older copy: its number ${v.seq} is below ${entry}, the last the hub took` : v.why;
   untraced({ file, kind: 'store', why, what: `${storeWords(file)}${copy === null ? '' : '; the last one the hub took is put back'}` });
-  if (copy === null) return null;
+  if (copy === null) {
+    // (nothing good to put back: there is none now, remembered as such, so this is said once and not at every look)
+    takeStore(file, 0, null);
+    return null;
+  }
   writeStore(file, copy, { checked: true });
   return copy;
 }

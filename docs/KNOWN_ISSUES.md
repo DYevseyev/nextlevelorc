@@ -1166,6 +1166,9 @@ the highest it took and keeps the last good content in the guard's folder. One w
 back or a deleted one is set aside (`.nextlevel/untraced/`), said on Home's card, and the last good one written back.
 - **A worker running as you can read the key**, as for requests: it can sign a store with a higher number. Layer 2
   closes that.
+- **The guard's folder put back whole.** The hub's copy of each store is signed with the store's number, so a copy
+  written by hand is never put back. Someone who puts back the hub's memory and its copies together, as they were at
+  an earlier time, with the stores of that time, isn't told apart (layer 2 keeps agents out of that folder).
 - **After a Go back and forward again** these two stores are as the hub last took them before the Go back: the older
   version writes them without a good signature, so coming forward they are set aside (the card says so). A task closed
   while on the older version shows as planned again (`nextlevel close` it again), and autopilot's count of what happened

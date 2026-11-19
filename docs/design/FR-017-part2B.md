@@ -253,6 +253,10 @@ As built (2B-1b2): the stores' mechanism, on the two stores only the hub writes,
   from 2B-1b1 the hub sets it at its first take): from then on a missing or bad `seen.json` is on the card
   (`kind: seen`) and nothing is taken as it is until the hub's restart with a good one or the owner's new key, which
   starts it empty.
+- The copy is signed too (purpose `guard`, the store's number): one written by hand into the guard's folder, or one
+  with another number than the hub remembers, is never put back. With nothing good to put back the store is
+  remembered as none, so it is said once. Putting the whole guard's folder back as it was (the memory and the copies
+  together) is accepted in layer 1.
 - Another process (a command, the dashboard alone, the advisor's briefing) takes a signed store, else the hub's last
   good copy, checks no number and changes nothing. The daily report and the doctor's `project.plans` still read
   `closed.json` through its shape check only.
